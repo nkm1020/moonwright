@@ -5,8 +5,9 @@ EX1/EX2) and its feasible repair (``taskgraph_2``); the scripted client decides 
 "model" answers, or raises, on each (role, attempt). Covered: the two budgets (verdict rounds
 versus answer re-asks) in both loop conditions, the feedback modes, solver-first runs
 (``start_with_prior``) with escalation, the scope rules of a replan (strict first answer,
-re-scoping repairs, locked tasks) and the step payloads (verification receipt, repair diff,
-advisories).
+re-scoping repairs, locked tasks), the step payloads (verification receipt, repair diff,
+advisories) and the solver-grounded suggestions a failed run ends with
+(``PlanResult.suggestions`` and the final failed step's ``suggestions`` payload).
 """
 
 from __future__ import annotations
@@ -39,6 +40,7 @@ from moonwright.schemas import (
     PlanResult,
     Requirements,
     ScheduleEntry,
+    Suggestion,
     Task,
     TaskGraph,
     fmt_wh,
@@ -666,3 +668,181 @@ def test_top_level_schema_errors_get_a_dollar_conflict_id():
     result = planner(client).plan("Build a pad.", brief_id="k")
     assert result.steps[0].failure is not None
     assert result.steps[0].failure.conflicts == ["schema:$"]
+
+
+# --------------------------------------------------------------------------- suggestions
+def payloads(seen: list[tuple[str, bool, dict[str, Any]]]) -> list[dict[str, Any]]:
+    return [p for _, _, p in seen]
+
+
+def test_exhausted_run_attaches_solver_grounded_suggestions_before_the_step_is_reported():
+    """The repair loop off: the first verdict is final, and the step that carries it already
+    holds the advice when ``on_step`` sees it, so a stream client needs no result event."""
+    seen: list[tuple[str, bool, dict[str, Any]]] = []
+    client = Scripted({("taskgraph", 1): INFEASIBLE})
+    result = planner(client, max_repairs=0,
+                     on_step=lambda s: seen.append((s.stage, s.ok, dict(s.payload or {})))
+                     ).plan_from_requirements(REQ, key="k")
+
+    assert not result.success and result.failure is not None
+    assert set(result.failure.conflicts) == ENERGY_CORE
+    assert [(s.kind, s.robot_id) for s in result.suggestions] == [
+        ("raise_battery", "EX1"), ("raise_battery", "EX2"), ("add_robot", "EX3")]
+    for s in result.suggestions:
+        assert s.verified and s.makespan_h is not None and s.makespan_h <= REQ.horizon_h
+        assert s.robot_type == "excavator" and "Wh" in s.detail and " h" in s.detail
+    ex1, ex2, spare = result.suggestions
+    assert ex1.battery_wh == ex2.battery_wh and ex1.battery_wh is not None and ex1.battery_wh > 5000
+    assert spare.battery_wh == 5000.0
+    # the final failed step carries the same list as plain dicts ...
+    final = result.steps[-1]
+    assert final.stage == "schedule" and not final.ok and final.payload is not None
+    dumped = [s.model_dump(mode="json") for s in result.suggestions]
+    assert final.payload == {"suggestions": dumped}
+    # ... and had it the moment it was reported; no other step was touched
+    assert seen[-1] == ("schedule", False, {"suggestions": dumped})
+    assert all("suggestions" not in p for p in payloads(seen)[:-1])
+    assert PlanResult.model_validate_json(result.model_dump_json()) == result
+
+
+def test_replan_infeasibility_is_advised_with_a_spare_or_a_later_deadline_only():
+    """Solver-first replan that CP-SAT refuses: a battery cannot be raised mid-mission and the
+    remaining work is not re-scoped here, so only extend_horizon / add_robot are tried; the
+    energy core makes the spare the one answer."""
+    client = Scripted({})
+    result = planner(client, max_repairs=0).plan_from_requirements(
+        REQ, key="k", prior_graph=PRIOR_INFEASIBLE, context="EX3 failed", variant="replan",
+        required_tasks=PRIOR_INFEASIBLE.ids(), start_with_prior=True)
+    assert not result.success and client.calls == []
+    assert trace(result) == [("validate", 1, True), ("schedule", 1, False)]
+    assert [(s.kind, s.robot_type, s.robot_id) for s in result.suggestions] == [
+        ("add_robot", "excavator", "EX3")]
+    assert result.suggestions[0].verified
+    assert result.steps[-1].payload == {
+        "suggestions": [result.suggestions[0].model_dump(mode="json")]}
+
+    # the spare never takes the id of a robot the replan lost: the ids come from the caller,
+    # or from the "Failed robots (unavailable): ..." sentence of the replan context
+    def spare(**kwargs: Any) -> str:
+        result = planner(Scripted({}), max_repairs=0).plan_from_requirements(
+            REQ, key="k", prior_graph=PRIOR_INFEASIBLE, variant="replan",
+            required_tasks=PRIOR_INFEASIBLE.ids(), start_with_prior=True, **kwargs)
+        (s,) = result.suggestions
+        assert s.kind == "add_robot" and s.robot_id is not None
+        return s.robot_id
+
+    assert spare(reserved_ids=["EX3", "EX4"]) == "EX5"
+    assert spare(context="Robot EX3 has failed and must not be used again. Failed robots "
+                         "(unavailable): EX3, HL2. Time 0 of the new schedule is now.") == "EX4"
+    assert spare(context="Failed robots (unavailable): EX3, HL2.", reserved_ids=[]) == "EX3"
+
+    # with repairs allowed, the advice waits for the last verdict of the run
+    client = Scripted({("repair", 2): INFEASIBLE})
+    result = planner(client, max_repairs=1).plan_from_requirements(
+        REQ, key="k", prior_graph=PRIOR_INFEASIBLE, context="EX3 failed", variant="replan",
+        required_tasks=PRIOR_INFEASIBLE.ids(), start_with_prior=True)
+    assert not result.success and result.repairs == 1
+    assert [s.kind for s in result.suggestions] == ["add_robot"]
+    verdicts = [s for s in result.steps if s.stage == "schedule"]
+    assert len(verdicts) == 2 and verdicts[0].payload is None
+    assert verdicts[1].payload is not None and "suggestions" in verdicts[1].payload
+
+
+def test_a_rejected_last_repair_answer_still_ends_with_advice_on_its_step():
+    """The run ends on an offline fixture miss: the failure the caller sees is the miss, the
+    advice answers the solver's verdict on the last valid graph, and it rides on the final
+    failed step (the rejected repair), not on the earlier verdict step."""
+    client = Scripted({("taskgraph", 1): INFEASIBLE,
+                       ("repair", 2): FixtureMissing("missing fixture taskgraph_2.json")})
+    result = planner(client).plan_from_requirements(REQ, key="k")
+    assert not result.success and result.failure is not None
+    assert result.failure.kind == "llm_error" and result.task_graph == PRIOR_INFEASIBLE
+    assert [(s.kind, s.robot_id) for s in result.suggestions] == [
+        ("raise_battery", "EX1"), ("raise_battery", "EX2"), ("add_robot", "EX3")]
+    assert [s.stage for s in result.steps] == ["taskgraph", "validate", "schedule", "repair"]
+    assert "suggestions" not in (result.steps[2].payload or {})
+    assert result.steps[3].payload == {
+        "suggestions": [s.model_dump(mode="json") for s in result.suggestions]}
+
+    # a schema failure before any graph existed has nothing to advise on
+    client = Scripted({("taskgraph", k): schema_error("taskgraph") for k in (1, 2, 3)})
+    result = planner(client).plan_from_requirements(REQ, key="k")
+    assert not result.success and result.task_graph is None and result.suggestions == []
+    assert all("suggestions" not in (s.payload or {}) for s in result.steps)
+
+
+def test_nothing_is_attached_on_success(monkeypatch):
+    calls: list[Any] = []
+    real = loop_module.suggest_relaxations
+    monkeypatch.setattr(loop_module, "suggest_relaxations",
+                        lambda *a, **k: calls.append(a) or real(*a, **k))
+    for script in ({("taskgraph", 1): FEASIBLE},
+                   {("taskgraph", 1): INFEASIBLE, ("repair", 2): FEASIBLE}):
+        result = planner(Scripted(script)).plan_from_requirements(REQ, key="k")
+        assert result.success and result.suggestions == []
+        assert all("suggestions" not in (s.payload or {}) for s in result.steps)
+    assert calls == []   # a verdict that gets repaired is never advised on
+
+
+def test_advice_is_computed_once_for_the_final_verdict_with_the_planners_options(monkeypatch):
+    calls: list[tuple[Any, ...]] = []
+    real = loop_module.suggest_relaxations
+
+    def spy(req, graph, failure, opts=None, **kwargs):
+        calls.append((req, graph, failure, opts, kwargs))
+        return real(req, graph, failure, opts, **kwargs)
+
+    monkeypatch.setattr(loop_module, "suggest_relaxations", spy)
+    client = Scripted({("taskgraph", 1): INFEASIBLE, ("repair", 2): INFEASIBLE})
+    result = planner(client, max_repairs=1, solver_time_limit_s=3.0,
+                     suggest_budget_s=2.5).plan_from_requirements(REQ, key="k")
+    assert not result.success and result.repairs == 1
+    assert len(calls) == 1
+    req, graph, failure, opts, kwargs = calls[0]
+    assert req == REQ and graph == result.task_graph and failure == result.failure
+    assert isinstance(opts, SolveOptions) and opts.time_limit_s == 3.0
+    assert kwargs == {"locked": None, "kinds": None, "reserved_ids": [], "budget_s": 2.5}
+    verdicts = [s for s in result.steps if s.stage == "schedule"]
+    assert verdicts[0].payload is None and "suggestions" in (verdicts[1].payload or {})
+    assert len(result.suggestions) == 3
+
+
+def test_suggest_budget_zero_disables_the_advice_and_its_errors_never_surface(monkeypatch):
+    result = planner(Scripted({("taskgraph", 1): INFEASIBLE}), max_repairs=0,
+                     suggest_budget_s=0).plan_from_requirements(REQ, key="k")
+    assert not result.success and result.suggestions == []
+    assert result.steps[-1].payload is None
+    with pytest.raises(ValueError, match="suggest_budget_s"):
+        Planner(Scripted({}), suggest_budget_s=-1)
+    assert Planner(Scripted({})).suggest_budget_s == 6.0
+
+    def boom(*args: Any, **kwargs: Any) -> list[Suggestion]:
+        raise RuntimeError("the advice solver exploded")
+
+    monkeypatch.setattr(loop_module, "suggest_relaxations", boom)
+    result = planner(Scripted({("taskgraph", 1): INFEASIBLE}), max_repairs=0
+                     ).plan_from_requirements(REQ, key="k")
+    assert not result.success and result.failure is not None
+    assert set(result.failure.conflicts) == ENERGY_CORE and result.suggestions == []
+    assert result.steps[-1].payload is None
+
+
+def test_plan_result_round_trips_with_suggestions_empty_by_default():
+    bare = PlanResult(requirements=REQ)
+    assert bare.suggestions == []
+    assert PlanResult.model_validate_json(bare.model_dump_json()) == bare
+    data = json.loads(bare.model_dump_json())
+    assert data["suggestions"] == []
+    del data["suggestions"]   # a result recorded before the field existed still loads
+    assert PlanResult.model_validate(data).suggestions == []
+
+    advised = PlanResult(requirements=REQ, success=False, suggestions=[
+        Suggestion(kind="raise_battery", detail="EX1 needs 5950 Wh (has 5000 Wh): feasible at 62 h",
+                   robot_type="excavator", robot_id="EX1", battery_wh=5950, makespan_h=62,
+                   verified=True),
+        Suggestion(kind="reduce_scope", detail="cut the bowl (24 h, 4000 Wh)"),
+    ])
+    again = PlanResult.model_validate_json(advised.model_dump_json())
+    assert again == advised and again.suggestions[1].verified is False
+    assert again.suggestions[1].model_dump(exclude_none=True) == {
+        "kind": "reduce_scope", "detail": "cut the bowl (24 h, 4000 Wh)", "verified": False}

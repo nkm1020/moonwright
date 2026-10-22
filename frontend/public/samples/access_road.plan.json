@@ -50,6 +50,11 @@
     "id": "S1",
     "type": "access_road",
     "zone": "Z1",
+    "operations": [
+     "grade",
+     "compact",
+     "survey"
+    ],
     "length_m": 120,
     "width_m": 4,
     "thickness_m": 0.2
@@ -58,6 +63,11 @@
     "id": "S2",
     "type": "habitat_foundation",
     "zone": "Z3",
+    "operations": [
+     "excavate",
+     "compact",
+     "survey"
+    ],
     "length_m": 8,
     "width_m": 8,
     "depth_m": 0.5
@@ -66,6 +76,9 @@
     "id": "S3",
     "type": "protective_berm",
     "zone": "Z4",
+    "operations": [
+     "haul"
+    ],
     "length_m": 20,
     "height_m": 1.5
    }
@@ -398,7 +411,7 @@
   "makespan_h": 64,
   "status": "optimal",
   "objective_bound_h": 64,
-  "solve_time_s": 0.005002
+  "solve_time_s": 0.005037000000000001
  },
  "explanation": "The plan grades and compacts the 120 m access road from the landing pad to the habitat site, excavates the 8 m by 8 m foundation pit and shapes a small protective berm from the spoil, using five robots in twelve tasks. SV1 stakes the centreline and the foundation corners, then EX1, the only excavator, works west in sequence: road segment A, road segment B, then the foundation pit. HL1 clears grading spoil to the shoulders and later carries foundation spoil to the berm line. CP1 and CP2 compact the two road segments in parallel as soon as each is graded, then finish the foundation base and the berm. SV1 inspects the road once both segments are compacted and finishes with an as-built survey of the foundation and berm. The verified schedule completes in 64 hours of the 240-hour window, transit between zones included. The single excavator is the tightest resource: its three digging tasks form a 32-hour chain (35 hours with the moves between zones) that everything downstream waits on, and it uses about 3900 of its 5000 Wh. The solver proved the makespan optimal and verified precedence, per-robot sequencing, one robot per zone and all battery budgets.",
  "steps": [
@@ -407,12 +420,12 @@
    "attempt": 1,
    "ok": true,
    "failure": null,
-   "duration_s": 0.0019149170257151127,
+   "duration_s": 0.0019689169712364674,
    "usage": {
     "model": "fixture:structure.json",
     "input_tokens": 0,
     "output_tokens": 0,
-    "latency_s": 0.00039475003723055124
+    "latency_s": 0.00038166705053299665
    },
    "message": "3 structures, 5 robots, horizon 240h",
    "payload": {
@@ -433,12 +446,12 @@
    "attempt": 1,
    "ok": true,
    "failure": null,
-   "duration_s": 0.0011482499539852142,
+   "duration_s": 0.0015434159431606531,
    "usage": {
     "model": "fixture:taskgraph_1.json",
     "input_tokens": 0,
     "output_tokens": 0,
-    "latency_s": 0.00018862506840378046
+    "latency_s": 0.00026466697454452515
    },
    "message": "12 tasks",
    "payload": {
@@ -454,7 +467,7 @@
    "attempt": 1,
    "ok": true,
    "failure": null,
-   "duration_s": 0.002266291994601488,
+   "duration_s": 0.00029754103161394596,
    "usage": null,
    "message": "12 tasks valid",
    "payload": {
@@ -468,7 +481,7 @@
    "attempt": 1,
    "ok": true,
    "failure": null,
-   "duration_s": 0.0069434159668162465,
+   "duration_s": 0.006891665980219841,
    "usage": null,
    "message": "makespan 64h (optimal)",
    "payload": {
@@ -537,12 +550,12 @@
    "attempt": 1,
    "ok": true,
    "failure": null,
-   "duration_s": 0.0003772919299080968,
+   "duration_s": 0.000399957993067801,
    "usage": {
     "model": "fixture:explain.json",
     "input_tokens": 0,
     "output_tokens": 0,
-    "latency_s": 0.000305499997921288
+    "latency_s": 0.00032716698478907347
    },
    "message": null,
    "payload": null
@@ -550,5 +563,6 @@
  ],
  "repairs": 0,
  "success": true,
- "failure": null
+ "failure": null,
+ "suggestions": []
 }

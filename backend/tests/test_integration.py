@@ -6,7 +6,9 @@
 * API ``POST /plan`` -> ``POST /simulate`` on the same scenario, and the UI flow
   ``GET /examples/{id}`` -> ``POST /structure`` -> ``POST /plan`` (user-corrected requirements)
   -> ``POST /plan/stream`` -> ``POST /simulate`` with the API defaults.
-* CLI ``eval`` over the example briefs: the repair loop turns 2/3 feasible briefs into 3/3.
+* CLI ``eval`` over the example briefs: the repair loop turns 2/3 feasible briefs into 3/3;
+  with ``--models ultra,super`` the arms replay the same fixtures under their own condition
+  names and ``--markdown`` writes the results document with the per-brief matrix.
 * Monte Carlo (F9) over the landing_pad plan, CLI and API: solver-only replans, a reproducible
   seed, and a sample's failures replayable through ``POST /simulate`` unchanged.
 * Offline replan repairs: the repair round carries ``variant="replan"`` and, without a canned
@@ -25,7 +27,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from moonwright.api import EXAMPLES_DIR, app
-from moonwright.cli import EXIT_OK, main
+from moonwright.cli import ARM_MODELS, EXIT_OK, main
 from moonwright.llm.base import FixtureClient, FixtureMissing
 from moonwright.pipeline.loop import Planner
 from moonwright.pipeline.schedule import check_schedule
@@ -180,6 +182,56 @@ def test_cli_eval_over_example_briefs(tmp_path, capsys):
     assert len(out_csv.read_text().splitlines()) == 1 + 6
     table = capsys.readouterr().out
     assert "loop_on" in table and "95% CI" in table
+
+
+def test_cli_eval_arms_replay_the_same_fixtures_and_write_markdown(tmp_path, capsys):
+    """``--models ultra,super`` with the fixture client: four conditions named after the arms,
+    identical rows per arm (the recordings do not know the arm), zero cost, and a markdown
+    document whose per-brief matrix reads from the rows themselves."""
+    out_json, out_csv, out_md = tmp_path / "e.json", tmp_path / "e.csv", tmp_path / "e.md"
+    code = main(["eval", "--briefs", str(EXAMPLES_DIR), "--llm", "fixture", "--models",
+                 "ultra,super", "--thinking", "auto", "--out", str(out_json),
+                 "--csv", str(out_csv), "--markdown", str(out_md)])
+    assert code == EXIT_OK
+    report = json.loads(out_json.read_text())
+    conditions = ["ultra/loop_off", "ultra/loop_on", "super/loop_off", "super/loop_on"]
+    assert report["conditions"] == conditions
+    assert report["arms"] == {"ultra": ARM_MODELS["ultra"], "super": ARM_MODELS["super"]}
+    assert report["role_models"] == {} and report["thinking"] == "auto"
+    rows = {(r["brief"], r["condition"]): r for r in report["rows"]}
+    assert len(rows) == 3 * 4
+
+    def stable(r: dict) -> dict:
+        return {k: v for k, v in r.items() if k not in ("latency_s", "llm_latency_s", "condition")}
+
+    for brief in ("access_road", "landing_pad", "tight_battery"):
+        for loop in ("loop_off", "loop_on"):
+            assert stable(rows[brief, f"ultra/{loop}"]) == stable(rows[brief, f"super/{loop}"])
+    assert all(r["cost_usd"] == 0.0 and r["thinking"] == "auto" for r in rows.values())
+    summary = {s["condition"]: s for s in report["summary"]}
+    assert (summary["ultra/loop_off"]["feasible"], summary["ultra/loop_on"]["feasible"]) == (2, 3)
+    assert summary["ultra/loop_on"]["priced_runs"] == 3
+    assert summary["ultra/loop_on"]["total_cost_usd"] == 0.0
+    assert summary["ultra/loop_on"]["latency_p50_s"] <= summary["ultra/loop_on"]["latency_p95_s"]
+    assert summary["ultra/loop_on"]["mean_llm_latency_s"] <= summary["ultra/loop_on"]["mean_latency_s"]
+    text = out_md.read_text()
+    assert "| brief | ultra/loop_off | ultra/loop_on | super/loop_off | super/loop_on |" in text
+    pad = rows["landing_pad", "ultra/loop_on"]
+    assert f"| `landing_pad` | ok {pad['makespan_h']} h / 0 rep | ok {pad['makespan_h']} h / 0 rep |" in text
+    tight_off, tight_on = rows["tight_battery", "ultra/loop_off"], rows["tight_battery", "ultra/loop_on"]
+    kinds = ",".join(sorted({c.split(":")[0] for c in tight_off["conflicts"]}))
+    assert f"| `tight_battery` | fail {kinds} | ok {tight_on['makespan_h']} h / 1 rep |" in text
+    assert f"`ultra` = `{ARM_MODELS['ultra']}`" in text and "Thinking `auto`" in text
+    assert "This run used `--llm fixture`" in text
+    # the fixture graphs carry no quantities, so every verified run is also in scope
+    assert "| `ultra/loop_on` | 3 | 100% (44%-100%) | 100% (44%-100%) | 67% | 0.33 |" in text
+    assert "## Per kind" not in text   # examples/briefs has no kinds.json
+    header = out_csv.read_text().splitlines()[0]
+    assert header.startswith("brief,condition,repeat,success")
+    assert header.endswith(",cost_usd,volume_advisories,min_volume_share,in_scope,requirements_sha,kind")
+    captured = capsys.readouterr()
+    assert "95% CI" in captured.out and captured.out.rstrip().endswith(str(out_md))
+    assert "ultra/loop_on" in captured.err.splitlines()[-3]   # the table is echoed to stderr
 
 
 def test_cli_eval_workers_produce_the_same_rows(tmp_path, capsys):

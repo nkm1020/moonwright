@@ -5,7 +5,9 @@ before it is returned: :func:`moonwright.pipeline.rates.apply_rates` recomputes 
 energy_wh from each task's quantity and unit and keeps the model's own figures in
 ``estimated_*``. The step's ``payload`` carries the rate model's advisories
 (``{"advisories": [...], "rate_model": True, "grounded": n}``); an answer that states no
-quantity at all gets :data:`~moonwright.pipeline.rates.UNGROUNDED_ADVISORY`. The graph the
+quantity at all gets :data:`~moonwright.pipeline.rates.UNGROUNDED_ADVISORY`, and a whole plan
+(a first graph and its repairs, never a replan's remaining graph) the ``volume:<structure>``
+advisories of :func:`~moonwright.pipeline.rates.volume_advisories`. The graph the
 model was handed (the remaining graph of a replan, ``prior`` or ``baseline``; the previous graph
 of a repair) is passed to ``apply_rates`` as ``keep`` together with the ids of the ``locked``
 tasks (underway on a robot), so a task returned as handed over, or underway, keeps its
@@ -20,7 +22,12 @@ from collections.abc import Collection
 
 from moonwright.llm.base import FixtureMissing, LLMClient, LLMError
 from moonwright.llm.prompts import repair_messages, replan_messages, taskgraph_messages
-from moonwright.pipeline.rates import UNGROUNDED_ADVISORY, apply_rates, is_engaged
+from moonwright.pipeline.rates import (
+    UNGROUNDED_ADVISORY,
+    apply_rates,
+    is_engaged,
+    volume_advisories,
+)
 from moonwright.schemas import Failure, LoopStep, Requirements, TaskGraph, schema_conflict
 
 
@@ -101,6 +108,13 @@ def generate_task_graph(
     graph, advisories = apply_rates(graph, keep=handed, locked=locked)
     if not is_engaged(graph, handed):
         advisories = [*advisories, UNGROUNDED_ADVISORY]
+    # the m3 planned per structure against its dimensions (a re-scope made visible): judged
+    # on a whole plan only. A replan (``prior`` without ``feedback``, or a repair round with
+    # the remaining graph as ``baseline``) plans the work that is LEFT, so a pad whose first
+    # bowl half is dug would read as under-scoped there.
+    whole_plan = baseline is None and not (prior is not None and feedback is None)
+    if whole_plan:
+        advisories = [*advisories, *volume_advisories(req, graph)]
     grounded = sum(1 for t in graph.tasks if t.estimated_duration_h is not None)
     return graph, LoopStep(
         stage=stage, attempt=attempt, ok=True, duration_s=time.perf_counter() - t0, usage=usage,

@@ -566,7 +566,7 @@ def montecarlo(req: MonteCarloRequest) -> MonteCarloResult:
     _verified_plan(plan_)
     planner = (solver_only_planner() if req.llm is None
                else MonteCarloPlanner(_client(req.llm), max_repairs=req.max_repairs,
-                                      explain=False))
+                                      explain=False, suggest_budget_s=0.0))
     with _reported("montecarlo"):
         try:
             return run_monte_carlo(

@@ -215,9 +215,12 @@ class MonteCarloPlanner(Planner):
 
 
 def solver_only_planner(*, solver_time_limit_s: float = 10.0) -> Planner:
-    """The default Monte Carlo planner: CP-SAT only (one worker), no repairs, no explanation."""
+    """The default Monte Carlo planner: CP-SAT only (one worker), no repairs, no explanation
+    and no relaxation advice on an infeasible replan (nothing displays it in a Monte Carlo
+    sample, so ``suggest_budget_s=0`` saves the verification solves)."""
     return MonteCarloPlanner(SolverOnlyClient(), max_repairs=0,
-                             solver_time_limit_s=solver_time_limit_s, explain=False)
+                             solver_time_limit_s=solver_time_limit_s, explain=False,
+                             suggest_budget_s=0.0)
 
 
 # --------------------------------------------------------------------------- one run

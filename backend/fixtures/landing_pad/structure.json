@@ -49,6 +49,12 @@
       "id": "S1",
       "type": "landing_pad",
       "zone": "Z1",
+      "operations": [
+        "survey",
+        "excavate",
+        "compact",
+        "sinter"
+      ],
       "diameter_m": 20,
       "depth_m": 0.4,
       "thickness_m": 0.3
@@ -57,6 +63,12 @@
       "id": "S2",
       "type": "blast_berm",
       "zone": "Z2",
+      "operations": [
+        "haul",
+        "compact",
+        "sinter",
+        "survey"
+      ],
       "length_m": 60,
       "height_m": 2.5,
       "width_m": 4

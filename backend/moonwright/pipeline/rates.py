@@ -73,9 +73,21 @@ import math
 from collections.abc import Collection
 from dataclasses import dataclass
 
-from moonwright.schemas import MAX_DURATION_H, MAX_ENERGY_WH, Task, TaskGraph, Unit, to_mwh
+from moonwright.pipeline.tags import serving_tasks
+from moonwright.schemas import (
+    MAX_DURATION_H,
+    MAX_ENERGY_WH,
+    Requirements,
+    Structure,
+    Task,
+    TaskGraph,
+    Unit,
+    to_mwh,
+)
 
 ADVISORY_THRESHOLD = 0.5   # relative deviation of the model's estimate that earns an advisory
+VOLUME_LOW = 0.7           # volume:<structure> when the planned m3 are below this share of the
+VOLUME_HIGH = 1.5          # dimensions' volume, or above this multiple of it
 _CEIL_EPS = 1e-9           # 2.1 / 0.7 is 3.0000000000000004 in floats: do not ceil that to 4
 UNGROUNDED_ADVISORY = (
     "ungrounded: no task states a quantity, so every duration_h and energy_wh is the model's "
@@ -260,3 +272,120 @@ def _advisory(model: Task, grounded: Task) -> str | None:
     pct = "model said 0" if math.isinf(worst) else f"{worst:+.0%}"
     return (f"estimate:{model.id}: model said {model.duration_h} h / {_fmt(model.energy_wh)} Wh, "
             f"rate model gives {grounded.duration_h} h / {_fmt(grounded.energy_wh)} Wh ({pct})")
+
+
+# ----------------------------------------------------------------------- volume advisories
+Shape = tuple[float, str, str]   # (m3, how, phase)
+
+
+def _body(d: dict[str, float]) -> Shape | None:
+    """The main body a structure's dimensions describe (None when they describe none)."""
+    if "diameter_m" in d and "depth_m" in d:
+        radius = d["diameter_m"] / 2
+        return (math.pi * radius * radius * d["depth_m"],
+                f"bowl {_fmt(d['diameter_m'])} m across, {_fmt(d['depth_m'])} m deep", "excavation")
+    if {"length_m", "width_m", "depth_m"} <= d.keys():
+        return (d["length_m"] * d["width_m"] * d["depth_m"],
+                f"{_fmt(d['length_m'])} x {_fmt(d['width_m'])} x {_fmt(d['depth_m'])} m", "excavation")
+    if {"length_m", "height_m", "width_m"} <= d.keys():
+        return (0.5 * d["height_m"] * d["width_m"] * d["length_m"],
+                (f"{_fmt(d['length_m'])} m long, {_fmt(d['height_m'])} m high, {_fmt(d['width_m'])} m "
+                "wide at the base, triangular section"), "haul")
+    if {"length_m", "height_m"} <= d.keys():
+        return (d["height_m"] ** 2 * d["length_m"],
+                f"{_fmt(d['length_m'])} m long, {_fmt(d['height_m'])} m high, 1:1 slopes", "haul")
+    return None
+
+
+def _key_trench(d: dict[str, float]) -> Shape | None:
+    """The key trench under a placed body: ``length_m`` x (``trench_width_m``, else the base
+    ``width_m``, else twice ``height_m``) x ``trench_depth_m``."""
+    if "trench_depth_m" not in d or "length_m" not in d:
+        return None
+    width = d.get("trench_width_m", d.get("width_m", 2 * d.get("height_m", 0.0)))
+    return (d["length_m"] * width * d["trench_depth_m"],
+            f"key trench {_fmt(d['length_m'])} x {_fmt(width)} x {_fmt(d['trench_depth_m'])} m",
+            "excavation")
+
+
+def dims_volumes(structure: Structure) -> list[Shape]:
+    """Every ``(m3, how, phase)`` a structure's dimensions imply, main body first: a bowl
+    (``diameter_m`` x ``depth_m``) or a box (``length_m`` x ``width_m`` x ``depth_m``) is dug,
+    so its phase is ``excavation``; a prism (``length_m`` x ``height_m`` [x ``width_m`` at the
+    base], a berm or a stockpile) is placed, so its phase is ``haul``; a placed body on a key
+    trench (``trench_depth_m``, the structure prompt's key for "on a key trench 1.2 m wide and
+    0.8 m deep") adds the trench as a second, dug shape. The same simplifications as
+    ``scripts/brief_budget.py``: vertical walls, a triangular berm section (``height^2`` with
+    1:1 slopes when no base width is given). A shape whose numbers give no positive volume
+    (``depth_m: 0`` for an at-grade hardstand, a negative figure a user typed) is left out, so
+    nothing downstream divides by it."""
+    d = structure.dims()
+    body = _body(d)
+    shapes = [body] if body is not None else []
+    if body is None or body[2] == "haul":
+        trench = _key_trench(d)
+        if trench is not None:
+            shapes.append(trench)
+    return [s for s in shapes if s[0] > 0]
+
+
+def dims_volume(structure: Structure) -> Shape | None:
+    """The main ``(m3, how, phase)`` of :func:`dims_volumes`, or None when the dimensions form
+    no positive volume."""
+    shapes = dims_volumes(structure)
+    return shapes[0] if shapes else None
+
+
+def volume_advisories(req: Requirements, graph: TaskGraph) -> list[str]:
+    """``volume:<structure>: ...`` for every structure whose tasks plan clearly less (below
+    :data:`VOLUME_LOW`) or clearly more (above :data:`VOLUME_HIGH`) than the m3 its dimensions
+    imply (:func:`dims_volumes`): the excavator tasks of a dug shape, the hauler tasks of a
+    placed one, summed over their ``m3`` quantities. The tasks of a structure are resolved
+    exactly as the coverage check resolves them (:func:`moonwright.pipeline.tags.serving_tasks`:
+    the id in any case, the type, a label containing the id, untagged tasks in its zone, and
+    hauls placed in its zone), so a graph the validator accepts cannot escape this check by
+    its tag spelling. A warning, never a conflict: a brief may allow a smaller scope and the
+    user can correct the dimensions, but the re-scope must be visible. Seen live (phase 3c): a
+    360 m3 borrow strip planned as 600 m2 of stripping to fit one battery, a 300 m3 berm hauled
+    twice over, a 20 m pad dug as a 12 m one, a 57.6 m3 key trench "repaired" with two 5 m3
+    tasks. A structure without a volume, or without any task of the shape's robot type
+    (coverage's business), gets nothing; a graph without quantities (the hand-made fixtures)
+    therefore gets nothing. Meant for a whole plan: on the remaining graph of a replan the
+    finished work is gone, so the task-graph stage does not call it there."""
+    out: list[str] = []
+    for s in req.structures:
+        shapes = dims_volumes(s)
+        if not shapes:
+            continue
+        served = serving_tasks(s, graph, req.structures)
+        for volume, how, phase in shapes:
+            robot = "excavator" if phase == "excavation" else "hauler"
+            typed = [t for t in served if t.robot_type == robot and t.quantity is not None]
+            if not typed:
+                continue
+            total = sum(t.quantity for t in typed if t.unit == "m3")
+            share = total / volume
+            if VOLUME_LOW <= share <= VOLUME_HIGH:
+                continue
+            listed = ", ".join(f"{t.id} {_fmt(t.quantity)} {t.unit or '?'}" for t in typed)
+            word = "only " if share < VOLUME_LOW else ""
+            out.append(f"volume:{s.id}: its dimensions give {_fmt(volume)} m3 ({how}) but its "
+                       f"{phase} tasks ({listed}) total {word}{_fmt(total)} m3 ({share:.0%})")
+    return out
+
+
+def volume_shares(req: Requirements, graph: TaskGraph) -> dict[str, float]:
+    """``{structure id: planned m3 / dimension m3}`` for every structure and shape the
+    advisory judges (the smallest share when a structure has several shapes), whether or not
+    it is out of range: what the eval reports as ``min_volume_share``."""
+    out: dict[str, float] = {}
+    for s in req.structures:
+        served = serving_tasks(s, graph, req.structures)
+        for volume, _how, phase in dims_volumes(s):
+            robot = "excavator" if phase == "excavation" else "hauler"
+            typed = [t for t in served if t.robot_type == robot and t.quantity is not None]
+            if not typed:
+                continue
+            share = sum(t.quantity for t in typed if t.unit == "m3") / volume
+            out[s.id] = min(share, out.get(s.id, math.inf))
+    return out

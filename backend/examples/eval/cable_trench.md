@@ -5,7 +5,7 @@
 **Structures.**
 
 1. Cable trench: 150 m long, 0.4 m wide, 0.6 m deep, cut in three 50 m segments so the cable crew can follow behind, with a compacted 10 cm bedding layer in each segment before the cable goes in.
-2. Depression crossing: a 10 m earth bridge of compacted fill across the depression so the trench keeps a steady depth.
+2. Depression crossing: a 10 m long, 4 m wide earth bridge of compacted fill, 0.5 m thick (about 20 cubic metres, taken from the trench spoil), across the depression so the trench keeps a steady depth.
 
 **Fleet.** EX1 (excavator, 5000 Wh), HL1 (hauler, 3000 Wh), CP1 (compactor, 3500 Wh) and SV1 (surveyor, 1500 Wh). Each battery is the whole job's budget.
 

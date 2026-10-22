@@ -1,12 +1,31 @@
 # Live run runbook (Nebius Token Factory)
 
-Everything below needs a Token Factory account with credits and `NEBIUS_API_KEY`. Nothing in
-the repo has been run against the live service yet; the fixture mode is what the tests and the
-offline demo use. Credits: promo code `NEBIUS-DEVPOST-GLOBAL26` (USD 25) at
-https://nebius.com/promo-code plus the Builders Program (USD 25). Billing needs a bank card;
-whether Korea-issued cards are accepted is unconfirmed, so do step 1 first.
+Everything below needs a Token Factory account with credits and `NEBIUS_API_KEY` in
+`backend/.env` (`load_env` reads it; pass `--llm nebius` explicitly so a run never falls back to
+the fixtures by accident). Run every command from `backend/`. Every call is appended to
+`out/llm_log.jsonl` (`MOONWRIGHT_LLM_LOG`: status, model, tokens, latency, request id, never the
+prompt or the answer), so note the start time first; the call-log report takes `--since`:
 
-## 1. Account and key (day 1 risk check)
+```bash
+cd backend
+date -u +%Y-%m-%dT%H:%M:%S+00:00 | tee out/eval_start.txt
+```
+
+## Measured so far (list prices, from `scripts/llm_log_report.py`)
+
+* Phase 3a, Oct 22, 3 plans: Ultra task graph 2.9k in / 10.4k out tokens, 297 tok/s, p50 34 s,
+  $0.034 per call; Lightning structure 2.9 s, $0.0002; Super explanation 2.5 s, $0.0011.
+* Phase 3c smoke, Oct 22-23, 9 plans (landing_pad x2, tight_battery, depleted_excavators x2,
+  three_pads_in_order, small_fleet_long_berm, low_battery_pad, front_loaded_excavation): 34
+  requests, 0 errors, 2 re-asks (Ultra answered `finish_reason=length` once on a task graph and
+  once on a repair; the client re-asked and both succeeded). Ultra task graph with thinking: 3.4k
+  in / 10.6k out tokens, p50 53 s / p95 132 s, $0.035 per call; Ultra repair: 5.2k in / 9.3k out,
+  p50 31 s / p95 71 s, $0.033 per call; Lightning structure 3.3 s p50, $0.0003; Super explanation
+  2.2 s p50, $0.0013. Total $0.60 for the nine runs; 4 of 9 runs needed a repair round (2 x
+  `scope:<structure>` from the brief's operations, 1 x `energy:PR1`, 1 x three rounds ending in
+  `horizon, zone:Z1` with the advice `finishing needs 86 h, 26 h past the 60 h deadline`).
+
+## 1. Account and key (smoke)
 
 ```bash
 cd backend
@@ -29,52 +48,113 @@ If a model id is missing, check https://tokenfactory.nebius.com/api/public/model
 the `MOONWRIGHT_MODEL_*` variables. If the Ultra request answers 404, the client retries on
 `https://api.tokenfactory.us-central1.nebius.com/v1/` automatically.
 
-## 2. First live plans and fixture refresh
+## 2. Demo plans and the fixture refresh
 
 ```bash
-uv run moonwright plan examples/briefs/landing_pad.md --llm record     # live + saves fixtures/landing_pad/
+uv run moonwright plan examples/briefs/landing_pad.md --llm nebius        # about 60-160 s, $0.04
+uv run moonwright plan examples/briefs/landing_pad.md --llm record        # the same, saving fixtures/landing_pad/
 uv run moonwright plan examples/briefs/tight_battery.md --llm record
 uv run moonwright plan examples/briefs/access_road.md --llm record
-uv run pytest                                                          # fixtures changed: make sure the suite agrees
+uv run pytest                                                             # fixtures changed: make sure the suite agrees
 ```
 
-`--llm record` overwrites `fixtures/<brief>/*.json`; the explanation texts in the e2e tests
-quote the makespans 80/64/68 h (transit allowance included), so if the live graphs differ, update
-`tests/test_pipeline_e2e.py` or keep the old fixtures (copy them aside first).
+`--llm record` overwrites `fixtures/<brief>/*.json`. The e2e tests quote the fixture makespans
+80 / 64 / 68 h and the hand-declared `operations` lists (`tests/test_coverage_ops.py:
+FIXTURE_OPERATIONS`), so after a re-recording update `tests/test_pipeline_e2e.py` and that table
+or keep the old fixtures (copy them aside first). Regenerate `frontend/public/samples` from
+`out/` afterwards (`plan` x3 `--llm fixture`, `simulate --fail EX2@30`, `montecarlo --runs 200
+--seed 1`). Fast demo setting when Ultra with thinking is slow: `MOONWRIGHT_THINKING=off` (lower
+first-try feasibility, which the repair loop should absorb).
 
-Fast demo setting when Ultra with thinking is slow: `MOONWRIGHT_THINKING=off` (every call
-answers directly; expect lower first-try feasibility, which the repair loop should absorb).
-
-## 3. The loop on/off experiment (PRD evaluation plan)
+## 3. Main evaluation: 22 briefs x 2 model arms x loop off/on x 3 repeats
 
 ```bash
-uv run moonwright eval --briefs examples/eval --repeat 3 --loop both --llm nebius \
-  --out out/eval_live.json --csv out/eval_live.csv
+uv run moonwright eval --briefs examples/eval --repeat 3 --loop both --models ultra,super \
+  --thinking auto --llm nebius --workers 3 --max-answer-retries 2 \
+  --out out/eval_live.json --csv out/eval_live.csv --markdown out/eval_live.md 2>&1 | tee out/eval_live.log
 ```
 
-20 briefs x 2 conditions x 3 repeats = 120 planning runs. Rough cost with the default routing:
-each run is one Lightning call plus one to four Ultra calls of about 3-6k input tokens and
-1-3k output tokens (more with thinking), so budget roughly USD 5-15 for the whole table and
-check the usage columns of the CSV as it runs. Report feasible-plan rate, repairs, makespan,
-latency and tokens per condition (the CLI prints the summary table; the CSV has every run).
+264 planning runs (22 briefs x `ultra/loop_off`, `ultra/loop_on`, `super/loop_off`,
+`super/loop_on` x 3). Arms re-route only the task-graph and repair roles (structure stays
+Lightning, explanations are off in the eval); `--thinking auto` means Ultra / Super reason on
+those two roles and Lightning answers directly. Each brief is structured once per repeat and all
+four conditions plan from that same requirements object (`requirements_sha` in the rows), so the
+arms and the loop settings are a paired comparison and only 66 Lightning calls are made. Rows
+flush to the CSV as they finish and the stderr progress line shows each run's cost (and `scope
+differs from dimensions` when a verified plan carries a volume advisory); the markdown has the
+per-condition table (feasible rate with Wilson CI, feasible *in scope*, first try, repairs,
+makespan, p50 / p95 latency, tokens, cost per run and in total), the per-kind table
+(`examples/eval/kinds.json` is picked up automatically) and the per-brief matrix (`ok 76 h /
+0 rep`, `ok 90 h / 1 rep scope!`, `fail energy`, `k/n` on repeats). The `models` column lists
+the model ids that actually answered, so an arm's routing is auditable per row.
 
-Secondary measurement (why a solver is needed): let Nemotron write the schedule itself and
-verify it with the same checker:
+Cost at list prices with the measured per-call figures: Ultra arm 132 runs x ($0.035 task graph +
+$0.0003 structure) = $4.7, plus about $0.033 per repair round on the 66 `loop_on` runs ($2.2 per
+mean repair round r); Super arm 132 x about $0.011 = $1.5 plus $0.011 x 66 x r. About $9-12 for
+r around 1, a hard upper bound of about $22 if every `loop_on` run spends all 3 repairs; schema
+re-asks add a few percent. Wall time: Ultra with thinking p50 53 s / p95 132 s per task graph, so
+a `loop_off` run takes about 60 s and a `loop_on` run about 60 s + 35-70 s per repair; Super is
+roughly half. About 80 minutes of work on 3 workers; plan 2 hours with 429 backoff (the SDK
+retries 429 / 5xx with exponential backoff and honours `Retry-After`). There is no resume: a
+killed run keeps its finished CSV rows but a rerun starts over, so when partial progress must
+survive run the arms separately (`--models ultra` to `out/eval_ultra.*`, then `--models super` to
+`out/eval_super.*`).
+
+Ablation (optional, same shape, $4-6): `--loop on --feedback verdict` tells the repair round only
+that the plan was infeasible, which isolates what the minimal infeasibility core is worth.
+
+## 4. Replanning evaluation (needs live plan files first; the eval writes no plans)
+
+```bash
+mkdir -p out/live
+for b in landing_pad tight_battery access_road low_battery_pad habitat_berm_tight_horizon; do
+  uv run moonwright plan examples/eval/$b.md --llm nebius --no-explain -q --out out/live/$b.plan.json
+done                                                                      # 5 x about $0.04, about 5 min
+uv run python scripts/replan_eval.py out/live/*.plan.json --llm nebius --all-tasks --sole-of-type solver \
+  --max-escalations 10 --out out/replan_eval_live.json --markdown out/replan_eval_live.md 2>&1 | tee out/replan_eval_live.log
+```
+
+For every verified plan the script fails every robot with work at 10 % and 50 % of each of its
+tasks, runs `run_with_replanning` solver-first and classifies each injection: `solver_only`,
+`escalated_verified`, `escalated_failed` (kind and conflicts kept), `escalated_no_answer`,
+`not_asked_budget`, `not_asked_sole_type`, `solver_failed`, `no_replan`, `error`, with solve
+time, LLM latency, tokens, cost, makespan before / after, tasks remaining, completion within the
+horizon and the verdict's conflict families; it stops asking the model after
+`--max-escalations` and says so. The headline rates (solver-only, escalated, recovered, within
+horizon) are over the *askable* injections: the not-asked ones (a lost sole-of-type robot under
+`--sole-of-type solver`, or the budget already spent) have their own column, so `solver-only +
+escalated + solver_failed = askable` and the 14 of 28 sole-of-type injections of the offline
+landing_pad run no longer read as replanner failures. `--all-tasks` weighs a robot by its task
+count; the first-task default is the headline setting. Cost: at most 10 escalations x about $0.04 (an Ultra repair with
+the remaining graph and core) = about $0.40; time: the simulations take seconds, each escalation
+40-90 s, so 10-15 minutes. `--sole-of-type solver` keeps the escalation budget for energy /
+horizon cores; add a second run with `--sole-of-type ask --max-escalations 4 --robots SV1,CP1` on
+one plan (about $0.15) if a "Nemotron re-types the work of a lost sole robot" example is wanted.
+To record the demo escalation fixture instead:
+`uv run python scripts/replan_eval.py out/live/landing_pad.plan.json --llm record --robots EX2 --fractions 0.1`
+writes `fixtures/landing_pad/taskgraph_replan_2.json` (one injection per plan in record mode).
+
+## 5. Call-log report (free, seconds), after 3 and 4
+
+```bash
+uv run python scripts/llm_log_report.py out/llm_log.jsonl --since "$(cat out/eval_start.txt)" \
+  --markdown out/llm_log_report.md --out out/llm_log_report.json
+```
+
+Per model and role: calls, HTTP 200 count, errors by status, re-asks, `json_format` rung,
+thinking, tokens in / out, completion tok/s, latency p50 / p95, cost, finish reasons, plus the
+notable list (non-200, re-asks, requests slower than `--slow 60` seconds) with request ids. The
+markdown is written for the README / Devpost results and the Token Factory feedback section.
+
+## 6. Secondary measurements
 
 ```bash
 uv run python scripts/llm_schedule_check.py out/landing_pad.plan.json out/access_road.plan.json \
-  out/tight_battery.plan.json --repeat 3 --out out/direct_schedule_check.json
-```
-
-It prints one line per answer (clean / n violations / llm error) and a summary with the
-violation rate and the conflict kinds.
-
-## 4. Replanning and robustness numbers
-
-```bash
+  out/tight_battery.plan.json --repeat 3 --out out/direct_schedule_check.json   # Nemotron writes the schedule itself
 uv run moonwright simulate out/landing_pad.plan.json --fail EX2@30 --llm nebius
 uv run moonwright montecarlo out/landing_pad.plan.json --runs 200 --seed 1
 ```
 
-Record: replans that produced a verified plan / replans attempted, time per replan, and the
-within-horizon probability per example brief.
+`llm_schedule_check.py` prints one line per answer (clean / n violations / llm error) and a
+summary with the violation rate and the conflict kinds. Record: replans that produced a verified
+plan / replans attempted, time per replan, and the within-horizon probability per example brief.

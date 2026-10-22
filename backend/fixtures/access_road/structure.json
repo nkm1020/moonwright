@@ -49,6 +49,11 @@
       "id": "S1",
       "type": "access_road",
       "zone": "Z1",
+      "operations": [
+        "grade",
+        "compact",
+        "survey"
+      ],
       "length_m": 120,
       "width_m": 4,
       "thickness_m": 0.2
@@ -57,6 +62,11 @@
       "id": "S2",
       "type": "habitat_foundation",
       "zone": "Z3",
+      "operations": [
+        "excavate",
+        "compact",
+        "survey"
+      ],
       "length_m": 8,
       "width_m": 8,
       "depth_m": 0.5
@@ -65,6 +75,9 @@
       "id": "S3",
       "type": "protective_berm",
       "zone": "Z4",
+      "operations": [
+        "haul"
+      ],
       "length_m": 20,
       "height_m": 1.5
     }

@@ -38,23 +38,32 @@ from moonwright.api import (
     thin_frames,
 )
 from moonwright.cli import (
+    ARM_MODELS,
     EXIT_ERROR,
     EXIT_NO_PLAN,
     EXIT_OK,
+    EvalReport,
     EvalRow,
     GraphCapture,
     build_parser,
+    condition_name,
+    eval_markdown,
     eval_row,
     format_gantt,
     format_replan,
     format_step,
     format_summary,
     main,
+    make_arm_client,
+    matrix_cell,
+    parse_arms,
     parse_failure,
     plan_stem,
     planner_options,
     positive_float,
+    run_cost_usd,
     summarise,
+    thinking_overrides,
     wilson_interval,
 )
 from moonwright.llm import factory
@@ -72,6 +81,7 @@ from moonwright.llm.base import (
     validate_into,
 )
 from moonwright.llm.factory import make_client, resolve_kind
+from moonwright.llm.prices import PRICES_USD_PER_M, cost_usd, format_usd, price_for
 from moonwright.llm.tokenfactory import (
     DEFAULT_BASE_URL,
     MODEL_DEFAULTS,
@@ -1389,6 +1399,12 @@ class TestCliParsing:
         args = build_parser().parse_args(["eval", "--briefs", "examples/briefs", "--loop", "on"])
         assert args.loop == "on" and args.repeat == 1 and args.out == Path("eval.json")
         assert (args.workers, args.feedback, args.max_answer_retries) == (1, "core", None)
+        assert (args.models, args.thinking, args.markdown) == (None, None, None)
+        args = build_parser().parse_args(
+            ["eval", "--briefs", "b", "--models", "ultra,super", "--thinking", "off",
+             "--markdown", "out/eval.md"])
+        assert (args.models, args.thinking, args.markdown) == ("ultra,super", "off",
+                                                               Path("out/eval.md"))
         args = build_parser().parse_args(
             ["eval", "--briefs", "b", "--workers", "4", "--feedback", "verdict",
              "--max-answer-retries", "0", "--max-repairs", "10"])
@@ -1440,6 +1456,7 @@ class TestCliParsing:
                      ["eval", "--briefs", "b", "--feedback", "hints"],
                      ["eval", "--briefs", "b", "--max-answer-retries", "-1"],
                      ["eval", "--briefs", "b", "--max-answer-retries", "6"],
+                     ["eval", "--briefs", "b", "--thinking", "maybe"],
                      ["montecarlo"],
                      ["eval"]):
             with pytest.raises(SystemExit) as info:
@@ -1526,11 +1543,18 @@ class TestCliFormatting:
         # the new per-row columns default to "unknown" and aggregate to zero / None
         assert (on.first_try_feasible, on.first_try_rate, on.answer_valid_rate) == (0, 0.0, 0.0)
         assert on.mean_scope_drift_pct is None
+        # phase-3c columns: wall-latency percentiles, the model calls' share, cost over the
+        # priced runs (none here: no row carries a cost)
+        assert (on.latency_p50_s, on.latency_p95_s, on.mean_llm_latency_s) == (3.0, 3.9, 2.25)
+        assert (on.mean_cost_usd, on.total_cost_usd, on.priced_runs) == (None, None, 0)
+        # in scope = verified with no volume advisory: the synthetic rows carry none
+        assert (on.in_scope, on.in_scope_rate) == (0, 0.0)
         table = format_summary([off, on])
         assert table.splitlines()[0].split() == [
-            "condition", "runs", "feasible", "95%", "CI", "1st-try", "repairs", "makespan",
-            "drift", "latency", "tok", "in/out"]
+            "condition", "runs", "feasible", "95%", "CI", "in-scope", "1st-try", "repairs",
+            "makespan", "drift", "latency", "p95", "tok", "in/out", "cost/run"]
         assert "0%-79%" in table.splitlines()[1] and "34%-100%" in table.splitlines()[2]
+        assert table.splitlines()[2].rstrip().endswith("-")   # no priced run: no dollar figure
 
     def test_wilson_interval(self):
         assert wilson_interval(0, 0) == (0.0, 1.0)
@@ -1684,7 +1708,8 @@ FAILED_RESULT = PlanResult(
 
 class RecordingPlanner:
     """A Planner that accepts the phase-3 repair-loop options and records what it was built
-    with; ``plan`` answers with a scripted failure (or raises ``trip`` on the n-th call)."""
+    with; ``structure`` (what the eval calls once per brief and repeat) answers with the
+    scripted structuring failure, or raises ``trip`` on the n-th call."""
 
     created: ClassVar[list[dict[str, Any]]] = []
     calls: ClassVar[int] = 0
@@ -1698,12 +1723,19 @@ class RecordingPlanner:
             "max_answer_retries": max_answer_retries})
         self.client = client
 
-    def plan(self, brief, *, brief_id=None):
+    def structure(self, brief, *, brief_id=None):
         cls = type(self)
         cls.calls += 1
         if cls.trip is not None and cls.calls == cls.trip[0]:
             raise cls.trip[1]
-        return FAILED_RESULT
+        return None, FAILED_RESULT.steps[0]
+
+    def plan_from_requirements(self, req, *, key, **kwargs):
+        raise AssertionError("the eval never plans a brief it could not structure")
+
+    def plan(self, brief, *, brief_id=None):
+        req, _step = self.structure(brief, brief_id=brief_id)
+        return FAILED_RESULT if req is None else self.plan_from_requirements(req, key=brief_id)
 
 
 class LegacyPlanner(RecordingPlanner):
@@ -1783,15 +1815,16 @@ class TestEvalCommand:
 
     def test_rows_are_flushed_to_the_csv_as_they_complete(self, tmp_path, capsys, planner_stub):
         stub = planner_stub(RecordingPlanner)
-        stub.trip = (3, ValueError("worker crashed on the third run"))
+        stub.trip = (2, ValueError("worker crashed on the second brief"))
         out_csv = tmp_path / "e.csv"
         code = main(["eval", "--briefs", str(briefs_dir(tmp_path, 2)), "--llm", "fixture",
                      "--loop", "both", "--out", str(tmp_path / "e.json"), "--csv", str(out_csv)])
         assert code == EXIT_ERROR
         assert "worker crashed" in capsys.readouterr().err
         rows = list(csv.DictReader(out_csv.open(encoding="utf-8")))
+        # the first brief's job (structured once, both conditions) finished, then the crash
         assert [(r["brief"], r["condition"]) for r in rows] == [
-            ("zz_brief_0", "loop_off"), ("zz_brief_0", "loop_on")]   # two finished, then the crash
+            ("zz_brief_0", "loop_off"), ("zz_brief_0", "loop_on")]
         assert not (tmp_path / "e.json").exists()   # the report needs every row
 
     def test_workers_run_in_parallel_and_keep_job_order(self, tmp_path, capsys, monkeypatch):
@@ -1800,14 +1833,14 @@ class TestEvalCommand:
         active, peak, lock = [0], [0], threading.Lock()
 
         class Slow(RecordingPlanner):
-            def plan(self, brief, *, brief_id=None):
+            def structure(self, brief, *, brief_id=None):
                 with lock:
                     active[0] += 1
                     peak[0] = max(peak[0], active[0])
                 time.sleep(0.2)
                 with lock:
                     active[0] -= 1
-                return FAILED_RESULT
+                return None, FAILED_RESULT.steps[0]
 
         Slow.created = []
         monkeypatch.setattr(cli_module, "Planner", Slow)
@@ -1824,6 +1857,282 @@ class TestEvalCommand:
         assert report["workers"] == 4
         err = capsys.readouterr().err
         assert err.count("FAIL llm_error") == 4 and "workers=4" in err
+
+
+# --------------------------------------------------------------------------- eval arms / cost / markdown
+ULTRA_ID = ARM_MODELS["ultra"]
+SUPER_ID = ARM_MODELS["super"]
+
+
+def priced_step(stage: str, model: str, tokens_in: int, tokens_out: int, *, attempt: int = 1,
+                latency: float = 1.0) -> LoopStep:
+    return LoopStep(stage=stage, attempt=attempt, ok=True,
+                    usage=Usage(model=model, input_tokens=tokens_in, output_tokens=tokens_out,
+                                latency_s=latency))
+
+
+class TestEvalArms:
+    def test_parse_arms(self):
+        assert parse_arms(None) is None and parse_arms("  ") is None and parse_arms(",") is None
+        assert parse_arms("ultra, super") == {"ultra": ULTRA_ID, "super": SUPER_ID}
+        assert parse_arms("NANO") == {"nano": ARM_MODELS["nano"]}
+        assert parse_arms("lightning,mini=nvidia/some-model") == {
+            "lightning": ARM_MODELS["lightning"], "mini": "nvidia/some-model"}
+        for bad, why in (("opus", "unknown arm"), ("ultra,ultra", "listed twice"),
+                         ("=x", "name=model-id"), ("a=", "name=model-id"),
+                         ("a/b=nvidia/x", "letters, digits")):
+            with pytest.raises(ValueError, match=why):
+                parse_arms(bad)
+        assert condition_name("ultra", "loop_on") == "ultra/loop_on"
+        assert condition_name(None, "loop_off") == "loop_off"
+
+    def test_thinking_overrides(self):
+        assert thinking_overrides(None) == {} and thinking_overrides("auto") == {}
+        assert thinking_overrides("on") == {"taskgraph": True, "repair": True}
+        assert thinking_overrides("off") == {"taskgraph": False, "repair": False}
+        with pytest.raises(ValueError, match="--thinking"):
+            thinking_overrides("maybe")
+
+    def test_make_arm_client_routes_the_graph_roles_only(self, monkeypatch):
+        monkeypatch.setattr(cli_module, "load_env", lambda: False)
+        monkeypatch.setenv("NEBIUS_API_KEY", "k")
+        for var in ("MOONWRIGHT_LLM", "MOONWRIGHT_THINKING", "MOONWRIGHT_MODEL_STRUCTURE",
+                    "MOONWRIGHT_MODEL_TASKGRAPH", "MOONWRIGHT_MODEL_REPAIR",
+                    "MOONWRIGHT_MODEL_EXPLAIN"):
+            monkeypatch.delenv(var, raising=False)
+        assert isinstance(make_arm_client("fixture", SUPER_ID, {"taskgraph": False}), FixtureClient)
+        client = make_arm_client("nebius", SUPER_ID, thinking_overrides("off"))
+        assert isinstance(client, TokenFactoryClient)
+        assert client.models == {"structure": MODEL_DEFAULTS["structure"], "taskgraph": SUPER_ID,
+                                 "repair": SUPER_ID, "explain": MODEL_DEFAULTS["explain"]}
+        assert client.thinking == {"structure": False, "taskgraph": False, "repair": False,
+                                   "explain": False}
+        client = make_arm_client("nebius", None, thinking_overrides("on"))
+        assert client.models == MODEL_DEFAULTS
+        assert client.thinking == {"structure": False, "taskgraph": True, "repair": True,
+                                   "explain": False}
+        # the environment keeps the roles the arm does not name, and a forced env thinking
+        # loses to --thinking for the graph roles only
+        monkeypatch.setenv("MOONWRIGHT_MODEL_EXPLAIN", "env/explain")
+        monkeypatch.setenv("MOONWRIGHT_THINKING", "on")
+        client = make_arm_client("nebius", ULTRA_ID, thinking_overrides("off"))
+        assert client.models["explain"] == "env/explain" and client.models["repair"] == ULTRA_ID
+        assert client.thinking == {"structure": True, "taskgraph": False, "repair": False,
+                                   "explain": True}
+        recorded = make_arm_client("record", ULTRA_ID)
+        assert isinstance(recorded, RecordingClient)
+        assert isinstance(recorded.inner, TokenFactoryClient)
+        assert recorded.inner.thinking["taskgraph"] is True   # env "on", no override
+        with pytest.raises(ValueError, match="unknown LLM client kind"):
+            make_arm_client("openai", ULTRA_ID)
+        monkeypatch.delenv("NEBIUS_API_KEY")
+        with pytest.raises(LLMError, match="NEBIUS_API_KEY"):
+            make_arm_client("nebius", ULTRA_ID)
+
+    def test_prices_and_run_cost(self):
+        assert set(PRICES_USD_PER_M) == set(ARM_MODELS.values())
+        assert price_for(ULTRA_ID) == (1.0, 3.0) and price_for(ULTRA_ID.upper()) == (1.0, 3.0)
+        assert price_for("nvidia/Nemotron-3.5-Super-VL") is None and price_for(None) is None
+        assert cost_usd(ULTRA_ID, 3000, 10000) == pytest.approx(0.003 + 0.03)
+        assert cost_usd(ARM_MODELS["lightning"], 2300, 490) == pytest.approx(0.0002556, abs=5e-7)
+        assert cost_usd(ULTRA_ID, None, None) == 0.0 and cost_usd("fixture:x.json", 10, 10) is None
+        assert format_usd(None) == "-" and format_usd(0.03312) == "$0.0331"
+        assert format_usd(1.2345, decimals=2) == "$1.23"
+        # a run sums its steps; fixture runs carry no tokens and cost nothing
+        steps = [priced_step("structure", ARM_MODELS["lightning"], 2300, 490),
+                 priced_step("taskgraph", ULTRA_ID, 3000, 10000),
+                 LoopStep(stage="validate", ok=True), LoopStep(stage="schedule", ok=True),
+                 priced_step("repair", ULTRA_ID, 4000, 9000, attempt=2)]
+        result = PlanResult(requirements=REQ, task_graph=FIRST_GRAPH, schedule=SCHEDULE,
+                            success=True, repairs=1, steps=steps)
+        expected = (2300 * 0.06 + 490 * 0.24 + 7000 * 1.0 + 19000 * 3.0) / 1e6
+        assert run_cost_usd(result) == pytest.approx(expected, abs=5e-7)   # rounded once, 6 dp
+        row = eval_row("demo", "ultra/loop_on", 1, result, 90.0, first_graph=FIRST_GRAPH)
+        assert row.cost_usd == pytest.approx(expected, abs=5e-7)
+        assert row.condition == "ultra/loop_on"
+        assert cost_usd(ULTRA_ID, 1, 1, decimals=None) == pytest.approx(4e-6)
+        offline = PlanResult(requirements=REQ, steps=[
+            LoopStep(stage="taskgraph", ok=True, usage=Usage(model="fixture:taskgraph_1.json"))])
+        assert run_cost_usd(offline) == 0.0
+        unpriced = PlanResult(requirements=REQ, steps=[
+            priced_step("taskgraph", "nvidia/Nemotron-3.5-Super-VL", 100, 10)])
+        assert run_cost_usd(unpriced) is None
+        # the CSV keeps its prefix and takes the new columns last
+        assert cli_module.CSV_FIELDS[:4] == ("brief", "condition", "repeat", "success")
+        assert cli_module.CSV_FIELDS[-6:] == ("cost_usd", "volume_advisories", "min_volume_share",
+                                              "in_scope", "requirements_sha", "kind")
+
+    def test_summarise_percentiles_and_costs(self):
+        def row(condition: str, latency: float, cost: float | None, **kw: Any) -> EvalRow:
+            return EvalRow(brief="b", condition=condition, repeat=1, success=True, repairs=0,
+                           makespan_h=10, latency_s=latency, llm_latency_s=latency / 2,
+                           input_tokens=1, output_tokens=1, cost_usd=cost, **kw)
+
+        rows = [row("ultra/loop_on", 10.0, 0.05), row("ultra/loop_on", 20.0, 0.07),
+                row("ultra/loop_on", 40.0, None), row("super/loop_on", 5.0, 0.01)]
+        ultra, sup = summarise(rows)
+        assert ultra.condition == "ultra/loop_on" and sup.condition == "super/loop_on"
+        assert (ultra.latency_p50_s, ultra.latency_p95_s) == (20.0, 38.0)
+        assert ultra.mean_llm_latency_s == pytest.approx(35 / 3)
+        assert (ultra.mean_cost_usd, ultra.total_cost_usd, ultra.priced_runs) == (0.06, 0.12, 2)
+        assert (sup.latency_p50_s, sup.latency_p95_s, sup.priced_runs) == (5.0, 5.0, 1)
+        table = format_summary([ultra, sup])
+        assert table.splitlines()[0].split()[:2] == ["condition", "runs"]
+        assert table.splitlines()[1].startswith("ultra/loop_on ")   # widened to the names
+        assert "$0.0600" in table.splitlines()[1] and "38.0s" in table.splitlines()[1]
+
+    def test_matrix_cell(self):
+        ok = EvalRow(brief="a", condition="c", repeat=1, success=True, repairs=0, makespan_h=76,
+                     latency_s=1, llm_latency_s=0, input_tokens=0, output_tokens=0)
+        fail = EvalRow(brief="a", condition="c", repeat=2, success=False, repairs=3,
+                       latency_s=1, llm_latency_s=0, input_tokens=0, output_tokens=0,
+                       failure_kind="infeasible", conflicts=["energy:EX1", "energy:EX2"])
+        assert matrix_cell([ok]) == "ok 76 h / 0 rep"
+        assert matrix_cell([fail]) == "fail energy"
+        assert matrix_cell([]) == "-"
+        repaired = ok.model_copy(update={"repairs": 1, "makespan_h": 80})
+        scoped = fail.model_copy(update={"failure_kind": "validation",
+                                         "conflicts": ["scope:berm", "energy:EX1"]})
+        assert matrix_cell([ok, repaired, scoped]) == "ok 2/3 78 h / 0.5 rep; fail 1/3 energy,scope"
+        no_conflicts = fail.model_copy(update={"failure_kind": "llm_error", "conflicts": []})
+        assert matrix_cell([no_conflicts, no_conflicts]) == "fail 2/2 llm_error"
+
+    def test_eval_markdown_on_a_synthetic_report(self):
+        rows = [
+            EvalRow(brief="pad", condition="ultra/loop_off", repeat=1, success=True, repairs=0,
+                    makespan_h=76, latency_s=40.0, llm_latency_s=38.0, input_tokens=5300,
+                    output_tokens=11000, cost_usd=0.036, thinking="auto",
+                    first_try_feasible=True, in_scope=True, kind="A"),
+            EvalRow(brief="pad", condition="ultra/loop_on", repeat=1, success=True, repairs=0,
+                    makespan_h=76, latency_s=42.0, llm_latency_s=40.0, input_tokens=5300,
+                    output_tokens=11000, cost_usd=0.036, thinking="auto",
+                    first_try_feasible=True, in_scope=True, kind="A"),
+            EvalRow(brief="berm", condition="ultra/loop_off", repeat=1, success=False, repairs=0,
+                    latency_s=30.0, llm_latency_s=28.0, input_tokens=5000, output_tokens=9000,
+                    failure_kind="infeasible", conflicts=["energy:EX1"], cost_usd=0.032,
+                    thinking="auto", kind="D"),
+            # verified, but by digging a third of the pad: feasible, not in scope
+            EvalRow(brief="berm", condition="ultra/loop_on", repeat=1, success=True, repairs=1,
+                    makespan_h=90, latency_s=102.0, llm_latency_s=100.0, input_tokens=11000,
+                    output_tokens=20000, cost_usd=0.071, thinking="auto",
+                    volume_advisories=1, min_volume_share=0.36, in_scope=False, kind="D"),
+        ]
+        report = EvalReport(
+            generated_at="2026-10-25T00:00:00+00:00", llm="nebius", briefs_dir="examples/eval",
+            conditions=["ultra/loop_off", "ultra/loop_on"], repeat=1, summary=summarise(rows),
+            rows=rows, max_repairs=3, feedback="core", max_answer_retries=2, workers=3,
+            thinking="auto", arms={"ultra": ULTRA_ID},
+            role_models={"structure": MODEL_DEFAULTS["structure"], "taskgraph": ULTRA_ID,
+                         "repair": ULTRA_ID, "explain": MODEL_DEFAULTS["explain"]})
+        text = eval_markdown(report)
+        assert text.startswith("# Moonwright eval: 2 brief(s) x 2 condition(s) x 1 repeat(s)\n")
+        assert "llm `nebius`; briefs from `examples/eval`; 4 run(s) on 3 worker(s)" in text
+        assert "max_answer_retries 2; thinking `auto`." in text
+        assert "## How to read" in text and "## Per condition" in text and "## Per brief" in text
+        assert f"`ultra` = `{ULTRA_ID}`" in text
+        assert f"structured by `{MODEL_DEFAULTS['structure']}`" in text
+        assert f"written by `{MODEL_DEFAULTS['explain']}`" in text
+        assert "Thinking `auto`: the task-graph and repair calls reason" in text
+        assert "up to 3 repair round(s), each fed the solver's minimal infeasibility core" in text
+        assert "re-asks are capped at 2" in text and "--llm fixture" not in text
+        assert ("| `ultra/loop_off` | 2 | 50% (9%-91%) | 50% (9%-91%) | 50% | 0.00 | 76 h | "
+                "35.0 s / 39.5 s | 5150 / 10000 | $0.0340 | $0.07 |") in text
+        assert ("| `ultra/loop_on` | 2 | 100% (34%-100%) | 50% (9%-91%) | 50% | 0.50 | 83 h | "
+                "72.0 s / 99.0 s | 8150 / 15500 | $0.0535 | $0.11 |") in text
+        assert "| brief | ultra/loop_off | ultra/loop_on |" in text
+        assert "| `pad` | ok 76 h / 0 rep | ok 76 h / 0 rep |" in text
+        assert "| `berm` | fail energy | ok 90 h / 1 rep scope! |" in text
+        # the per-kind table and the sentences that explain pairing and scope
+        assert "## Per kind" in text
+        assert "| `A` | `ultra/loop_off` | 1 | 1/1 | 1/1 | 1/1 | 0.00 | `pad` |" in text
+        assert "| `D` | `ultra/loop_on` | 1 | 1/1 | 0/1 | 0/1 | 1.00 | `berm` |" in text
+        assert "structured once per repeat" in text and "`requirements_sha`" in text
+        assert "`feasible in scope` the share that is feasible AND" in text
+        without_kinds = report.model_copy(update={"rows": [r.model_copy(update={"kind": ""})
+                                                           for r in rows]})
+        assert "## Per kind" not in eval_markdown(without_kinds)
+        verdict = report.model_copy(update={"feedback": "verdict", "arms": {}, "llm": "fixture",
+                                            "role_models": {}, "max_answer_retries": None})
+        text = eval_markdown(verdict)
+        assert "each fed only the verdict kind (the ablation arm)" in text
+        assert "come from the configured model" in text and "--llm fixture" in text
+        assert "max_answer_retries the planner's own" in text and "re-asks are capped" not in text
+
+
+class TestEvalArmsCommand:
+    def test_arms_and_thinking_name_the_conditions(self, tmp_path, capsys, planner_stub):
+        stub = planner_stub(RecordingPlanner)
+        out_json, out_csv, out_md = tmp_path / "e.json", tmp_path / "e.csv", tmp_path / "e.md"
+        code = main(["eval", "--briefs", str(briefs_dir(tmp_path, 2)), "--llm", "fixture",
+                     "--models", "ultra,super", "--thinking", "off", "--loop", "both",
+                     "--max-repairs", "2", "--out", str(out_json), "--csv", str(out_csv),
+                     "--markdown", str(out_md)])
+        assert code == EXIT_OK
+        report = json.loads(out_json.read_text())
+        assert report["conditions"] == ["ultra/loop_off", "ultra/loop_on", "super/loop_off",
+                                        "super/loop_on"]
+        assert report["arms"] == {"ultra": ULTRA_ID, "super": SUPER_ID}
+        assert report["role_models"] == {} and report["thinking"] == "off"
+        assert report["llm"] == "fixture"
+        assert [(r["brief"], r["condition"]) for r in report["rows"]] == [
+            (b, c) for b in ("zz_brief_0", "zz_brief_1") for c in report["conditions"]]
+        assert all(r["thinking"] == "off" and r["cost_usd"] == 0.0 for r in report["rows"])
+        assert sorted(c["max_repairs"] for c in stub.created) == [0, 0, 0, 0, 2, 2, 2, 2]
+        assert [s["condition"] for s in report["summary"]] == report["conditions"]
+        assert all(s["priced_runs"] == 2 and s["total_cost_usd"] == 0.0 for s in report["summary"])
+        text = out_md.read_text()
+        assert "| brief | ultra/loop_off | ultra/loop_on | super/loop_off | super/loop_on |" in text
+        assert "| `zz_brief_0` | fail llm_error | fail llm_error | fail llm_error | fail llm_error |" in text
+        assert "Thinking `off`" in text and "This run used `--llm fixture`" in text
+        with out_csv.open(encoding="utf-8") as fh:
+            csv_rows = list(csv.DictReader(fh))
+        assert {r["condition"] for r in csv_rows} == set(report["conditions"])
+        assert list(csv_rows[0])[-1] == "kind" and csv_rows[0]["cost_usd"] == "0.0"
+        captured = capsys.readouterr()
+        assert f"arms=ultra={ULTRA_ID},super={SUPER_ID}" in captured.err
+        assert "thinking=off" in captured.err and "4 condition(s)" in captured.err
+        assert captured.err.rstrip().splitlines()[-1].startswith("super/loop_on")   # table on stderr
+        assert captured.out.rstrip().endswith(f"-> {out_json}, {out_csv}, {out_md}")
+
+    def test_bad_arm_is_an_input_error(self, tmp_path, capsys, planner_stub):
+        stub = planner_stub(RecordingPlanner)
+        code = main(["eval", "--briefs", str(briefs_dir(tmp_path, 1)), "--llm", "fixture",
+                     "--models", "opus", "--out", str(tmp_path / "e.json"),
+                     "--csv", str(tmp_path / "e.csv")])
+        assert code == EXIT_ERROR and stub.created == []
+        assert "unknown arm 'opus'" in capsys.readouterr().err
+
+    def test_live_arms_build_one_client_per_arm(self, tmp_path, capsys, planner_stub, monkeypatch):
+        """With a live kind every arm gets its own TokenFactoryClient (no network: the planner
+        is a stub), routed to the arm's model for the graph roles, shared by the conditions."""
+        stub = planner_stub(RecordingPlanner)
+        monkeypatch.setattr(cli_module, "load_env", lambda: False)
+        monkeypatch.setenv("NEBIUS_API_KEY", "k")
+        for var in ("MOONWRIGHT_LLM", "MOONWRIGHT_THINKING", "MOONWRIGHT_MODEL_TASKGRAPH",
+                    "MOONWRIGHT_MODEL_REPAIR"):
+            monkeypatch.delenv(var, raising=False)
+        clients: list[Any] = []
+        original = RecordingPlanner.__init__
+
+        def remember(self, client, **kwargs):
+            clients.append(client)
+            original(self, client, **kwargs)
+
+        monkeypatch.setattr(RecordingPlanner, "__init__", remember)
+        code = main(["eval", "--briefs", str(briefs_dir(tmp_path, 1)), "--llm", "nebius",
+                     "--models", "ultra,nano", "--thinking", "on", "--loop", "both",
+                     "--out", str(tmp_path / "e.json"), "--csv", str(tmp_path / "e.csv")])
+        assert code == EXIT_OK and len(stub.created) == 4
+        inner = [c.inner for c in clients]          # GraphCapture wraps the arm's client
+        assert all(isinstance(c, TokenFactoryClient) for c in inner)
+        assert inner[0] is inner[1] and inner[2] is inner[3] and inner[0] is not inner[2]
+        assert inner[0].models["taskgraph"] == ULTRA_ID and inner[2].models["repair"] == ARM_MODELS["nano"]
+        assert all(c.thinking["taskgraph"] and c.thinking["repair"] for c in inner)
+        report = json.loads((tmp_path / "e.json").read_text())
+        assert report["llm"] == "nebius" and report["thinking"] == "on"
+        assert report["role_models"]["structure"] == MODEL_DEFAULTS["structure"]
+        assert report["role_models"]["taskgraph"] == MODEL_DEFAULTS["taskgraph"]
+        assert "arms=ultra=" in capsys.readouterr().err
 
 
 # --------------------------------------------------------------------------- scripts/llm_schedule_check.py
@@ -2246,3 +2555,63 @@ def test_cli_plan_fixture_end_to_end(tmp_path, capsys):
     result = PlanResult.model_validate_json(out.read_text())
     assert result.success and result.schedule is not None
     assert "makespan" in captured.out and "[T" in captured.out
+
+
+# --------------------------------------------------------------------------- paired eval
+class TestEvalPairing:
+    def test_every_condition_plans_from_one_structuring(self, tmp_path, capsys, monkeypatch):
+        """The structuring model is asked once per (brief, repeat); every condition plans from
+        that requirements object and carries its sha, so arms and loop settings are paired."""
+        structured: list[str] = []
+        planned: list[str] = []
+
+        class Paired(RecordingPlanner):
+            def structure(self, brief, *, brief_id=None):
+                structured.append(brief_id)
+                req = Requirements.model_validate_json(
+                    (FIXTURES_DIR / "landing_pad" / "structure.json").read_text())
+                req.source_brief = brief
+                return req, LoopStep(stage="structure", ok=True, message="scripted")
+
+            def plan_from_requirements(self, req, *, key, **kwargs):
+                planned.append(key)
+                verdict = Failure(kind="infeasible", conflicts=["energy:EX1"])
+                return PlanResult(requirements=req, success=False, failure=verdict,
+                                  steps=[LoopStep(stage="validate", ok=True),
+                                         LoopStep(stage="schedule", ok=False, failure=verdict)])
+
+        Paired.created = []
+        monkeypatch.setattr(cli_module, "Planner", Paired)
+        briefs = briefs_dir(tmp_path, 2)
+        (briefs / "kinds.json").write_text(json.dumps({"zz_brief_0": "A"}))
+        out_json = tmp_path / "e.json"
+        code = main(["eval", "--briefs", str(briefs), "--llm", "fixture", "--loop", "both",
+                     "--repeat", "2", "--out", str(out_json), "--csv", str(tmp_path / "e.csv")])
+        assert code == EXIT_OK
+        assert sorted(structured) == ["zz_brief_0", "zz_brief_0", "zz_brief_1", "zz_brief_1"]
+        assert len(planned) == 8 and set(planned) == {"zz_brief_0", "zz_brief_1"}
+        report = json.loads(out_json.read_text())
+        rows = report["rows"]
+        assert [(r["brief"], r["condition"], r["repeat"]) for r in rows] == [
+            (b, c, k) for b in ("zz_brief_0", "zz_brief_1") for c in ("loop_off", "loop_on")
+            for k in (1, 2)]
+        shas = {r["requirements_sha"] for r in rows}
+        assert len(shas) == 1 and all(len(s) == 10 for s in shas)   # one structure.json
+        assert [r["kind"] for r in rows] == ["A"] * 4 + [""] * 4
+        assert all(r["in_scope"] is False and r["volume_advisories"] == 0 for r in rows)
+        assert all(r["failure_kind"] == "infeasible" for r in rows)
+        assert report["summary"][0]["in_scope"] == 0
+        assert "kinds=1" in capsys.readouterr().err
+
+    def test_kinds_file_must_be_an_object_of_strings(self, tmp_path, capsys, planner_stub):
+        stub = planner_stub(RecordingPlanner)
+        bad = tmp_path / "kinds.json"
+        bad.write_text("[1, 2]")
+        code = main(["eval", "--briefs", str(briefs_dir(tmp_path, 1)), "--llm", "fixture",
+                     "--kinds", str(bad), "--out", str(tmp_path / "e.json"),
+                     "--csv", str(tmp_path / "e.csv")])
+        assert code == EXIT_ERROR and stub.created == []
+        assert "expected a JSON object" in capsys.readouterr().err
+        assert cli_module.load_kinds(None, tmp_path / "nowhere") == {}
+        with pytest.raises(ValueError, match="--kinds"):
+            cli_module.load_kinds(tmp_path / "missing.json", tmp_path)

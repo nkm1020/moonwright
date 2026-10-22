@@ -296,11 +296,11 @@ def test_replan_record_escalated_defaults_to_false() -> None:
 # ----------------------------------------------------------------------------- prompts
 def test_taskgraph_prompt_asks_for_quantities_and_carries_the_rate_table() -> None:
     flat = " ".join(TASKGRAPH_SYSTEM.split())
-    for text in (RATE_TABLE_TEXT, "quantity", "unit", "basis", "6 to 20 tasks", "COMPUTED",
+    for text in (RATE_TABLE_TEXT, "quantity", "unit", "basis", "6 to 24 tasks", "COMPUTED",
                  "more than 60 m3", "300 m2", "pi*(10 m)^2*0.4 m = 126 m3"):
         assert text in TASKGRAPH_SYSTEM
     for text in ("at least as many tasks as there are robots of that type",
-                 "landing pad = survey, excavate, compact and sinter",
+                 "landing pad = survey, excavate or grade",
                  "one task must fit one robot's battery"):
         assert text in flat
     assert TASKGRAPH_SYSTEM.endswith("Answer with ONE JSON object matching this schema, no prose:")

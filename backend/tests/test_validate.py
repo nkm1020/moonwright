@@ -564,16 +564,32 @@ def pad_tasks(*skip: str) -> list[Task]:
 def test_coverage_is_opt_in_and_landing_pad_needs_all_four_phases() -> None:
     r = site_req(*FLEET, structures=(("S1", "landing_pad"),))
     assert validate_graph(r, graph(*pad_tasks()), coverage=True) is None
-    for phase in ("survey", "excavate", "compact", "sinter"):
+    for phase, wording in (("survey", "survey"), ("excavate", "excavate or grade"),
+                           ("compact", "compact"), ("sinter", "sinter")):
         g = graph(*pad_tasks(phase))
         assert validate_graph(r, g) is None, "coverage is off by default (replans)"
         failure = must_fail(r, g, coverage=True)
         assert failure.conflicts == ["scope:S1"]
-        assert failure.details == [f"S1 (landing_pad) lacks {phase} task"]
-        assert f"S1 (landing_pad) has no {phase} task" in failure.hint
+        assert failure.details == [f"S1 (landing_pad) lacks {wording} task"]
+        assert f"S1 (landing_pad) has no {wording} task" in failure.hint
         assert "tagged with the structure id" in failure.hint
     failure = must_fail(r, graph(*pad_tasks("compact", "sinter")), coverage=True)
     assert failure.details == ["S1 (landing_pad) lacks compact and sinter tasks"]
+
+
+def test_a_pad_stripped_in_square_metres_is_dug_enough_for_the_kind_rule() -> None:
+    """An instrument pad "stripped of fines, levelled and compacted" is graded in m2 (the
+    prompt's unit for stripping): the pad kind accepts excavate OR grade, so a stripped-only
+    pad is not a false scope conflict; a brief that lists excavate still requires the dig."""
+    r = site_req(*FLEET, structures=(("S1", "instrument_pad"),))
+    strip = task("T2", name="Strip pad fines", unit="m2", quantity=100, structure="S1",
+                 after=("T1",))
+    stripped = graph(*[t if t.id != "T2" else strip for t in pad_tasks()])
+    assert validate_graph(r, stripped, coverage=True) is None
+    asks_dig = r.model_copy(update={"structures": [
+        r.structures[0].model_copy(update={"operations": ["excavate"]})]})
+    failure = must_fail(asks_dig, stripped, coverage=True)
+    assert failure.details == ["S1 (instrument_pad) lacks excavate task (its operations list excavate)"]
 
 
 def test_phases_are_only_required_while_the_fleet_can_staff_them() -> None:
@@ -656,7 +672,8 @@ def test_untagged_tasks_in_the_structures_zone_count_for_it() -> None:
         ["T1", "T2", "T3", "T4"]
     elsewhere = [t.model_copy(update={"zone": "Z2"}) for t in untagged]
     failure = must_fail(r, graph(*elsewhere), coverage=True)
-    assert failure.details == ["S1 (landing_pad) lacks survey, excavate, compact and sinter tasks"]
+    assert failure.details == [
+        "S1 (landing_pad) lacks survey, excavate or grade, compact and sinter tasks"]
 
 
 def test_task_phases_combine_robot_type_unit_and_name() -> None:
@@ -705,18 +722,18 @@ def test_scope_sits_between_capability_and_energy_task_in_check_order() -> None:
     r = site_req(robot("EX1", battery=5000), structures=(("S1", "landing_pad"), ("S2", "berm")))
     g = graph(
         task("T1", type_="crane", name="Lift beacon", zone="Z1", structure="S1"),  # capability
-        task("T2", energy=6000, name="Haul spoil off the pad", unit="m2", quantity=50,
-             zone="Z1", structure="S1"),                                 # energy_task, no dig
+        task("T2", energy=6000, name="Inspect pad surface", zone="Z1",
+             structure="S1"),                        # energy_task; an inspection, no earthwork
         task("T3", name="Cut berm key trench", unit="m3", quantity=30, zone="Z2",
              structure="S2"),
     )
     failure = must_fail(r, g, coverage=True)
     assert kinds(failure) == ["capability", "scope", "energy_task", "energy"]
-    # only excavate is required of the pad with this one-excavator fleet, and T2 is grading
-    # plus hauling by its unit and name, not excavation
+    # only the dig (excavate or grade) is required of the pad with this one-excavator fleet,
+    # and T2 is an inspection pass by its name, neither excavation nor grading
     assert failure.conflicts == ["capability:T1", "scope:S1", "energy_task:T2",
                                  "energy:excavator"]
-    assert failure.details[1] == "S1 (landing_pad) lacks excavate task"
+    assert failure.details[1] == "S1 (landing_pad) lacks excavate or grade task"
     assert must_fail(r, g, coverage=True) == failure   # deterministic
 
 
@@ -799,7 +816,8 @@ def test_structure_tags_resolve_leniently() -> None:
     swapped = [t.model_copy(update={"structure": "S2"}) for t in pad_tasks()] + berm
     failure = must_fail(r, graph(*swapped), coverage=True)
     assert failure.conflicts == ["scope:S1"]
-    assert failure.details == ["S1 (landing_pad) lacks survey, excavate, compact and sinter tasks"]
+    assert failure.details == [
+        "S1 (landing_pad) lacks survey, excavate or grade, compact and sinter tasks"]
     pad = r.structures[0]
     assert tag_names("S1", pad) and tag_names("s1 ", pad) and tag_names("Landing_Pad", pad)
     assert tag_names("Landing pad S1", pad) and not tag_names("S10", pad)

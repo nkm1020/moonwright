@@ -70,7 +70,16 @@ Time convention (one place: :func:`replan_offset_h` and :func:`remaining_horizon
   ``schedule`` step and the final ``replan`` step quote absolute hours (the makespan figures
   are shifted and the receipt's ``horizon_h`` is the brief's original deadline), every other
   step (a validator or solver verdict whose hint quotes hours) is ``"relative"`` to that
-  offset.
+  offset. The advice of a failed replan is the exception inside a relative step: the
+  ``suggestions`` of ``ReplanRecord.after`` and of the final failed step's payload (marked
+  ``suggestions_time_base: "absolute"``) are rebased by
+  :func:`moonwright.pipeline.relax.rebase_suggestion` to absolute hours against the brief's
+  deadline, shifted by ``ceil(t_h)`` (the same rounding that shrank the horizon, so a figure
+  is never earlier than the simulator can achieve), and a spare robot is stated with the
+  full battery of its type in the original fleet rather than a survivor's remaining charge
+  (a bigger battery admits every schedule the smaller one did, so the claim stays proven).
+  "one more excavator (EX3, 5000 Wh, a full battery): feasible at 85 h" next to "makespan
+  80 h" then reads as what it is: 5 h later than the original plan.
   A task "in progress" is one with ``frame.progress > 0`` whose robot (``current_task``) is not
   failed; its remaining energy is ``original energy_wh * (1 - progress)``.
 
@@ -93,11 +102,12 @@ Scope guard
 from __future__ import annotations
 
 import math
-from collections.abc import Collection, Mapping
+from collections.abc import Callable, Collection, Mapping
 from typing import TYPE_CHECKING, Any
 
 from moonwright.geometry import zone_positions
 from moonwright.pipeline.loop import check_locked_tasks
+from moonwright.pipeline.relax import rebase_suggestion
 from moonwright.pipeline.validate import check_scope
 from moonwright.schemas import (
     Event,
@@ -111,6 +121,7 @@ from moonwright.schemas import (
     SimFrame,
     SimResult,
     Site,
+    Suggestion,
     Task,
     TaskGraph,
     Zone,
@@ -344,13 +355,20 @@ def _scope_failure(graph2: TaskGraph, locked: list[ScheduleEntry], result: PlanR
     )
 
 
-def _shift_step(step: LoopStep, offset_h: int, horizon_h: int) -> LoopStep:
+def _shift_step(step: LoopStep, offset_h: int, horizon_h: int,
+                rebase: Callable[[Suggestion], Suggestion] | None = None) -> LoopStep:
     """A step of the replan trace annotated with the clock it speaks (module docstring, time
     convention): an ok ``schedule`` step is moved to simulator (absolute) hours so it agrees
     with the shifted ``ReplanRecord.after.schedule`` and its receipt quotes the brief's
-    deadline ``horizon_h``; every other step is marked relative."""
+    deadline ``horizon_h``; every other step is marked relative, except that the advice a
+    final failed step carries (``payload["suggestions"]``) is rebased with ``rebase`` to
+    absolute hours and marked so, like ``ReplanRecord.after.suggestions``."""
     payload: dict[str, Any] = dict(step.payload or {})
     payload["offset_h"] = offset_h
+    if rebase is not None and payload.get("suggestions"):
+        payload["suggestions"] = [rebase(Suggestion.model_validate(s)).model_dump(mode="json")
+                                  for s in payload["suggestions"]]
+        payload["suggestions_time_base"] = "absolute"
     if step.stage == "schedule" and step.ok and isinstance(payload.get("makespan_h"), int):
         makespan = payload["makespan_h"] + offset_h
         payload["makespan_h"] = makespan
@@ -367,6 +385,18 @@ def _shift_step(step: LoopStep, offset_h: int, horizon_h: int) -> LoopStep:
         return step.model_copy(update={"payload": payload, "message": message})
     payload["time_base"] = "relative"
     return step.model_copy(update={"payload": payload})
+
+
+def _suggestion_rebaser(req: Requirements, t_h: float) -> Callable[[Suggestion], Suggestion]:
+    """The rebase of this replan's advice (module docstring, time convention): planner hours
+    shifted by ``ceil(t_h)``, the brief's deadline ``req.horizon_h``, and the full battery of
+    each type in the original fleet for a spare."""
+    shift = req.horizon_h - remaining_horizon_h(req.horizon_h, t_h)   # ceil(t_h), clamped
+    full: dict[str, float] = {}
+    for robot in req.robots:
+        full[robot.type] = max(full.get(robot.type, 0.0), robot.battery_wh)
+    return lambda s: rebase_suggestion(s, shift_h=shift, deadline_h=req.horizon_h,
+                                       spare_batteries=full)
 
 
 def _seconds(seconds: float) -> str:
@@ -440,7 +470,9 @@ def replan_after_event(
     clock it speaks and closed with a ``replan`` outcome step, and its schedule shifted by
     :func:`replan_offset_h` so ``record.after.schedule`` is in simulator time. ``variant``
     names the fixture family of this replan's LLM calls; ``layout`` is the simulator's zone
-    layout (see :func:`build_replan_inputs`).
+    layout (see :func:`build_replan_inputs`). The failed robots go to the planner as
+    ``reserved_ids``, so a spare the advice on an infeasible replan proposes never takes a
+    lost robot's id.
     """
     req2, graph2, context = build_replan_inputs(req, graph, schedule, frame, event, originals,
                                                 layout)
@@ -449,6 +481,7 @@ def replan_after_event(
         req2, key=key, prior_graph=graph2, context=context, variant=variant,
         start_offset_h=0, locked=locked, required_tasks=graph2.ids(),
         start_with_prior=True, robot_positions=robot_positions(frame, event),
+        reserved_ids=sorted(_failed_robots(frame, event)),
     )
     escalated = any(step.stage == "repair" for step in result.steps)
     refused = _scope_failure(graph2, locked, result, strict=not escalated)
@@ -456,9 +489,12 @@ def replan_after_event(
         result = result.model_copy(update={"success": False, "schedule": None,
                                            "failure": refused})
     offset = replan_offset_h(frame.t_h)
-    steps = [_shift_step(step, offset, req.horizon_h) for step in result.steps]
+    rebase = _suggestion_rebaser(req, frame.t_h)
+    steps = [_shift_step(step, offset, req.horizon_h, rebase) for step in result.steps]
     if result.schedule is not None:
         result = result.model_copy(update={"schedule": shift_schedule(result.schedule, offset)})
+    if result.suggestions:
+        result = result.model_copy(update={"suggestions": [rebase(s) for s in result.suggestions]})
     outcome = _outcome_step(result, schedule, escalated=escalated, offset_h=offset,
                             remaining=len(graph2.tasks))
     result = result.model_copy(update={"steps": [*steps, outcome]})

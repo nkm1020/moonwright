@@ -1,18 +1,18 @@
-# Large Pad with Front-Loaded Excavation
+# Heavy-Lander Pad in a 60-Hour Window
 
-**Site.** LS-1 plateau, loose regolith 40 cm deep, depot on the south edge, no recharging.
+**Site.** LS-1 plateau, loose regolith 40 cm deep over firm material, depot on the south edge, no recharging. A heavy cargo lander is committed to this site and its landing window opens 60 hours after mobilisation.
 
 **Structures.**
 
-1. Heavy-lander pad: 40 m diameter, excavated 0.4 m to firm regolith, compacted subgrade, sintered 30 cm surface.
-2. Spoil berm: 70 m arc, 2 m high, from pad spoil, compacted.
+1. Heavy-lander pad: circular, 30 m diameter, excavated 0.4 m to firm regolith across the full footprint (about 283 cubic metres), subgrade compacted and inspected. Sintering is deferred to a later sortie; no printer is on site.
+2. Spoil berm: a 70 m arc on the north side, 2 m high and 4 m wide at the base, built from the pad spoil and compacted.
 
-**Fleet.** EX1 and EX2 (excavators, 5000 Wh each), HL1 and HL2 (haulers, 3000 Wh each), CP1 (compactor, 3500 Wh), PR1 (printer, 4000 Wh) and SV1 (surveyor, 1500 Wh). Batteries are the whole budget.
+**Fleet.** EX1 and EX2 (excavators, 5000 Wh each), HL1 and HL2 (haulers, 3000 Wh each), CP1 and CP2 (compactors, 3500 Wh each) and SV1 (surveyor, 1500 Wh). Batteries are the whole budget; energy is not the problem here, time is.
 
-**Deadline.** 10 days.
+**Deadline.** 60 hours. The lander cannot be delayed and the pad cannot be made smaller: the full 30 m bowl, compacted and inspected, must be ready when the window opens.
 
 **Operational constraints.**
 
-- Mission control wants all excavation finished within the first 48 hours so the excavators can be released to another site; if that is impossible with two excavators, scope the pad excavation in sectors and say which sectors fit.
+- The pad is one work zone: plume and dust safety allows only one robot inside it at a time, so the bowl cannot be excavated as parallel sectors.
 - Only one robot may work inside a zone at a time.
-- The printer starts only after compaction and the surveyor's level check.
+- The berm is built from the pad spoil, so hauling to the berm line cannot start before the bowl excavation.

@@ -50,6 +50,10 @@
     "id": "S1",
     "type": "landing_pad",
     "zone": "Z1",
+    "operations": [
+     "excavate",
+     "compact"
+    ],
     "diameter_m": 20,
     "depth_m": 0.6
    },
@@ -57,6 +61,11 @@
     "id": "S2",
     "type": "blast_berm",
     "zone": "Z2",
+    "operations": [
+     "excavate",
+     "haul",
+     "compact"
+    ],
     "length_m": 60,
     "height_m": 2.5,
     "width_m": 4,
@@ -66,6 +75,9 @@
     "id": "S3",
     "type": "approach_apron",
     "zone": "Z4",
+    "operations": [
+     "grade"
+    ],
     "length_m": 30,
     "width_m": 8
    }
@@ -373,7 +385,7 @@
   "makespan_h": 68,
   "status": "optimal",
   "objective_bound_h": 68,
-  "solve_time_s": 0.0035830000000000002
+  "solve_time_s": 0.0038840000000000003
  },
  "explanation": "This short sortie digs the full 20 m pad bowl, cuts the berm key trench, strips the approach apron and compacts both the pad subgrade and the berm, with no sintering because no printer is on site. The first task graph gave each excavator a single 4000 Wh dig plus a 1900 Wh apron strip, a total that fits the combined 10000 Wh but no split across two 5000 Wh batteries; the solver rejected it with energy conflicts on EX1 and EX2, and the repaired graph splits the bowl in two and re-scopes the trench so one excavator carries 4200 Wh and the other 4000 Wh. SV1 surveys first, EX1 and EX2 dig in parallel from hour 5, HL1 hauls bowl spoil to the berm line and apron spoil to the stockpile, and CP1 compacts the pad and then the berm before SV1 inspects both. The verified schedule takes 68 hours of the 168-hour window, transit between zones included. Battery is the binding constraint: both excavators use at least 80 percent of their budgets. The solver verified precedence, one task per robot at a time, one robot per zone and every battery limit.",
  "steps": [
@@ -382,12 +394,12 @@
    "attempt": 1,
    "ok": true,
    "failure": null,
-   "duration_s": 0.0022537080803886056,
+   "duration_s": 0.0022832080721855164,
    "usage": {
     "model": "fixture:structure.json",
     "input_tokens": 0,
     "output_tokens": 0,
-    "latency_s": 0.0005002910038456321
+    "latency_s": 0.0004094999749213457
    },
    "message": "3 structures, 5 robots, horizon 168h",
    "payload": {
@@ -408,12 +420,12 @@
    "attempt": 1,
    "ok": true,
    "failure": null,
-   "duration_s": 0.0013668750179931521,
+   "duration_s": 0.0015919170109555125,
    "usage": {
     "model": "fixture:taskgraph_1.json",
     "input_tokens": 0,
     "output_tokens": 0,
-    "latency_s": 0.0001991660101339221
+    "latency_s": 0.0003233329625800252
    },
    "message": "10 tasks",
    "payload": {
@@ -429,7 +441,7 @@
    "attempt": 1,
    "ok": true,
    "failure": null,
-   "duration_s": 0.002976124989800155,
+   "duration_s": 0.0004179159877821803,
    "usage": null,
    "message": "10 tasks valid",
    "payload": {
@@ -451,7 +463,7 @@
     "hint": "EX1 has 5000 Wh, and the excavator tasks (9929.649 Wh in total (incl. ~30 Wh of travel)) cannot be split across the 2 excavator robot(s) (10000 Wh combined) without exceeding its budget. EX2 has 5000 Wh, and the excavator tasks (9929.649 Wh in total (incl. ~30 Wh of travel)) cannot be split across the 2 excavator robot(s) (10000 Wh combined) without exceeding its budget.",
     "details": []
    },
-   "duration_s": 0.014078584033995867,
+   "duration_s": 0.014569416991434991,
    "usage": null,
    "message": null,
    "payload": null
@@ -461,12 +473,12 @@
    "attempt": 2,
    "ok": true,
    "failure": null,
-   "duration_s": 0.0015896669356152415,
+   "duration_s": 0.001632415922358632,
    "usage": {
     "model": "fixture:taskgraph_2.json",
     "input_tokens": 0,
     "output_tokens": 0,
-    "latency_s": 0.00043700006790459156
+    "latency_s": 0.0004628748865798116
    },
    "message": "11 tasks",
    "payload": {
@@ -735,7 +747,7 @@
    "attempt": 2,
    "ok": true,
    "failure": null,
-   "duration_s": 0.00018141698092222214,
+   "duration_s": 0.00043474999256432056,
    "usage": null,
    "message": "11 tasks valid",
    "payload": {
@@ -749,7 +761,7 @@
    "attempt": 2,
    "ok": true,
    "failure": null,
-   "duration_s": 0.004572000005282462,
+   "duration_s": 0.004757042042911053,
    "usage": null,
    "message": "makespan 68h (optimal)",
    "payload": {
@@ -818,12 +830,12 @@
    "attempt": 1,
    "ok": true,
    "failure": null,
-   "duration_s": 0.0003941659815609455,
+   "duration_s": 0.0004229999613016844,
    "usage": {
     "model": "fixture:explain.json",
     "input_tokens": 0,
     "output_tokens": 0,
-    "latency_s": 0.00032783299684524536
+    "latency_s": 0.00035733403638005257
    },
    "message": null,
    "payload": null
@@ -831,5 +843,6 @@
  ],
  "repairs": 1,
  "success": true,
- "failure": null
+ "failure": null,
+ "suggestions": []
 }

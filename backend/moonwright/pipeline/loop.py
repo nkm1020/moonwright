@@ -73,11 +73,23 @@ note). ``repair`` (an answer that validated): ``{"diff": {...}}`` from :func:`gr
 (added / removed / changed fields, energy per robot type before and after, scope drift).
 ``validate``: ``{"advisories": [...]}`` when the step that produced the graph carried
 advisories (the rate model's estimate warnings, or its note that nothing was grounded).
+The *final failed step* of a run that ends without a schedule (the verdict the repair budget
+could not answer, or the rejected answer that ended the last round) carries
+``{"suggestions": [...]}``: the solver-grounded resource changes of
+:func:`moonwright.pipeline.relax.suggest_relaxations` as plain dicts (one per
+:class:`~moonwright.schemas.Suggestion`), computed for the verdict on the last graph with the
+planner's own :class:`SolveOptions` *before* the step is reported, so a ``/plan/stream``
+client sees them with the step; ``PlanResult.suggestions`` carries the same list as models.
+A replan (``prior_graph`` given) is only offered ``extend_horizon`` and ``add_robot``, and a
+spare never takes the id of a robot the replan lost (``reserved_ids``; until the caller
+passes them, the "Failed robots (unavailable): ..." sentence of the replan context is read).
+The advice runs within ``suggest_budget_s`` seconds (0 disables it) and can never fail a run.
 """
 
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 import time
 from collections.abc import Callable, Collection, Mapping
@@ -86,6 +98,7 @@ from typing import Any, Literal
 
 from moonwright.llm.base import LLMClient
 from moonwright.pipeline.explain import explain_schedule
+from moonwright.pipeline.relax import suggest_relaxations
 from moonwright.pipeline.schedule import (
     SolveOptions,
     check_schedule,
@@ -102,12 +115,16 @@ from moonwright.schemas import (
     Requirements,
     Schedule,
     ScheduleEntry,
+    Suggestion,
     Task,
     TaskGraph,
     to_mwh,
 )
 
 RETRYABLE_KINDS = frozenset({"schema", "llm_error"})
+REPLAN_SUGGESTION_KINDS = ("extend_horizon", "add_robot")   # a replan cannot raise a battery
+# the sentence of a replan context (moonwright.sim.replan._context) that lists the lost robots
+_FAILED_ROBOTS_RE = re.compile(r"Failed robots \(unavailable\): (.+?)\.(?:\s|$)")
 FEEDBACK_MODES = ("core", "verdict")
 FeedbackMode = Literal["core", "verdict"]
 ScopeMode = Literal["strict", "repair"]
@@ -115,6 +132,7 @@ Positions = Mapping[str, tuple[float, float]]
 
 DIFF_FIELDS = ("duration_h", "energy_wh", "quantity", "robot_type", "zone", "after")
 RECHECK_NOTE = "independent check_schedule passed"
+log = logging.getLogger(__name__)
 
 
 def brief_key(brief: str, brief_id: str | None = None) -> str:
@@ -122,6 +140,16 @@ def brief_key(brief: str, brief_id: str | None = None) -> str:
     if brief_id:
         return re.sub(r"[^a-zA-Z0-9_-]+", "_", brief_id).strip("_").lower()
     return "brief_" + hashlib.sha1(brief.strip().encode()).hexdigest()[:10]
+
+
+def unstructured_result(step: LoopStep, brief: str) -> PlanResult:
+    """The failed :class:`PlanResult` of a run whose brief the model could not structure:
+    the failed ``structure`` step alone, its failure, and placeholder requirements."""
+    return PlanResult(
+        requirements=Requirements(robots=[{"id": "none", "type": "none", "battery_wh": 1}],
+                                  horizon_h=1, source_brief=brief),
+        steps=[step], success=False, failure=step.failure,
+    )
 
 
 def travel_modelled() -> bool:
@@ -141,6 +169,7 @@ class Planner:
         solver_time_limit_s: float = 10.0,
         explain: bool = True,
         on_step: Callable[[LoopStep], None] | None = None,
+        suggest_budget_s: float = 6.0,
     ):
         if max_repairs < 0:
             raise ValueError("max_repairs must be >= 0")
@@ -148,6 +177,8 @@ class Planner:
             raise ValueError("max_answer_retries must be >= 0")
         if feedback_mode not in FEEDBACK_MODES:
             raise ValueError(f"feedback_mode must be one of {FEEDBACK_MODES}, got {feedback_mode!r}")
+        if suggest_budget_s < 0:
+            raise ValueError("suggest_budget_s must be >= 0")
         self.client = client
         self.max_repairs = max_repairs
         self.max_answer_retries = max_answer_retries
@@ -155,18 +186,27 @@ class Planner:
         self.solver_time_limit_s = solver_time_limit_s
         self.explain = explain
         self.on_step = on_step
+        # wall-clock budget of the solver-grounded advice on a failed run (module docstring,
+        # "Step payloads"); 0 switches it off
+        self.suggest_budget_s = suggest_budget_s
 
     # ------------------------------------------------------------------ public API
+    def structure(self, brief: str, *, brief_id: str | None = None,
+                  ) -> tuple[Requirements | None, LoopStep]:
+        """F1 alone: the structured brief (None when the model failed) and its ``structure``
+        step, reported to ``on_step`` as it happens. The first half of :meth:`plan`, exposed
+        so a caller can plan several times from ONE structuring: the eval pairs its
+        conditions this way, so arms and loop settings answer the same requirements instead
+        of each sampling Lightning anew."""
+        req, step = structure_brief(self.client, brief, key=brief_key(brief, brief_id))
+        self._emit(step)  # reported now, before the task-graph stage starts
+        return req, step
+
     def plan(self, brief: str, *, brief_id: str | None = None) -> PlanResult:
         key = brief_key(brief, brief_id)
-        req, step = structure_brief(self.client, brief, key=key)
-        self._emit(step)  # reported now, before the task-graph stage starts
+        req, step = self.structure(brief, brief_id=brief_id)
         if req is None:
-            return PlanResult(
-                requirements=Requirements(robots=[{"id": "none", "type": "none", "battery_wh": 1}],
-                                          horizon_h=1, source_brief=brief),
-                steps=[step], success=False, failure=step.failure,
-            )
+            return unstructured_result(step, brief)
         result = self.plan_from_requirements(req, key=key)
         result.steps.insert(0, step)
         return result
@@ -185,6 +225,7 @@ class Planner:
         required_tasks: Collection[str] | None = None,
         start_with_prior: bool = False,
         robot_positions: Positions | None = None,
+        reserved_ids: Collection[str] | None = None,
     ) -> PlanResult:
         """Generate (or, with ``prior_graph``, adapt) a task graph and schedule it.
 
@@ -200,10 +241,15 @@ class Planner:
         ``robot_positions`` (robot id -> grid cell) tells the travel allowance where each robot
         is now; it is passed on only when :class:`SolveOptions` models travel. See the module
         docstring for how the two budgets treat verdicts and rejected answers.
+        ``reserved_ids`` are robot ids the advice on a failed run must not hand to a spare (the
+        robots a replan has lost); when None they are read from ``context``.
         """
         steps: list[LoopStep] = []
         max_repairs = self.max_repairs if max_repairs is None else max_repairs
         opts = self._solve_options(start_offset_h, robot_positions)
+        replan = prior_graph is not None   # advised with REPLAN_SUGGESTION_KINDS only
+        reserved = (list(reserved_ids) if reserved_ids is not None
+                    else _failed_robots_in(context))
         required = list(required_tasks or [])
         underway = [e.task for e in (locked or [])]   # the rate model leaves their numbers alone
         repairs = 0   # verdict rounds (PlanResult.repairs)
@@ -242,7 +288,9 @@ class Planner:
         coverage = prior_graph is None
         verdict, schedule = self._check(req, graph, opts, locked, required, steps,
                                         attempt=rounds, baseline=prior_graph, scope="strict",
-                                        advisories=advisories, coverage=coverage)
+                                        advisories=advisories, coverage=coverage,
+                                        final=max_repairs == 0, replan=replan,
+                                        reserved=reserved)
         # `reported` is the failure the caller sees: always the full verdict, never the note
         # addressed to the model about a rejected answer, never the blanked "verdict" copy
         reported = verdict
@@ -259,9 +307,13 @@ class Planner:
                 )
                 if new_graph is not None:
                     _attach(step, "diff", graph_diff(graph, new_graph))
+                last = new_graph is None and (not _retryable(step)
+                                              or retries >= self.max_answer_retries)
+                if last:   # the run ends on this rejected answer: the verdict on `graph` stands
+                    self._advise(step, req, graph, verdict, opts, locked, replan=replan,
+                                 reserved=reserved)
                 self._push(steps, step)
-                if (new_graph is not None or not _retryable(step)
-                        or retries >= self.max_answer_retries):
+                if new_graph is not None or last:
                     break
                 retries += 1
                 feedback = _with_rejection(self._feedback(verdict), step.failure)
@@ -279,12 +331,15 @@ class Planner:
             verdict, schedule = self._check(req, graph, opts, locked, required, steps,
                                             attempt=rounds, baseline=prior_graph,
                                             scope="repair", advisories=_advisories(step),
-                                            coverage=coverage, previous=previous)
+                                            coverage=coverage, previous=previous,
+                                            final=repairs >= max_repairs, replan=replan,
+                                            reserved=reserved)
             reported = verdict
 
         if schedule is None:
             return PlanResult(requirements=req, task_graph=graph, steps=steps, repairs=repairs,
-                              success=False, failure=reported)
+                              success=False, failure=reported,
+                              suggestions=_suggestions_of(steps[-1]) if steps else [])
 
         explanation = None
         if self.explain:
@@ -333,6 +388,9 @@ class Planner:
         advisories: list[Any] | None = None,
         coverage: bool = True,
         previous: TaskGraph | None = None,
+        final: bool = False,
+        replan: bool = False,
+        reserved: Collection[str] = (),
     ) -> tuple[Failure | None, Schedule | None]:
         """Run scope check + validator, then the solver, then re-verify its output; append steps.
 
@@ -343,23 +401,34 @@ class Planner:
         rules of ``scope`` (module docstring, "Scope of a replan"); ``advisories`` ride on the
         validate step's payload; ``coverage`` enables the validator's structure coverage check
         (fresh plans only) and ``previous`` is the graph a repair answered, so a structure the
-        repair stopped serving is reported with the tasks it lost.
+        repair stopped serving is reported with the tasks it lost. ``final`` says no repair
+        round can follow this verdict, so a failed step gets the solver-grounded advice in its
+        payload before it is reported (:meth:`_advise`); ``replan`` restricts that advice to
+        what a replan can act on and ``reserved`` names robot ids a spare must not take.
         """
         t0 = time.perf_counter()
         failure = _merge(scope_check(graph, required, baseline, locked, scope),
                          validate_graph(req, graph, previous, coverage=coverage))
-        self._push(steps, LoopStep(stage="validate", attempt=attempt, ok=failure is None,
-                                   failure=failure, duration_s=time.perf_counter() - t0,
-                                   message=None if failure else f"{len(graph.tasks)} tasks valid",
-                                   payload={"advisories": list(advisories)} if advisories else None))
+        step = LoopStep(stage="validate", attempt=attempt, ok=failure is None,
+                        failure=failure, duration_s=time.perf_counter() - t0,
+                        message=None if failure else f"{len(graph.tasks)} tasks valid",
+                        payload={"advisories": list(advisories)} if advisories else None)
+        if failure is not None and final:
+            self._advise(step, req, graph, failure, opts, locked, replan=replan,
+                         reserved=reserved)
+        self._push(steps, step)
         if failure is not None:
             return failure, None
 
         t0 = time.perf_counter()
         out = solve_schedule(req, graph, opts, locked=locked)
         if isinstance(out, Failure):
-            self._push(steps, LoopStep(stage="schedule", attempt=attempt, ok=False, failure=out,
-                                       duration_s=time.perf_counter() - t0))
+            step = LoopStep(stage="schedule", attempt=attempt, ok=False, failure=out,
+                            duration_s=time.perf_counter() - t0)
+            if final:
+                self._advise(step, req, graph, out, opts, locked, replan=replan,
+                             reserved=reserved)
+            self._push(steps, step)
             return out, None
         conflicts = check_schedule(req, graph, out, opts)
         if conflicts:
@@ -377,6 +446,38 @@ class Planner:
                                             "verification": verification_receipt(req, graph, out,
                                                                                  opts)}))
         return None, out
+
+    def _advise(
+        self,
+        step: LoopStep,
+        req: Requirements,
+        graph: TaskGraph,
+        verdict: Failure | None,
+        opts: SolveOptions,
+        locked: list[ScheduleEntry] | None,
+        *,
+        replan: bool,
+        reserved: Collection[str] = (),
+    ) -> None:
+        """Attach the solver-grounded advice for ``verdict`` (the failure on ``graph``) to the
+        final failed ``step`` as ``payload["suggestions"]`` (plain dicts), before the step is
+        reported, so a stream client sees it with the step. Computed with the planner's own
+        ``opts`` and ``locked`` pins within ``suggest_budget_s`` (``reserved`` ids are never
+        given to a spare); nothing is attached when there is nothing to say, and an error in
+        the advice never costs the verdict."""
+        if self.suggest_budget_s <= 0 or verdict is None:
+            return
+        try:
+            found = suggest_relaxations(
+                req, graph, verdict, opts, locked=locked,
+                kinds=REPLAN_SUGGESTION_KINDS if replan else None,
+                reserved_ids=list(reserved), budget_s=self.suggest_budget_s)
+        except Exception:   # advice is a courtesy: the verdict stands whatever happens here
+            log.warning("relaxation advice failed; the verdict is reported without it",
+                        exc_info=True)
+            return
+        if found:
+            _attach(step, "suggestions", [s.model_dump(mode="json") for s in found])
 
 
 # ---------------------------------------------------------------------- scope
@@ -530,6 +631,19 @@ def _attach(step: LoopStep, key: str, value: Any) -> None:
 def _advisories(step: LoopStep) -> list[Any] | None:
     advisories = (step.payload or {}).get("advisories")
     return list(advisories) if advisories else None
+
+
+def _suggestions_of(step: LoopStep) -> list[Suggestion]:
+    """The suggestions a final failed step carries (``payload["suggestions"]``) as models."""
+    return [Suggestion.model_validate(s) for s in (step.payload or {}).get("suggestions") or []]
+
+
+def _failed_robots_in(context: str | None) -> list[str]:
+    """The robots a replan context reports lost ("Failed robots (unavailable): EX2, HL1."),
+    so a spare suggested for the remaining fleet never takes one of their ids; [] when the
+    context has no such sentence."""
+    m = _FAILED_ROBOTS_RE.search(context or "")
+    return [p.strip() for p in m.group(1).split(",") if p.strip()] if m else []
 
 
 # ---------------------------------------------------------------------- helpers

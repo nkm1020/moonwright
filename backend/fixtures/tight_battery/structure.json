@@ -49,6 +49,10 @@
       "id": "S1",
       "type": "landing_pad",
       "zone": "Z1",
+      "operations": [
+        "excavate",
+        "compact"
+      ],
       "diameter_m": 20,
       "depth_m": 0.6
     },
@@ -56,6 +60,11 @@
       "id": "S2",
       "type": "blast_berm",
       "zone": "Z2",
+      "operations": [
+        "excavate",
+        "haul",
+        "compact"
+      ],
       "length_m": 60,
       "height_m": 2.5,
       "width_m": 4,
@@ -65,6 +74,9 @@
       "id": "S3",
       "type": "approach_apron",
       "zone": "Z4",
+      "operations": [
+        "grade"
+      ],
       "length_m": 30,
       "width_m": 8
     }

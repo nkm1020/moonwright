@@ -10,13 +10,16 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import inspect
+import json
 import math
 import os
+import re
 import statistics
 import sys
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 from pathlib import Path
@@ -25,11 +28,18 @@ from typing import Any, Final, Self
 from pydantic import BaseModel, Field
 
 from moonwright.api import ExampleBrief, clean_brief_id, list_briefs, thin_frames
-from moonwright.llm.base import LLMClient, LLMError
-from moonwright.llm.factory import KINDS, make_client
-from moonwright.llm.tokenfactory import THINKING_ENV_VAR
-from moonwright.pipeline.loop import Planner, brief_key
-from moonwright.pipeline.rates import apply_rates
+from moonwright.llm.base import FixtureClient, LLMClient, LLMError
+from moonwright.llm.factory import KINDS, load_env, make_client, resolve_kind
+from moonwright.llm.prices import cost_usd, format_usd
+from moonwright.llm.tokenfactory import (
+    THINKING_ENV_VAR,
+    RecordingClient,
+    TokenFactoryClient,
+    models_from_env,
+)
+from moonwright.pipeline.loop import Planner, brief_key, unstructured_result
+from moonwright.pipeline.rates import apply_rates, volume_advisories, volume_shares
+from moonwright.pipeline.relax import format_suggestions
 from moonwright.pipeline.schedule import check_schedule
 from moonwright.schemas import (
     Event,
@@ -45,6 +55,7 @@ from moonwright.schemas import (
 from moonwright.sim.montecarlo import (
     MonteCarloPlanner,
     format_monte_carlo,
+    percentile,
     run_monte_carlo,
     solver_only_planner,
 )
@@ -67,6 +78,15 @@ DEFAULT_FEEDBACK: Final = "core"
 MAX_REPAIRS_LIMIT: Final = 10                 # same bound as the API request models
 MAX_ANSWER_RETRIES_LIMIT: Final = 5
 WILSON_Z: Final = 1.959964                    # two-sided 95%
+ARM_MODELS: Final[dict[str, str]] = {         # eval `--models` arm -> task-graph + repair model
+    "ultra": "nvidia/Nemotron-3-Ultra-550b-a55b",
+    "super": "nvidia/nemotron-3-super-120b-a12b",
+    "nano": "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B",
+    "lightning": "nvidia/Nemotron-3_5-Lightning",
+}
+ARM_ROLES: Final = ("taskgraph", "repair")    # the roles an arm (and --thinking) re-routes
+THINKING_CHOICES: Final = ("on", "off", "auto")
+ARM_NAME_RE: Final = re.compile(r"^[A-Za-z0-9_.-]+$")   # no "/" or ",": it joins the condition name
 
 
 def say(message: str) -> None:
@@ -166,11 +186,20 @@ def format_gantt(schedule: Schedule, req: Requirements) -> str:
 
 
 def plan_summary(result: PlanResult, out_path: Path) -> str:
+    """The closing line(s): a verified plan names its makespan, and when the final graph
+    plans clearly less or more m3 than a structure's dimensions imply, the ``volume:<structure>``
+    advisories follow it, so "verified" is never read as "built to the brief's size"."""
     if result.success and result.schedule is not None:
-        return (
+        line = (
             f"verified plan: makespan {result.schedule.makespan_h}h of "
             f"{result.requirements.horizon_h}h horizon, {result.repairs} repair(s) -> {out_path}"
         )
+        scope = (volume_advisories(result.requirements, result.task_graph)
+                 if result.task_graph is not None else [])
+        if scope:
+            line += ("\nverified against the planning model; scope differs from the "
+                     "dimensions:\n" + "\n".join(f"  {a}" for a in scope))
+        return line
     failure = result.failure
     why = "unknown failure"
     if failure is not None:
@@ -202,6 +231,8 @@ def cmd_plan(args: argparse.Namespace) -> int:
 
     if not args.quiet:
         print(format_trace(result.steps))
+        for line in format_suggestions(result):   # a failed run: what would make it feasible
+            print(line)
         if result.schedule is not None:
             print("\n" + format_gantt(result.schedule, result.requirements))
         if result.explanation:
@@ -340,6 +371,8 @@ def cmd_simulate(args: argparse.Namespace) -> int:
     print(f"replans ({len(result.replans)}):")
     for i, record in enumerate(result.replans, 1):
         print("  " + format_replan(i, record))
+        for line in format_suggestions(record.after):   # a failed replan: the solver's advice
+            print("    " + line)
     last_t = result.frames[-1].t_h if result.frames else 0.0
     if result.completed:
         finished = result.finished_at_h if result.finished_at_h is not None else last_t
@@ -363,7 +396,8 @@ def cmd_montecarlo(args: argparse.Namespace) -> int:
         planner = solver_only_planner(solver_time_limit_s=args.time_limit)
     else:
         planner = MonteCarloPlanner(make_client(args.llm), max_repairs=args.max_repairs,
-                                    solver_time_limit_s=args.time_limit, explain=False)
+                                    solver_time_limit_s=args.time_limit, explain=False,
+                                    suggest_budget_s=0.0)   # advice is never shown here
     say(
         f"monte carlo {stem}: {args.runs} runs, failure rate {args.failure_rate:g}/robot/h, "
         f"jitter {args.jitter:g}, max_replans={args.max_replans}, "
@@ -391,7 +425,21 @@ class EvalRow(BaseModel):
     re-ask is not a repair); ``first_*`` total the first valid graph and ``final_*`` the final
     one (scheduled, or the last one tried), so ``scope_drift_pct`` = 100 x (final - first) /
     first energy says how much work the repairs re-scoped (negative = cut); ``thinking`` is the
-    ``MOONWRIGHT_THINKING`` setting the run used.
+    thinking setting the run used (``--thinking``, else ``MOONWRIGHT_THINKING``); ``cost_usd``
+    is what the run's model calls cost at the Token Factory list prices
+    (:func:`run_cost_usd`: 0 for an offline run, None when a model is not priced).
+    ``volume_advisories`` counts the ``volume:<structure>`` advisories on the final graph
+    (:func:`~moonwright.pipeline.rates.volume_advisories`: a structure whose planned m3 are
+    below 70 % or above 150 % of what its dimensions imply) and ``min_volume_share`` is the
+    smallest planned / dimension share over the structures the check could judge (None when
+    none: no dimensions, no quantities); ``in_scope`` is ``success`` with no such advisory,
+    the rate the eval reports as "feasible in scope", so an impossible brief that was
+    "verified" by digging a third of the pad is never a plain success. ``requirements_sha``
+    identifies the structured requirements the run planned from (the first 10 hex digits of
+    the SHA-1 of their JSON): every condition of a brief and repeat shares one, which is
+    what makes the conditions a paired comparison. ``kind`` is the brief's designed kind
+    (``--kinds``, else ``kinds.json`` next to the briefs; empty when unknown). New columns go
+    at the end so the CSV header keeps its prefix.
     """
 
     brief: str
@@ -415,6 +463,12 @@ class EvalRow(BaseModel):
     final_energy_wh: float | None = None
     scope_drift_pct: float | None = None
     thinking: str = "auto"
+    cost_usd: float | None = None
+    volume_advisories: int = 0
+    min_volume_share: float | None = None
+    in_scope: bool | None = None     # None: a row recorded before the column existed
+    requirements_sha: str = ""
+    kind: str = ""
 
 
 class ConditionSummary(BaseModel):
@@ -433,6 +487,16 @@ class ConditionSummary(BaseModel):
     first_try_rate: float = 0.0
     answer_valid_rate: float = 0.0
     mean_scope_drift_pct: float | None = None   # over runs with a first and a final graph
+    latency_p50_s: float = 0.0                  # wall time per run (percentile, linear interp.)
+    latency_p95_s: float = 0.0
+    mean_llm_latency_s: float = 0.0             # the model calls' share of the wall time
+    mean_cost_usd: float | None = None          # over the priced runs; None when none is priced
+    total_cost_usd: float | None = None
+    priced_runs: int = 0
+    in_scope: int = 0                           # verified with no volume advisory
+    in_scope_rate: float = 0.0
+    in_scope_ci_low: float = 0.0
+    in_scope_ci_high: float = 1.0
 
 
 class EvalReport(BaseModel):
@@ -448,6 +512,8 @@ class EvalReport(BaseModel):
     max_answer_retries: int | None = None
     workers: int = 1
     thinking: str = "auto"
+    arms: dict[str, str] = Field(default_factory=dict)         # --models arm -> model id
+    role_models: dict[str, str] = Field(default_factory=dict)  # structure / explain (live runs)
 
 
 class GraphCapture:
@@ -506,6 +572,116 @@ def thinking_setting() -> str:
     return os.environ.get(THINKING_ENV_VAR, "").strip().lower() or "auto"
 
 
+def thinking_overrides(setting: str | None) -> dict[str, bool]:
+    """The client's per-role thinking overrides for ``--thinking``: ``on`` / ``off`` switch the
+    task-graph and repair roles (structure and explain keep their own setting); ``auto`` or
+    None leaves every role to ``MOONWRIGHT_THINKING`` and the client defaults."""
+    if setting is None or setting == "auto":
+        return {}
+    if setting not in THINKING_CHOICES:
+        raise ValueError(
+            f"--thinking must be one of {', '.join(THINKING_CHOICES)}, got {setting!r}"
+        )
+    return dict.fromkeys(ARM_ROLES, setting == "on")
+
+
+def parse_arms(spec: str | None) -> dict[str, str] | None:
+    """``--models`` -> ordered ``{arm: model id}``. An arm is one of :data:`ARM_MODELS`
+    (``ultra``, ``super``, ``nano``, ``lightning``) or ``name=model-id`` for any other
+    catalogue model; None when nothing was asked for (the conditions keep their plain
+    ``loop_*`` names). Unknown arms, bad names and duplicates are a ``ValueError``."""
+    if spec is None or not spec.strip():
+        return None
+    arms: dict[str, str] = {}
+    for part in spec.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        name, sep, model = part.partition("=")
+        name, model = name.strip().lower(), model.strip()
+        if sep:
+            if not name or not model:
+                raise ValueError(f"--models: expected name=model-id, got {part!r}")
+        elif name in ARM_MODELS:
+            model = ARM_MODELS[name]
+        else:
+            raise ValueError(f"--models: unknown arm {part!r}; expected one of "
+                             f"{', '.join(ARM_MODELS)} or name=model-id")
+        if not ARM_NAME_RE.match(name):
+            raise ValueError(f"--models: arm name {name!r} may only use letters, digits, _ . -")
+        if name in arms:
+            raise ValueError(f"--models: arm {name!r} is listed twice")
+        arms[name] = model
+    return arms or None
+
+
+def condition_name(arm: str | None, loop: str) -> str:
+    """``ultra/loop_on`` for an arm, the bare ``loop_on`` without one."""
+    return f"{arm}/{loop}" if arm else loop
+
+
+def make_arm_client(kind: str | None, model: str | None = None,
+                    thinking: Mapping[str, bool] | None = None) -> LLMClient:
+    """The client of one eval arm. ``model`` routes the task-graph and repair roles (None
+    keeps ``MOONWRIGHT_MODEL_*`` / the defaults; structure and explain are never touched) and
+    ``thinking`` overrides the per-role switch (:func:`thinking_overrides`). The fixture client
+    ignores both (the arm name is kept on the condition); ``record`` wraps the live client.
+    One live client serves every worker thread: it only keeps per-model request modes and a
+    locked call log, so concurrent planners are safe on it."""
+    load_env()
+    resolved = resolve_kind(kind)
+    if resolved == "fixture":
+        return FixtureClient()
+    if resolved not in KINDS:
+        raise ValueError(
+            f"unknown LLM client kind {resolved!r}; expected one of {', '.join(KINDS)}"
+        )
+    models = dict.fromkeys(ARM_ROLES, model) if model else None
+    live = TokenFactoryClient(models=models, thinking=dict(thinking) if thinking else None)
+    return RecordingClient(live) if resolved == "record" else live
+
+
+def run_cost_usd(result: PlanResult) -> float | None:
+    """What the run's model calls cost at the Token Factory list prices
+    (``moonwright.llm.prices``), summed over the steps that carry token usage. 0 for a run
+    without tokens (offline fixtures); None when a step with tokens names a model the price
+    table does not know, so an unpriced model never shows up as free."""
+    total = 0.0
+    for step in result.steps:
+        usage = step.usage
+        if usage is None or not (usage.input_tokens or usage.output_tokens):
+            continue
+        cost = cost_usd(usage.model, usage.input_tokens, usage.output_tokens, decimals=None)
+        if cost is None:
+            return None
+        total += cost
+    return round(total, 6)
+
+
+def requirements_sha(req: Requirements | None) -> str:
+    """The first 10 hex digits of the SHA-1 of the requirements' JSON (without the brief
+    text): the same for every condition that planned from one structuring; "" without one."""
+    if req is None:
+        return ""
+    return hashlib.sha1(req.model_dump_json(exclude={"source_brief"}).encode()).hexdigest()[:10]
+
+
+def load_kinds(path: Path | None, briefs_dir: Path) -> dict[str, str]:
+    """``{brief id: kind}`` from ``--kinds PATH`` (a JSON object), else from ``kinds.json`` in
+    the briefs directory when it exists, else empty. A malformed file is an input error."""
+    source = path if path is not None else briefs_dir / "kinds.json"
+    if path is None and not source.is_file():
+        return {}
+    try:
+        data = json.loads(source.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        raise ValueError(f"--kinds {source}: {e}") from None
+    if not isinstance(data, dict) or not all(
+            isinstance(k, str) and isinstance(v, str) for k, v in data.items()):
+        raise ValueError(f"--kinds {source}: expected a JSON object of brief id -> kind")
+    return data
+
+
 def eval_row(
     brief_id: str,
     condition: str,
@@ -515,12 +691,24 @@ def eval_row(
     *,
     first_graph: TaskGraph | None = None,
     thinking: str = "auto",
+    kind: str = "",
+    sha: str | None = None,
 ) -> EvalRow:
+    """The row of one run. ``sha`` is the :func:`requirements_sha` of the requirements the
+    run planned from; when None it is derived from the result (empty when the run never got
+    past structuring)."""
+    if sha is None:
+        structured = any(s.stage == "structure" and s.ok for s in result.steps)
+        sha = requirements_sha(result.requirements) if structured else ""
     usage: Usage = result.total_usage()
     graph_steps = [s for s in result.steps if s.stage in ("taskgraph", "repair")]
     models = dict.fromkeys(s.usage.model for s in graph_steps if s.usage and s.usage.model)
     first_duration, first_energy = graph_totals(first_graph)
     final_duration, final_energy = graph_totals(result.task_graph)
+    volume = (volume_advisories(result.requirements, result.task_graph)
+              if result.task_graph is not None else [])
+    shares = (volume_shares(result.requirements, result.task_graph)
+              if result.task_graph is not None else {})
     return EvalRow(
         brief=brief_id,
         condition=condition,
@@ -543,6 +731,12 @@ def eval_row(
         final_energy_wh=final_energy,
         scope_drift_pct=scope_drift(first_energy, final_energy),
         thinking=thinking,
+        cost_usd=run_cost_usd(result),
+        volume_advisories=len(volume),
+        min_volume_share=round(min(shares.values()), 3) if shares else None,
+        in_scope=result.success and not volume,
+        requirements_sha=sha,
+        kind=kind,
     )
 
 
@@ -571,7 +765,11 @@ def summarise(rows: Sequence[EvalRow]) -> list[ConditionSummary]:
         drifts = [r.scope_drift_pct for r in group if r.scope_drift_pct is not None]
         feasible = sum(r.success for r in group)
         first_try = sum(r.first_try_feasible for r in group)
+        in_scope = sum(r.in_scope is True for r in group)
         low, high = wilson_interval(feasible, n)
+        scope_low, scope_high = wilson_interval(in_scope, n)
+        latencies = [r.latency_s for r in group]
+        costs = [r.cost_usd for r in group if r.cost_usd is not None]
         out.append(
             ConditionSummary(
                 condition=condition,
@@ -589,15 +787,31 @@ def summarise(rows: Sequence[EvalRow]) -> list[ConditionSummary]:
                 first_try_rate=first_try / n,
                 answer_valid_rate=sum(r.answer_valid for r in group) / n,
                 mean_scope_drift_pct=round(statistics.fmean(drifts), 2) if drifts else None,
+                latency_p50_s=round(percentile(latencies, 0.5), 3),
+                latency_p95_s=round(percentile(latencies, 0.95), 3),
+                mean_llm_latency_s=statistics.fmean(r.llm_latency_s for r in group),
+                mean_cost_usd=round(statistics.fmean(costs), 6) if costs else None,
+                total_cost_usd=round(sum(costs), 6) if costs else None,
+                priced_runs=len(costs),
+                in_scope=in_scope,
+                in_scope_rate=in_scope / n,
+                in_scope_ci_low=round(scope_low, 4),
+                in_scope_ci_high=round(scope_high, 4),
             )
         )
     return out
 
 
 def format_summary(summary: Sequence[ConditionSummary]) -> str:
+    """The per-condition text table (stdout, and stderr at the end of a run): feasible rate
+    with its Wilson interval, the in-scope rate (verified and no volume advisory), first-try
+    rate, repairs, makespan, scope drift, mean and p95 wall latency, tokens and the mean cost
+    of a priced run (``-`` when no run is priced)."""
+    width = max([10, *(len(s.condition) + 1 for s in summary)])
     header = (
-        f"{'condition':<10}{'runs':>6}{'feasible':>10}{'95% CI':>12}{'1st-try':>9}"
-        f"{'repairs':>9}{'makespan':>10}{'drift':>8}{'latency':>9}{'tok in/out':>14}"
+        f"{'condition':<{width}}{'runs':>6}{'feasible':>10}{'95% CI':>12}{'in-scope':>10}"
+        f"{'1st-try':>9}{'repairs':>9}{'makespan':>10}{'drift':>8}{'latency':>9}{'p95':>8}"
+        f"{'tok in/out':>14}{'cost/run':>10}"
     )
     lines = [header]
     for s in summary:
@@ -605,9 +819,12 @@ def format_summary(summary: Sequence[ConditionSummary]) -> str:
         ci = f"{s.feasible_ci_low:.0%}-{s.feasible_ci_high:.0%}"
         drift = f"{s.mean_scope_drift_pct:+.0f}%" if s.mean_scope_drift_pct is not None else "-"
         tokens = f"{s.mean_input_tokens:.0f}/{s.mean_output_tokens:.0f}"
+        cost = format_usd(s.mean_cost_usd)
         lines.append(
-            f"{s.condition:<10}{s.runs:>6}{s.feasible_rate:>10.0%}{ci:>12}{s.first_try_rate:>9.0%}"
-            f"{s.mean_repairs:>9.2f}{makespan:>10}{drift:>8}{s.mean_latency_s:>8.2f}s{tokens:>14}"
+            f"{s.condition:<{width}}{s.runs:>6}{s.feasible_rate:>10.0%}{ci:>12}"
+            f"{s.in_scope_rate:>10.0%}{s.first_try_rate:>9.0%}{s.mean_repairs:>9.2f}"
+            f"{makespan:>10}{drift:>8}{s.mean_latency_s:>8.2f}s{s.latency_p95_s:>7.1f}s"
+            f"{tokens:>14}{cost:>10}"
         )
     return "\n".join(lines)
 
@@ -676,88 +893,338 @@ def planner_options(feedback: str, max_answer_retries: int | None) -> dict[str, 
     return options
 
 
-EvalJob = tuple[ExampleBrief, str, int]
+EvalJob = tuple[ExampleBrief, int]
 
 
 def run_eval_jobs(
     jobs: Sequence[EvalJob],
-    run: Callable[[ExampleBrief, str, int], EvalRow],
+    run: Callable[[ExampleBrief, int], Sequence[EvalRow]],
     *,
     workers: int,
     csv_path: Path,
     report: Callable[[EvalRow], None],
 ) -> list[EvalRow]:
-    """Run every ``(brief, condition, repeat)`` job, ``workers`` at a time, appending each row
-    to ``csv_path`` and reporting it the moment it completes (so a killed run keeps the rows
-    it finished, in completion order); the rows come back in job order whatever order they
-    finished in. An interrupt cancels the jobs not yet started."""
-    done: dict[int, EvalRow] = {}
+    """Run every ``(brief, repeat)`` job, ``workers`` at a time; a job structures its brief
+    once and returns one row per condition, each appended to ``csv_path`` and reported the
+    moment the job completes (so a killed run keeps the rows it finished, in completion
+    order); the rows come back in job order whatever order the jobs finished in. An
+    interrupt cancels the jobs not yet started."""
+    done: dict[int, Sequence[EvalRow]] = {}
     with CsvSink(csv_path) as sink, ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {pool.submit(run, *job): i for i, job in enumerate(jobs)}
         try:
             for future in as_completed(futures):
-                row = future.result()
-                done[futures[future]] = row
-                sink.add(row)
-                report(row)
+                rows = future.result()
+                done[futures[future]] = rows
+                for row in rows:
+                    sink.add(row)
+                    report(row)
         except BaseException:
             for future in futures:
                 future.cancel()
             raise
-    return [done[i] for i in range(len(jobs))]
+    return [row for i in range(len(jobs)) for row in done[i]]
 
 
 def report_row(row: EvalRow) -> None:
     verdict = f"makespan {row.makespan_h}h" if row.success else f"FAIL {row.failure_kind}"
+    if row.success and row.in_scope is False:
+        verdict += f" (scope differs from dimensions: {row.volume_advisories} advisor"
+        verdict += "y)" if row.volume_advisories == 1 else "ies)"
+    cost = f", {format_usd(row.cost_usd)}" if row.cost_usd else ""
     say(
         f"  {row.brief:<16} {row.condition:<8} #{row.repeat} {verdict}, "
-        f"{row.repairs} repair(s), {row.latency_s:.1f}s"
+        f"{row.repairs} repair(s), {row.latency_s:.1f}s{cost}"
     )
+
+
+# --------------------------------------------------------------------------- eval markdown
+def _md_table(header: Sequence[str], rows: Sequence[Sequence[str]]) -> str:
+    lines = ["| " + " | ".join(header) + " |", "|" + "|".join(" --- " for _ in header) + "|"]
+    lines += ["| " + " | ".join(row) + " |" for row in rows]
+    return "\n".join(lines)
+
+
+def _num(value: float) -> str:
+    """``0.3`` / ``1`` / ``12``: one decimal at most, no trailing zero."""
+    return f"{value:.1f}".rstrip("0").rstrip(".")
+
+
+def failure_kinds(rows: Sequence[EvalRow]) -> str:
+    """The conflict families (``energy``, ``scope``, ...) of failed runs, else their failure
+    kinds, comma-separated and sorted: what a matrix cell says after ``fail``."""
+    kinds = sorted({c.split(":", 1)[0] for r in rows for c in r.conflicts})
+    if not kinds:
+        kinds = sorted({r.failure_kind for r in rows if r.failure_kind})
+    return ",".join(kinds) or "unknown"
+
+
+def matrix_cell(rows: Sequence[EvalRow]) -> str:
+    """One cell of the per-brief matrix: ``ok 76 h / 0 rep`` for a verified run (``ok 90 h /
+    1 rep scope!`` when its final graph carries a volume advisory: verified, not in scope),
+    ``fail energy`` for one that ended without a plan (the conflict families, else the
+    failure kind); with repeats the share ``k/n`` follows the word and makespan / repairs are
+    means over the verified runs, e.g. ``ok 2/3 76 h / 0.5 rep; fail 1/3 scope``."""
+    if not rows:
+        return "-"
+    n = len(rows)
+    ok = [r for r in rows if r.success]
+    failed = [r for r in rows if not r.success]
+    parts = []
+    if ok:
+        makespans = [r.makespan_h for r in ok if r.makespan_h is not None]
+        makespan = f"{statistics.fmean(makespans):.0f} h" if makespans else "- h"
+        head = "ok" if n == 1 else f"ok {len(ok)}/{n}"
+        cell = f"{head} {makespan} / {_num(statistics.fmean(r.repairs for r in ok))} rep"
+        off = [r for r in ok if r.in_scope is False]
+        if off:   # verified, but a structure's planned m3 are far from its dimensions
+            cell += " scope!" if len(ok) == 1 else f" scope! {len(off)}/{len(ok)}"
+        parts.append(cell)
+    if failed:
+        head = "fail" if n == 1 else f"fail {len(failed)}/{n}"
+        parts.append(f"{head} {failure_kinds(failed)}")
+    return "; ".join(parts)
+
+
+def condition_table(summary: Sequence[ConditionSummary]) -> str:
+    """The per-condition markdown table of :func:`eval_markdown`."""
+    header = ["condition", "n", "feasible (95% CI)", "feasible in scope (95% CI)", "first try",
+              "repairs", "makespan", "latency p50 / p95", "tokens in / out", "cost / run",
+              "cost total"]
+    rows = []
+    for s in summary:
+        rows.append([
+            f"`{s.condition}`", str(s.runs),
+            f"{s.feasible_rate:.0%} ({s.feasible_ci_low:.0%}-{s.feasible_ci_high:.0%})",
+            f"{s.in_scope_rate:.0%} ({s.in_scope_ci_low:.0%}-{s.in_scope_ci_high:.0%})",
+            f"{s.first_try_rate:.0%}", f"{s.mean_repairs:.2f}",
+            f"{s.mean_makespan_h:.0f} h" if s.mean_makespan_h is not None else "-",
+            f"{s.latency_p50_s:.1f} s / {s.latency_p95_s:.1f} s",
+            f"{s.mean_input_tokens:.0f} / {s.mean_output_tokens:.0f}",
+            format_usd(s.mean_cost_usd), format_usd(s.total_cost_usd, decimals=2),
+        ])
+    return _md_table(header, rows)
+
+
+def kind_table(report: EvalReport) -> str | None:
+    """The per-kind markdown table of :func:`eval_markdown` (kinds down, one row per kind and
+    condition), or None when no row carries a kind."""
+    kinds = list(dict.fromkeys(r.kind for r in report.rows if r.kind))
+    if not kinds:
+        return None
+    conditions = list(dict.fromkeys([*report.conditions, *(r.condition for r in report.rows)]))
+    header = ["kind", "condition", "n", "feasible", "feasible in scope", "first try", "repairs",
+              "briefs"]
+    rows = []
+    for kind in kinds:
+        for condition in conditions:
+            group = [r for r in report.rows if r.kind == kind and r.condition == condition]
+            if not group:
+                continue
+            n = len(group)
+            rows.append([
+                f"`{kind}`", f"`{condition}`", str(n),
+                f"{sum(r.success for r in group)}/{n}",
+                f"{sum(r.in_scope is True for r in group)}/{n}",
+                f"{sum(r.first_try_feasible for r in group)}/{n}",
+                f"{statistics.fmean(r.repairs for r in group):.2f}",
+                ", ".join(f"`{b}`" for b in dict.fromkeys(r.brief for r in group)),
+            ])
+    return _md_table(header, rows)
+
+
+def brief_matrix(report: EvalReport) -> str:
+    """The per-brief markdown matrix of :func:`eval_markdown`: briefs down, conditions across."""
+    conditions = list(dict.fromkeys([*report.conditions, *(r.condition for r in report.rows)]))
+    briefs = list(dict.fromkeys(r.brief for r in report.rows))
+    rows = []
+    for brief in briefs:
+        cells = [matrix_cell([r for r in report.rows if r.brief == brief and r.condition == c])
+                 for c in conditions]
+        rows.append([f"`{brief}`", *cells])
+    return _md_table(["brief", *conditions], rows)
+
+
+def how_to_read(report: EvalReport) -> str:
+    """The paragraph that names the models, the thinking setting and what each column means."""
+    roles = report.role_models
+    parts: list[str] = []
+    if report.arms:
+        arms = ", ".join(f"`{arm}` = `{model}`" for arm, model in report.arms.items())
+        parts.append("A condition is `<arm>/<loop>`: the arm names the model that proposes the "
+                     f"task graph and answers the repair prompts ({arms}) and the loop is the "
+                     "repair-loop setting.")
+    else:
+        model = f"`{roles['taskgraph']}`" if "taskgraph" in roles else "the configured model"
+        parts.append("A condition is the repair-loop setting; the task graph and the repairs come "
+                     f"from {model}.")
+    told = ("the solver's minimal infeasibility core with its numeric hints"
+            if report.feedback == "core" else "only the verdict kind (the ablation arm)")
+    parts.append(f"`loop_on` allows up to {report.max_repairs} repair round(s), each fed {told}; "
+                 "`loop_off` takes the first valid graph's verdict as final.")
+    if report.max_answer_retries is not None:
+        parts.append(f"Schema / transport re-asks are capped at {report.max_answer_retries} in "
+                     "both conditions.")
+    if roles:
+        line = f"Briefs are structured by `{roles.get('structure', '?')}`"
+        if "explain" in roles:
+            line += f"; explanations (only with `--explain`) are written by `{roles['explain']}`"
+        parts.append(line + ".")
+    thinking = {
+        "auto": "the task-graph and repair calls reason, structure and explain answer directly",
+        "on": "the task-graph and repair calls reason (reasoning and answer share max_tokens)",
+        "off": "no call reasons: every model answers directly",
+    }.get(report.thinking, report.thinking)
+    parts.append(f"Thinking `{report.thinking}`: {thinking}.")
+    parts.append("Each brief is structured once per repeat and every condition plans from that "
+                 "same requirements object (`requirements_sha` in the rows), so arms and loop "
+                 "settings are a paired comparison on the same first-graph verdict rather than "
+                 "each sampling the structuring model anew; the shared structure step and its "
+                 "tokens appear in every row of the pair.")
+    parts.append("`feasible` is the share of runs that ended with a CP-SAT-verified schedule, "
+                 "with a Wilson 95 % interval; `feasible in scope` the share that is feasible "
+                 "AND whose final graph carries no `volume:<structure>` advisory (every "
+                 "structure's planned m3 within 70-150 % of what its dimensions imply; a plan "
+                 "that digs a third of the pad is feasible but not in scope, and "
+                 "`min_volume_share` in the rows says how far off); `first try` the share "
+                 "verified without a repair round; `repairs` the mean repair rounds per run; "
+                 "`makespan` the mean over feasible runs; latency is wall time per run (p50 / "
+                 "p95, model calls and solver included); tokens are per run; cost is per run at "
+                 "the Token Factory list prices (`-` when the model is not priced).")
+    parts.append("In the per-brief matrix a cell reads `ok <makespan> h / <repairs> rep` for a "
+                 "verified run (with `k/n` when repeated), `ok ... scope!` when it is verified "
+                 "but not in scope, and `fail <conflict families>` for a run that ended without "
+                 "a verified plan.")
+    if any(r.kind for r in report.rows):
+        parts.append("The per-kind table groups briefs by their designed kind (`--kinds`, or "
+                     "`kinds.json` next to the briefs; `docs/eval-briefs.md`): A comfortable, "
+                     "B battery-split, C horizon-bound, D impossible, E scope reduction "
+                     "allowed.")
+    if report.llm == "fixture":
+        parts.append("This run used `--llm fixture`: every arm replays the same recorded "
+                     "Nemotron answers, so arms differ in name only and tokens and cost are 0.")
+    return " ".join(parts)
+
+
+def eval_markdown(report: EvalReport) -> str:
+    """The results document of ``moonwright eval --markdown``: header, how to read, the
+    per-condition table and the per-brief matrix."""
+    briefs = len({r.brief for r in report.rows})
+    retries = ("the planner's own" if report.max_answer_retries is None
+               else str(report.max_answer_retries))
+    title = (f"# Moonwright eval: {briefs} brief(s) x {len(report.conditions)} condition(s) x "
+             f"{report.repeat} repeat(s)")
+    setup = (f"Generated {report.generated_at}; llm `{report.llm}`; briefs from "
+             f"`{report.briefs_dir}`; {len(report.rows)} run(s) on {report.workers} worker(s); "
+             f"max_repairs {report.max_repairs}; feedback `{report.feedback}`; "
+             f"max_answer_retries {retries}; thinking `{report.thinking}`.")
+    lines = [
+        title,
+        "",
+        setup,
+        "",
+        "## How to read",
+        "",
+        how_to_read(report),
+        "",
+        "## Per condition",
+        "",
+        condition_table(report.summary),
+        "",
+    ]
+    kinds = kind_table(report)
+    if kinds is not None:
+        lines += ["## Per kind", "", kinds, ""]
+    lines += ["## Per brief", "", brief_matrix(report), ""]
+    return "\n".join(lines)
+
+
+def write_markdown(path: Path, report: EvalReport) -> str:
+    text = eval_markdown(report)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return text
 
 
 def cmd_eval(args: argparse.Namespace) -> int:
     briefs = list_briefs(args.briefs)
     if not briefs:
         raise ValueError(f"no briefs (*.md, *.txt) found in {args.briefs}")
-    conditions = CONDITIONS[args.loop]
+    loops = CONDITIONS[args.loop]
     options = planner_options(args.feedback, args.max_answer_retries)
-    client = make_client(args.llm)
-    thinking = thinking_setting()
-    jobs: list[EvalJob] = [
-        (brief, condition, repeat)
-        for brief in briefs
-        for condition in conditions
-        for repeat in range(1, args.repeat + 1)
-    ]
+    arms = parse_arms(getattr(args, "models", None))
+    thinking_arg = getattr(args, "thinking", None)
+    thinking = thinking_arg or thinking_setting()
+    overrides = thinking_overrides(thinking_arg)
+    # a condition is "<arm>/<loop>" (or the bare loop without arms); one client per arm,
+    # shared by the workers (see make_arm_client)
+    clients: dict[str, LLMClient] = {}
+    loop_of: dict[str, str] = {}
+    for arm, model in (arms or {None: None}).items():
+        client = make_arm_client(args.llm, model, overrides)
+        for loop in loops:
+            name = condition_name(arm, loop)
+            clients[name] = client
+            loop_of[name] = loop
+    conditions = list(loop_of)
+    llm_name = next(iter(clients.values())).name
+    kinds = load_kinds(getattr(args, "kinds", None), args.briefs)
+    # one job per (brief, repeat): the brief is structured ONCE and every condition plans from
+    # the same requirements, so the conditions are paired (same first graph's verdict for
+    # loop off / on, same dimensions and operations for every model arm)
+    jobs: list[EvalJob] = [(brief, repeat) for brief in briefs
+                           for repeat in range(1, args.repeat + 1)]
     say(
         f"eval: {len(briefs)} brief(s) x {len(conditions)} condition(s) x {args.repeat} repeat(s), "
-        f"llm={client.name} workers={args.workers} feedback={args.feedback} thinking={thinking}"
+        f"llm={llm_name} workers={args.workers} feedback={args.feedback} thinking={thinking}"
+        + (" arms=" + ",".join(f"{a}={m}" for a, m in arms.items()) if arms else "")
+        + (f" kinds={len(kinds)}" if kinds else "")
     )
 
-    def run(brief: ExampleBrief, condition: str, repeat: int) -> EvalRow:
-        capture = GraphCapture(client)
-        planner = Planner(
-            capture,
-            max_repairs=args.max_repairs if condition == "loop_on" else 0,
-            solver_time_limit_s=args.time_limit,
-            explain=args.explain,
-            **options,
-        )
+    def run(brief: ExampleBrief, repeat: int) -> list[EvalRow]:
+        planners: dict[str, tuple[GraphCapture, Planner]] = {}
+        for condition in conditions:
+            capture = GraphCapture(clients[condition])
+            planners[condition] = (capture, Planner(
+                capture,
+                max_repairs=args.max_repairs if loop_of[condition] == "loop_on" else 0,
+                solver_time_limit_s=args.time_limit,
+                explain=args.explain,
+                **options,
+            ))
         t0 = time.perf_counter()
-        result = planner.plan(brief.text_markdown, brief_id=brief.id)
-        return eval_row(
-            brief.id, condition, repeat, result, time.perf_counter() - t0,
-            first_graph=capture.graphs[0] if capture.graphs else None, thinking=thinking,
-        )
+        # the structure role is the same model in every arm: ask it once, through the first
+        # condition's planner (so a stubbed Planner is honoured)
+        req, step = planners[conditions[0]][1].structure(brief.text_markdown, brief_id=brief.id)
+        structure_s = time.perf_counter() - t0
+        key = brief_key(brief.text_markdown, brief.id)
+        sha = requirements_sha(req)
+        rows: list[EvalRow] = []
+        for condition in conditions:
+            capture, planner = planners[condition]
+            t1 = time.perf_counter()
+            if req is None:
+                result = unstructured_result(step, brief.text_markdown)
+            else:
+                result = planner.plan_from_requirements(req, key=key)
+                result.steps.insert(0, step)
+            rows.append(eval_row(
+                brief.id, condition, repeat, result, structure_s + time.perf_counter() - t1,
+                first_graph=capture.graphs[0] if capture.graphs else None, thinking=thinking,
+                kind=kinds.get(brief.id, ""), sha=sha,
+            ))
+        return rows
 
     rows = run_eval_jobs(jobs, run, workers=args.workers, csv_path=args.csv, report=report_row)
+    order = {(b.id, c): (i, j) for i, b in enumerate(briefs) for j, c in enumerate(conditions)}
+    rows.sort(key=lambda r: (*order[(r.brief, r.condition)], r.repeat))   # brief x cond x rep
     summary = summarise(rows)
     print(format_summary(summary))
     report = EvalReport(
         generated_at=datetime.now(UTC).isoformat(timespec="seconds"),
-        llm=client.name,
+        llm=llm_name,
         briefs_dir=str(args.briefs),
-        conditions=list(conditions),
+        conditions=conditions,
         repeat=args.repeat,
         summary=summary,
         rows=rows,
@@ -766,9 +1233,17 @@ def cmd_eval(args: argparse.Namespace) -> int:
         max_answer_retries=args.max_answer_retries,
         workers=args.workers,
         thinking=thinking,
+        arms=arms or {},
+        role_models={} if llm_name == "fixture" else dict(models_from_env()),
     )
     write_json(args.out, report)
-    print(f"-> {args.out}, {args.csv}")
+    outputs = [str(args.out), str(args.csv)]
+    markdown = getattr(args, "markdown", None)
+    if markdown is not None:
+        write_markdown(markdown, report)
+        outputs.append(str(markdown))
+    say(format_summary(summary))   # the table again where the progress lines went
+    print("-> " + ", ".join(outputs))
     return EXIT_OK
 
 
@@ -880,8 +1355,28 @@ def build_parser() -> argparse.ArgumentParser:
         help="parallel runs over brief x condition x repeat; rows reach the CSV as they finish",
     )
     p.add_argument("--explain", action="store_true", help="include the explanation stage")
+    p.add_argument(
+        "--models", default=None, metavar="ARM[,ARM...]",
+        help="model arms for the task-graph and repair roles, each its own set of conditions "
+             f"named <arm>/<loop>: {', '.join(ARM_MODELS)}, or name=model-id (default: the "
+             "configured models; ignored by --llm fixture, the names are kept)",
+    )
+    p.add_argument(
+        "--thinking", choices=THINKING_CHOICES, default=None,
+        help="reasoning for the task-graph and repair calls (default: MOONWRIGHT_THINKING)",
+    )
     p.add_argument("--out", type=Path, default=Path("eval.json"))
     p.add_argument("--csv", type=Path, default=Path("eval.csv"))
+    p.add_argument(
+        "--markdown", type=Path, default=None, metavar="PATH",
+        help="also write the results document: per-condition table, per-kind table, per-brief "
+             "matrix, how to read",
+    )
+    p.add_argument(
+        "--kinds", type=Path, default=None, metavar="PATH",
+        help="JSON object brief id -> designed kind (A..E) for the per-kind table (default: "
+             "kinds.json next to the briefs when it exists)",
+    )
     p.set_defaults(func=cmd_eval)
 
     p = sub.add_parser("serve", help="run the FastAPI app with uvicorn")

@@ -4,8 +4,8 @@
 
 **Structures.**
 
-1. Equipment pad: 12 m by 12 m, stripped, levelled and compacted.
-2. Spoil containment berm: 40 m long, 1.5 m high, built from strip spoil and compacted.
+1. Equipment hardstand: 12 m by 12 m, stripped of its 25 cm of fines, levelled and compacted (not sintered).
+2. Spoil containment berm: 40 m long, 1.5 m high, built from the hardstand's strip spoil and compacted.
 3. Rover charging apron: 10 m by 20 m, stripped, compacted and sintered 15 cm.
 
 **Fleet.** EX1 and EX2 (excavators, 5000 Wh each), HL1 (hauler, 3000 Wh), CP1 (compactor, 3500 Wh), PR1 (printer, 4000 Wh) and SV1 (surveyor, 1200 Wh). Batteries are the whole budget.

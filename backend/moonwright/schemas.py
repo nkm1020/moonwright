@@ -194,14 +194,38 @@ class Site(_Model):
         return self
 
 
+Operation = Literal["survey", "excavate", "grade", "haul", "compact", "sinter"]
+"""The validator's phase vocabulary (``moonwright.pipeline.validate``): what a brief can ask for
+on a structure. Inspection and staking are ``survey``; stripping and levelling are ``grade``."""
+
+
+# ``Structure.operations`` (phase 3c) are the phases the BRIEF explicitly asks for on a
+# structure. The validator requires a task for each one the fleet can staff, on top of the
+# structure-type heuristic, so a plan that drops "a sintered crest" is caught as
+# ``scope:<structure>`` and repaired instead of delivered without it. An operation the fleet
+# cannot staff is a site warning (``moonwright.pipeline.structure.site_warnings``), never a
+# conflict. Repeats are dropped, first mention's place kept. The class docstring below is
+# short on purpose: pydantic copies it into the JSON schema the model decodes against, and
+# the structure model (Lightning) answers more cleanly without prose in the grammar.
 class Structure(_Model):
-    """Extra keys such as diameter_m / length_m / height_m are allowed (BIM-like JSON)."""
+    """A thing to build: type, zone, the operations the brief asks for on it, and its
+    dimensions as extra numeric keys in metres (diameter_m, length_m, width_m, depth_m,
+    height_m, thickness_m; trench_width_m and trench_depth_m for a key trench under a berm)."""
 
     model_config = ConfigDict(extra="allow", allow_inf_nan=False)
 
     id: Id
     type: str  # landing_pad, blast_berm, access_road, habitat_foundation, ...
     zone: Id | None = None
+    operations: list[Operation] = Field(
+        default_factory=list,
+        description="Work the brief explicitly asks for on this structure, as an array from "
+                    "the closed vocabulary survey, excavate, grade, haul, compact, sinter "
+                    "(inspection and staking are survey; stripping and levelling are grade): "
+                    "a sintered crest is sinter, built from pad spoil is haul, a key trench is "
+                    "excavate, inspected or signed off is survey. Never add operations the "
+                    "brief does not ask for; [] when it names none.",
+    )
 
     @model_validator(mode="after")
     def _finite_extras(self) -> Structure:
@@ -209,11 +233,15 @@ class Structure(_Model):
         for key, value in (self.model_extra or {}).items():
             if isinstance(value, float) and not math.isfinite(value):
                 raise ValueError(f"{key} must be a finite number")
+        # a repeated operation is the same ask twice: keep the first mention's place
+        self.operations = list(dict.fromkeys(self.operations))
         return self
 
     def dims(self) -> dict[str, float]:
+        """The numeric extras (metres): a boolean is an ``int`` in Python but never a
+        dimension (``"inspected": true`` is a flag a small model wrote, not 1 m)."""
         return {k: float(v) for k, v in (self.model_extra or {}).items()
-                if isinstance(v, (int, float))}
+                if isinstance(v, (int, float)) and not isinstance(v, bool)}
 
 
 class Robot(_Model):
@@ -264,9 +292,11 @@ class Task(_Model):
     structure: str | None = None
     quantity: float | None = Field(
         default=None, ge=0, le=MAX_QUANTITY,
-        description="How much work: m3 excavated or hauled, m2 stripped / graded / compacted / "
-                    "sintered / surveyed, m of linear work, ea for discrete items; null for a "
-                    "pure time task. Durations and energies are computed from it.",
+        description="How much work: m3 excavated or hauled (a trench is length x width x "
+                    "depth in m3), m2 stripped / graded / compacted / sintered / surveyed; m "
+                    "and ea only for surveyor work (the rate table prices no other robot in "
+                    "them); null for a pure time task. Durations and energies are computed "
+                    "from it.",
     )
     unit: Unit | None = Field(default=None, description="Unit of quantity.")
     basis: str | None = Field(
@@ -379,6 +409,27 @@ class LoopStep(_Model):
     payload: dict[str, Any] | None = None  # small stage-specific extras for the UI
 
 
+class Suggestion(_Model):
+    """A resource change that would make the last task graph feasible, found by
+    ``moonwright.pipeline.relax`` when a plan ends without a verified schedule: the deadline
+    extended (``extend_horizon``: ``horizon_h`` is the makespan CP-SAT found), one more robot of
+    a type (``add_robot``: ``robot_type``, the new ``robot_id`` and its ``battery_wh``), one
+    robot's battery raised (``raise_battery``: ``robot_id`` and the ``battery_wh`` it needs) or,
+    when no single change works, ``reduce_scope`` (``detail`` names the largest work items).
+    ``verified`` is True when a CP-SAT solve on the modified requirements proved the change and
+    ``makespan_h`` is that solve's makespan; ``detail`` is one sentence with units on every
+    number."""
+
+    kind: Literal["extend_horizon", "add_robot", "raise_battery", "reduce_scope"]
+    detail: str
+    makespan_h: int | None = None
+    robot_type: str | None = None
+    robot_id: str | None = None
+    battery_wh: float | None = None
+    horizon_h: int | None = None
+    verified: bool = False
+
+
 class PlanResult(_Model):
     requirements: Requirements
     task_graph: TaskGraph | None = None
@@ -388,6 +439,7 @@ class PlanResult(_Model):
     repairs: int = 0
     success: bool = False
     failure: Failure | None = None
+    suggestions: list[Suggestion] = Field(default_factory=list)
 
     def total_usage(self) -> Usage:
         u = Usage()
@@ -420,7 +472,12 @@ class ReplanRecord(_Model):
     """One replan of a simulation. ``after.schedule`` is in absolute simulator hours (shifted
     by ``floor(t_h)``), while ``after.requirements`` is what the planner was given: the
     surviving robots with their remaining batteries and ``horizon_h`` = the hours *left* at the
-    event (relative); the ok ``schedule`` step's receipt quotes the brief's deadline."""
+    event (relative); the ok ``schedule`` step's receipt quotes the brief's deadline. The
+    advice of a failed replan (``after.suggestions`` and the ``suggestions`` payload of its
+    final failed step) is rebased the same way: ``makespan_h`` / ``horizon_h`` and the
+    sentence are absolute simulator hours against the brief's deadline (shifted by
+    ``ceil(t_h)``, never earlier than the simulator can achieve), and a spare robot is a full
+    battery, not a clone of a survivor's remaining charge."""
 
     event: Event
     t_h: float

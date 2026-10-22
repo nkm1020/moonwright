@@ -371,7 +371,10 @@ def test_quantities_ground_the_graph_before_it_is_scheduled() -> None:
     assert (sinter.duration_h, sinter.energy_wh) == (23, 2700.4)
     assert step.payload == {
         "advisories": [("estimate:T3: model said 10 h / 1000 Wh, rate model gives 28 h / "
-                        "3040 Wh (+204%)")],
+                        "3040 Wh (+204%)"),
+                       # the bowl is sized for 0.6 m while the structure says 0.4 m deep
+                       ("volume:S1: its dimensions give 125.7 m3 (bowl 20 m across, 0.4 m deep) "
+                        "but its excavation tasks (T2 300 m2, T3 190 m3) total 190 m3 (151%)")],
         "rate_model": True, "grounded": len(LANDING_PAD_SCOPE),
     }
     # pure-time tasks of an engaged graph (the surveys) are charged at least their base power

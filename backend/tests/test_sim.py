@@ -144,14 +144,15 @@ class FakePlanner:
     def plan_from_requirements(self, req, *, key, prior_graph=None, context=None, variant=None,
                                start_offset_h=0, locked=None, max_repairs=None,
                                required_tasks=None, start_with_prior=False,
-                               robot_positions=None):
+                               robot_positions=None, reserved_ids=None):
         locked = list(locked or [])
         self.calls.append({"req": req, "key": key, "prior_graph": prior_graph,
                            "context": context, "variant": variant,
                            "start_offset_h": start_offset_h, "locked": locked,
                            "required_tasks": list(required_tasks or []),
                            "start_with_prior": start_with_prior,
-                           "robot_positions": robot_positions})
+                           "robot_positions": robot_positions,
+                           "reserved_ids": list(reserved_ids or [])})
         if not self.succeed:
             return PlanResult(requirements=req, task_graph=prior_graph, success=False,
                               failure=Failure(kind="infeasible", conflicts=["horizon"]))
@@ -387,6 +388,7 @@ def test_run_with_replanning_replans_a_failure_at_time_zero():
     assert call["req"].horizon_h == 100 and call["locked"] == []  # nothing had started
     assert call["prior_graph"].task("T2").duration_h == 4         # T2 re-added in full
     assert call["robot_positions"] == {"EX1": (20.0, 1.0), "HL1": (20.0, 1.0)}  # at the depot
+    assert call["reserved_ids"] == ["EX2"]   # a spare the advice proposes never reuses EX2
     assert res.completed and res.schedule.entry("T2").robot == "EX1"
     times = [f.t_h for f in res.frames]
     assert times[0] == 0.0 and robot(res.frames[0], "EX2").status == "failed"
