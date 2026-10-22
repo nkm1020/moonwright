@@ -1,23 +1,27 @@
 "use client";
 /**
- * Simulation set-up: failure injections (robot + time), replan budget, simulator step and the
- * Run button. Pure controlled component: the parent owns `SimulateOptions` and the request.
+ * Simulation set-up: failure injections (robot + time), the replan budget and the Run button.
+ * The simulator step is fixed at SIM_DT_H (0.25 h). Pure controlled component: the parent owns
+ * `SimulateOptions` and the request.
  */
 import type { FailureSpec, PlanResult, Requirements, SimulateRequest } from "@/lib/types";
 import { robotTypeColor } from "@/lib/palette";
 import { formatHours } from "./EventList";
+import { Button } from "./Section";
 
 export interface SimulateOptions {
   failures: FailureSpec[];
   maxReplans: number;
-  dtH: number;
 }
 
 export const DEFAULT_SIMULATE_OPTIONS: SimulateOptions = {
   failures: [],
   maxReplans: 2,
-  dtH: 0.25,
 };
+
+/** Fixed simulator step in hours; frame_stride keeps about one frame per hour. */
+export const SIM_DT_H = 0.25;
+export const SIM_FRAME_STRIDE = Math.max(1, Math.round(1 / SIM_DT_H));
 
 export interface SimControlsProps {
   requirements: Requirements;
@@ -34,8 +38,6 @@ export interface SimControlsProps {
 }
 
 export const MAX_REPLANS_RANGE = [0, 1, 2, 3, 4, 5] as const;
-export const DT_MIN_H = 0.05;
-export const DT_MAX_H = 1;
 
 /** Error text for one failure row, or null when it is valid. */
 export function failureRowError(f: FailureSpec, horizonH: number, requirements?: Requirements): string | null {
@@ -55,11 +57,10 @@ export function validateSimulateOptions(value: SimulateOptions, horizonH: number
   if (!Number.isInteger(value.maxReplans) || value.maxReplans < 0 || value.maxReplans > 5) {
     errors.push("max replans must be 0..5");
   }
-  if (!(value.dtH >= DT_MIN_H && value.dtH <= DT_MAX_H)) errors.push(`dt must be ${DT_MIN_H}..${DT_MAX_H} h`);
   return errors;
 }
 
-/** Body for POST /simulate. frame_stride defaults so that about one frame per hour is kept. */
+/** Body for POST /simulate: the fixed 0.25 h step with one frame kept per hour. */
 export function toSimulateRequest(
   plan: PlanResult,
   value: SimulateOptions,
@@ -69,32 +70,32 @@ export function toSimulateRequest(
     plan,
     failures: value.failures.map((f) => ({ robot: f.robot, t_h: f.t_h })),
     max_replans: value.maxReplans,
-    dt_h: value.dtH,
-    frame_stride: Math.max(1, Math.round(1 / value.dtH)),
+    dt_h: SIM_DT_H,
+    frame_stride: SIM_FRAME_STRIDE,
     ...extra,
   };
 }
 
-function describe(value: SimulateOptions, requirements: Requirements): string {
-  const step = `${formatHours(value.dtH)} steps`;
+/** What the run will do, in one sentence. */
+export function describeRun(value: SimulateOptions, requirements: Requirements): string {
   const valid = value.failures.filter((f) => Number.isFinite(f.t_h));
   if (valid.length === 0) {
-    return `Replays the verified schedule in ${step} with no injected failures; battery-low and task-overrun events are still reported.`;
+    return "Replay the verified schedule with no injected failure. A verified plan runs clean: any battery-low or task-overrun event would be a genuine anomaly.";
   }
   const typeOf = Object.fromEntries(requirements.robots.map((r) => [r.id, r.type]));
   const list = [...valid]
     .sort((a, b) => a.t_h - b.t_h)
-    .map((f) => `${f.robot}${typeOf[f.robot] ? ` (${typeOf[f.robot]})` : ""} fails at ${formatHours(f.t_h)}`)
-    .join(", ");
-  const replan =
-    value.maxReplans === 0
-      ? "Replanning is off, so the run continues on the original schedule and the failed robot's work stays undone."
-      : `After each failure the agent replans the remaining work from the task-graph stage and re-verifies it (at most ${value.maxReplans} time${value.maxReplans === 1 ? "" : "s"}).`;
-  return `Replays the schedule in ${step}; ${list}. ${replan}`;
+    .map((f) => `${f.robot}${typeOf[f.robot] ? ` (${typeOf[f.robot]})` : ""} failure at ${formatHours(f.t_h)}`)
+    .join(" and ");
+  if (value.maxReplans === 0) {
+    return `Inject ${list}; replanning is off, so the run continues on the original schedule and the failed robot's work stays undone.`;
+  }
+  const budget = value.maxReplans === 1 ? "one replan" : `at most ${value.maxReplans} replans`;
+  return `Inject ${list}; the agent reschedules the remaining work with CP-SAT and escalates to Nemotron only if the fleet cannot finish (${budget}).`;
 }
 
 const inputClass =
-  "rounded-md border border-white/15 bg-surface px-2 py-1 text-sm tabular-nums outline-none focus:border-accent/60 focus:ring-2 focus:ring-accent/20 disabled:opacity-50";
+  "h-8 rounded-md border border-white/15 bg-surface px-2 text-[13px] tabular-nums outline-none focus:border-accent/60 focus:ring-2 focus:ring-accent/20 disabled:opacity-50";
 
 export function SimControls({
   requirements,
@@ -121,18 +122,17 @@ export function SimControls({
     const used = new Set(value.failures.map((f) => f.robot));
     const robot = robots.find((r) => !used.has(r.id)) ?? robots[0];
     const base = makespanH && makespanH > 0 ? makespanH : horizonH;
-    const t = Math.min(horizonH, Math.max(0, Math.round(base * 0.4)));
+    // ~40 % into the work, on a 5 h grid (80 h makespan -> 30 h)
+    const t = Math.min(horizonH, Math.max(0, Math.round((base * 0.4) / 5) * 5));
     patch({ failures: [...value.failures, { robot: robot.id, t_h: t }] });
   };
 
   return (
     <div className="space-y-4">
       <fieldset className="space-y-2" disabled={locked}>
-        <legend className="text-xs font-medium uppercase tracking-wide text-muted">
-          Failure injections
-        </legend>
+        <legend className="text-[11px] font-medium uppercase tracking-wider text-dim">Failure injections</legend>
         {value.failures.length === 0 && (
-          <p className="text-sm text-muted">None. Add one to test the replanner.</p>
+          <p className="text-[13px] text-muted">None yet. Add one to watch the agent replan around a lost robot.</p>
         )}
         <ul className="space-y-2">
           {value.failures.map((f, i) => {
@@ -159,19 +159,19 @@ export function SimControls({
                     ))}
                     {!robots.some((r) => r.id === f.robot) && <option value={f.robot}>{f.robot}</option>}
                   </select>
-                  <span className="text-sm text-muted">fails at</span>
+                  <span className="text-[13px] text-muted">fails at</span>
                   <input
                     type="number"
                     aria-label={`Failure ${i + 1} time in hours`}
                     aria-invalid={rowError ? true : undefined}
-                    className={`${inputClass} w-24 ${rowError ? "border-fail/70 focus:border-fail/70 focus:ring-fail/20" : ""}`}
+                    className={`${inputClass} w-24 font-mono ${rowError ? "border-fail/70 focus:border-fail/70 focus:ring-fail/20" : ""}`}
                     min={0}
                     max={horizonH}
                     step={0.5}
                     value={Number.isFinite(f.t_h) ? f.t_h : ""}
                     onChange={(e) => updateRow(i, { t_h: e.target.value === "" ? NaN : Number(e.target.value) })}
                   />
-                  <span className="text-sm text-muted">h</span>
+                  <span className="text-[13px] text-muted">h</span>
                   <button
                     type="button"
                     onClick={() => removeRow(i)}
@@ -196,11 +196,9 @@ export function SimControls({
         </button>
       </fieldset>
 
-      <div className="flex flex-wrap gap-x-8 gap-y-4">
-        <fieldset disabled={locked}>
-          <legend className="mb-1.5 text-xs font-medium uppercase tracking-wide text-muted">
-            Max replans
-          </legend>
+      <fieldset disabled={locked}>
+        <legend className="mb-1.5 text-[11px] font-medium uppercase tracking-wider text-dim">Max replans</legend>
+        <div className="flex flex-wrap items-center gap-3">
           <div className="inline-flex overflow-hidden rounded-md border border-white/15" role="group">
             {MAX_REPLANS_RANGE.map((n) => {
               const on = value.maxReplans === n;
@@ -210,10 +208,8 @@ export function SimControls({
                   type="button"
                   aria-pressed={on}
                   onClick={() => patch({ maxReplans: n })}
-                  className={`px-2 py-1 text-sm tabular-nums transition-colors disabled:opacity-50 ${
-                    on
-                      ? "bg-accent text-[#0b0f14]"
-                      : "hover:bg-white/10"
+                  className={`px-2.5 py-1 text-[13px] tabular-nums transition-colors disabled:opacity-50 ${
+                    on ? "bg-white/15 font-semibold text-fg" : "text-muted hover:bg-white/10 hover:text-fg"
                   }`}
                 >
                   {n}
@@ -221,48 +217,19 @@ export function SimControls({
               );
             })}
           </div>
-        </fieldset>
-        <fieldset disabled={locked} className="min-w-[12rem] flex-1">
-          <legend className="mb-1.5 text-xs font-medium uppercase tracking-wide text-muted">
-            Simulator step
-          </legend>
-          <div className="flex items-center gap-3">
-            <input
-              type="range"
-              aria-label="Simulator step in hours"
-              className="w-full accent-accent"
-              min={DT_MIN_H}
-              max={DT_MAX_H}
-              step={0.05}
-              value={value.dtH}
-              onChange={(e) => patch({ dtH: Math.round(Number(e.target.value) * 100) / 100 })}
-            />
-            <span className="w-16 shrink-0 text-right text-sm tabular-nums">{formatHours(value.dtH)}</span>
-          </div>
-        </fieldset>
-      </div>
+          <span className="text-[11px] text-dim">
+            per run · simulator step {formatHours(SIM_DT_H)}, one frame kept per hour
+          </span>
+        </div>
+      </fieldset>
 
-      <p className="text-xs leading-5 text-muted">{describe(value, requirements)}</p>
+      <p className="text-[13px] leading-5 text-muted">{describeRun(value, requirements)}</p>
 
       <div className="flex flex-wrap items-center gap-3">
-        <button
-          type="button"
-          onClick={onRun}
-          disabled={!canRun}
-          aria-busy={running || undefined}
-          className="inline-flex items-center gap-2 rounded-md bg-accent px-3.5 py-1.5 text-sm font-semibold text-[#0b0f14] shadow-sm transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {running && (
-            <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden>
-              <circle cx="12" cy="12" r="9" stroke="currentColor" strokeOpacity="0.3" strokeWidth="3" />
-              <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
-            </svg>
-          )}
+        <Button variant="primary" onClick={onRun} disabled={!canRun} loading={running}>
           {running ? "Simulating…" : "Run simulation"}
-        </button>
-        {errors.length > 0 && !running && (
-          <span className="text-xs text-fail">{errors[0]}</span>
-        )}
+        </Button>
+        {errors.length > 0 && !running && <span className="text-xs text-fail">{errors[0]}</span>}
         {error && !running && <span className="text-xs text-fail">{error}</span>}
       </div>
     </div>

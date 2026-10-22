@@ -1,8 +1,9 @@
 "use client";
 /**
  * Gantt chart of a verified schedule: one row per robot (requirements.robots order), one bar per
- * ScheduleEntry coloured by the task's zone. Pure SVG; the width is measured with a
- * ResizeObserver so the chart fills its container. The time axis always starts at 0 h
+ * ScheduleEntry coloured by the task's zone (muted ZONE_COLORS) with a thin left stripe per row
+ * in the robot-type colour (saturated ROBOT_TYPE_COLORS). Pure SVG; the width is measured with
+ * a ResizeObserver so the chart fills its container. The time axis always starts at 0 h
  * (absolute planner / simulator hours) so two charts side by side share a scale when their
  * spans agree (see `minSpanH`).
  *
@@ -12,8 +13,8 @@
  */
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { FocusEvent, KeyboardEvent, PointerEvent as ReactPointerEvent } from "react";
-import type { Requirements, Schedule, ScheduleEntry, Task } from "@/lib/types";
-import { robotTypeColor, zoneColor } from "@/lib/palette";
+import type { FailureSpec, Requirements, Schedule, ScheduleEntry, Task } from "@/lib/types";
+import { CHART_COLORS, ZONE_INK, robotTypeColor, zoneColor } from "@/lib/palette";
 
 export interface GanttMarker {
   t_h: number;
@@ -50,22 +51,28 @@ export interface GanttProps {
   maxVisibleRows?: number;
   /** Lower bound for the axis span in hours, to give before/after charts the same scale. */
   minSpanH?: number;
-  /** Additive: robots out of service in this schedule (failed before it was made); their row
-   *  is tagged "failed" instead of looking merely idle. */
+  /** Robots out of service in this schedule (failed before it was made, time unknown); their
+   *  row is tagged "failed" instead of looking merely idle. */
   failedRobots?: string[];
+  /** Robots that failed at a known hour: the row reads "<id> · failed at <t> h" with a red X
+   *  on the time axis at that hour. */
+  failures?: FailureSpec[];
+  /** Dim everything left of `nowH` (work already done when the chart was made). */
+  dimBeforeNow?: boolean;
 }
 
 // ---------------------------------------------------------------- palette (dark surface)
 const INK = "#e5e7eb";
 const MUTED = "#94a3b8";
-const FAINT = "#64748b";
+const FAINT = "#7b8896";
+const SURFACE = "#0b0f14";
 const GRID = "rgba(255,255,255,0.08)";
 const BAND = "rgba(255,255,255,0.03)";
-const DEADLINE = "#f87171";
-const DEADLINE_TEXT = "#fca5a5";
-const NOW = "#f59e0b";
-const NOW_TEXT = "#fcd34d";
-const MISSING = "#64748b";
+const DEADLINE = CHART_COLORS.deadline;
+const DEADLINE_TEXT = CHART_COLORS.deadlineText;
+const NOW = CHART_COLORS.now;
+const FAILED = "#f87171";
+const MISSING = CHART_COLORS.missing;
 
 const TICK_STEPS = [1, 2, 4, 8, 12, 24, 48, 72, 96, 168, 336, 720];
 
@@ -85,21 +92,34 @@ export function fmtWh(wh: number): string {
   return Math.round(wh).toLocaleString("en-US");
 }
 
-/** Label ink for text drawn inside a coloured fill, picked by the fill's luminance. */
+/** Label ink for text drawn inside a coloured fill, picked by the fill's luminance: the muted
+ *  zone family (luminance ~0.37) takes the dark ink, the grey "missing" fill the light one. */
 function inkFor(hex: string): string {
   const m = /^#?([0-9a-f]{6})$/i.exec(hex);
-  if (!m) return "#0b0f14";
+  if (!m) return ZONE_INK;
   const n = parseInt(m[1], 16);
   const lin = (c: number) => {
     const s = c / 255;
     return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
   };
   const l = 0.2126 * lin(n >> 16) + 0.7152 * lin((n >> 8) & 255) + 0.0722 * lin(n & 255);
-  return l > 0.3 ? "#0b0f14" : "#f8fafc";
+  return l > 0.2 ? ZONE_INK : "#f8fafc";
 }
 
 function textWidth(s: string, font: number): number {
   return s.length * font * 0.6;
+}
+
+/** "<id> <name>" when it fits in `avail` px, otherwise the name cut to what fits (at least
+ *  four characters) with an ellipsis, otherwise the id alone, otherwise nothing. */
+export function barLabel(id: string, name: string | undefined, avail: number, font: number): string | null {
+  const w = (s: string) => textWidth(s, font);
+  if (!name) return w(id) <= avail ? id : null;
+  const full = `${id} ${name}`;
+  if (w(full) <= avail) return full;
+  const chars = Math.floor((avail - w(`${id} …`)) / (font * 0.6));
+  if (chars >= 4) return `${id} ${name.slice(0, chars).trimEnd()}…`;
+  return w(id) <= avail ? id : null;
 }
 
 /** Smallest tick step whose labels still have `minPx` of room; the span rounds up to a multiple. */
@@ -154,6 +174,8 @@ export function Gantt(props: GanttProps) {
     maxVisibleRows = 10,
     minSpanH,
     failedRobots,
+    failures,
+    dimBeforeNow = false,
   } = props;
   const horizonH = props.horizonH ?? requirements.horizon_h;
 
@@ -166,6 +188,11 @@ export function Gantt(props: GanttProps) {
   const [hover, setHover] = useState<HoverState | null>(null);
   const [focusKey, setFocusKey] = useState<string | null>(null);
   const failedSet = useMemo(() => new Set(failedRobots ?? []), [failedRobots]);
+  const failedAt = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const f of failures ?? []) if (Number.isFinite(f.t_h) && !m.has(f.robot)) m.set(f.robot, f.t_h);
+    return m;
+  }, [failures]);
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -219,8 +246,8 @@ export function Gantt(props: GanttProps) {
 
   const hasAnnot = nowH !== undefined || (markers?.length ?? 0) > 0;
   const M = compact
-    ? { rowH: 22, barH: 14, labelW: 66, padR: 16, dayBand: 14, tickBand: 14, font: 10, minTickPx: 36 }
-    : { rowH: 34, barH: 22, labelW: 110, padR: 24, dayBand: 18, tickBand: 18, font: 11, minTickPx: 44 };
+    ? { rowH: 24, barH: 16, labelW: 70, padR: 16, dayBand: 14, tickBand: 14, font: 11, tick: 11, minTickPx: 36, stripe: 3 }
+    : { rowH: 36, barH: 24, labelW: 124, padR: 24, dayBand: 18, tickBand: 18, font: 12, tick: 11, minTickPx: 44, stripe: 3 };
   const annotBand = hasAnnot ? (compact ? 14 : 16) : 0;
   const headerH = M.dayBand + M.tickBand + annotBand;
   const bodyH = Math.max(model.rows.length, 1) * M.rowH;
@@ -271,9 +298,11 @@ export function Gantt(props: GanttProps) {
     days.push({ k, x0, x1, label: k % labelEvery === 0 && x1 - x0 >= (compact ? 22 : 34) });
   }
 
+  // the deadline label lives in the day band of the header (never over a bar); it hangs left
+  // of its line when there is room, else right of it
   const deadlineX = x(horizonH);
   const deadlineLabel = `deadline ${fmtH(horizonH)} h`;
-  const deadlineLabelW = textWidth(deadlineLabel, M.font - 1);
+  const deadlineLabelW = textWidth(deadlineLabel, M.tick);
   const deadlineAnchorEnd = deadlineX - M.labelW > deadlineLabelW + 8;
   const deadlineBox: [number, number] | null = model.deadlineInPlot
     ? deadlineAnchorEnd
@@ -281,7 +310,7 @@ export function Gantt(props: GanttProps) {
       : [deadlineX + 4, deadlineX + 4 + deadlineLabelW]
     : null;
 
-  type Annot = { t: number; label: string; line: string; text: string; group?: string };
+  type Annot = { t: number; label: string; line: string; text: string; group?: string; now?: boolean };
   const annots: Annot[] = (markers ?? []).map((m) => ({
     t: m.t_h,
     label: m.label,
@@ -289,7 +318,7 @@ export function Gantt(props: GanttProps) {
     text: m.color ?? INK,
     group: m.group,
   }));
-  if (nowH !== undefined) annots.push({ t: nowH, label: `now ${fmtH(nowH)} h`, line: NOW, text: NOW_TEXT });
+  if (nowH !== undefined) annots.push({ t: nowH, label: `now ${fmtH(nowH)} h`, line: NOW, text: NOW, now: true });
   annots.sort((a, b) => a.t - b.t);
   // every marker gets its line; a group with more than three markers gets one label carrying
   // the count (at its first line), since a stack of "task overrun" labels reads as nothing
@@ -315,7 +344,7 @@ export function Gantt(props: GanttProps) {
   let lastRight = -Infinity;
   for (const a of labelled) {
     const lx = x(a.t);
-    const w = textWidth(a.label, M.font - 1) + 6;
+    const w = textWidth(a.label, M.tick) + 6;
     let tx = Math.max(lx + 4, lastRight + 6);
     let anchor: "start" | "end" = "start";
     if (tx + w > rightEdge) {
@@ -336,7 +365,7 @@ export function Gantt(props: GanttProps) {
   // ---- tooltip
   const hoverEntry = hover ? model.entries.find((e) => entryKey(e) === hover.key) : undefined;
   const hoverTask = hoverEntry ? model.taskMap.get(hoverEntry.task) : undefined;
-  const tipW = compact ? 230 : 280;
+  const tipW = compact ? 240 : 300;
   const tipStyle = hover
     ? {
         left: Math.max(0, Math.min(hover.x + 14, hover.wrapW - tipW)),
@@ -368,27 +397,29 @@ export function Gantt(props: GanttProps) {
   };
 
   const visibleBodyH = scrollable ? maxBodyH : bodyH;
+  const dimToX = dimBeforeNow && nowH !== undefined ? Math.min(Math.max(x(nowH), M.labelW), plotRight) : null;
+  const hasFailureMarks = failedAt.size > 0;
 
   return (
     <div
       ref={wrapRef}
       role="figure"
       aria-label={title ?? "Schedule Gantt chart"}
-      className={`relative w-full min-w-0 text-slate-200 ${compact ? "text-[11px]" : "text-xs"}`}
+      className={`relative w-full min-w-0 text-fg ${compact ? "text-[11px]" : "text-xs"}`}
       style={{ fontVariantNumeric: "tabular-nums" }}
     >
       {/* header: title + summary */}
       <div className="mb-1.5 flex flex-wrap items-baseline gap-x-3 gap-y-1">
         {title ? <h3 className={`font-medium ${compact ? "text-xs" : "text-sm"}`}>{title}</h3> : null}
-        <div className="ml-auto flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-slate-400">
+        <div className="ml-auto flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted">
           <span>
-            makespan <b className="font-semibold text-slate-200">{fmtH(model.makespan)} h</b>
+            makespan <b className="font-semibold text-fg">{fmtH(model.makespan)} h</b>
           </span>
           <span>· {schedule.status}</span>
           <span>· {model.entries.length} {model.entries.length === 1 ? "task" : "tasks"}</span>
           {!model.deadlineInPlot ? (
             <span
-              className="rounded border border-red-400/40 bg-red-400/10 px-1.5 py-px text-red-200"
+              className="rounded border border-white/15 bg-white/5 px-1.5 py-px text-[11px] text-muted"
               title="The deadline is more than three times the plotted span, so it is not drawn as a line."
             >
               deadline {fmtH(horizonH)} h · off chart
@@ -410,12 +441,12 @@ export function Gantt(props: GanttProps) {
                     <rect x={d.x0} y={0} width={d.x1 - d.x0} height={headerH} fill={BAND} />
                   ) : null}
                   {d.label &&
-                  !(deadlineBox && d.x0 + 4 < deadlineBox[1] && d.x0 + 4 + textWidth("Day 10", M.font - 1) > deadlineBox[0]) ? (
+                  !(deadlineBox && d.x0 + 4 < deadlineBox[1] && d.x0 + 4 + textWidth("Day 10", M.tick) > deadlineBox[0]) ? (
                     <text
                       x={d.x0 + 4}
                       y={M.dayBand / 2}
                       dominantBaseline="central"
-                      fontSize={M.font - 1}
+                      fontSize={M.tick}
                       fill={MUTED}
                     >
                       {compact ? `D${d.k + 1}` : `Day ${d.k + 1}`}
@@ -435,7 +466,7 @@ export function Gantt(props: GanttProps) {
                 y={M.dayBand + M.tickBand / 2}
                 textAnchor="end"
                 dominantBaseline="central"
-                fontSize={M.font - 1}
+                fontSize={M.tick}
                 fill={FAINT}
               >
                 h
@@ -454,7 +485,7 @@ export function Gantt(props: GanttProps) {
                     y={M.dayBand + M.tickBand / 2 - 1}
                     textAnchor="middle"
                     dominantBaseline="central"
-                    fontSize={M.font - 1}
+                    fontSize={M.tick}
                     fill={MUTED}
                   >
                     {t}
@@ -476,7 +507,8 @@ export function Gantt(props: GanttProps) {
                     y={M.dayBand / 2}
                     textAnchor={deadlineAnchorEnd ? "end" : "start"}
                     dominantBaseline="central"
-                    fontSize={M.font - 1}
+                    fontSize={M.tick}
+                    fontWeight={600}
                     fill={DEADLINE_TEXT}
                   >
                     {deadlineLabel}
@@ -491,7 +523,7 @@ export function Gantt(props: GanttProps) {
                   y1={M.dayBand + M.tickBand}
                   y2={headerH}
                   stroke={a.line}
-                  strokeWidth={a.line === NOW ? 1.5 : 1}
+                  strokeWidth={a.now ? 1.5 : 1}
                 />
               ))}
               {placedAnnots.map((a, i) => (
@@ -501,7 +533,7 @@ export function Gantt(props: GanttProps) {
                   y={M.dayBand + M.tickBand + annotBand / 2}
                   textAnchor={a.anchor}
                   dominantBaseline="central"
-                  fontSize={M.font - 1}
+                  fontSize={M.tick}
                   fontWeight={600}
                   fill={a.text}
                 >
@@ -575,13 +607,14 @@ export function Gantt(props: GanttProps) {
               ))}
               <line x1={M.labelW - 0.5} x2={M.labelW - 0.5} y1={0} y2={bodyH} stroke={GRID} />
 
-              {/* rows: label gutter + separators */}
+              {/* rows: type stripe + label gutter + separators */}
               {model.rows.map((r, i) => {
                 const cy = i * M.rowH + M.rowH / 2;
                 const idle = !model.busyRobots.has(r.id);
-                const failed = failedSet.has(r.id);
+                const failed = failedSet.has(r.id) || failedAt.has(r.id);
+                const typeColor = robotTypeColor(r.type ?? "");
                 return (
-                  <g key={r.id} opacity={failed ? 0.55 : idle ? 0.6 : 1}>
+                  <g key={r.id} opacity={failed ? 0.85 : idle ? 0.6 : 1}>
                     <line
                       x1={0}
                       x2={width}
@@ -589,40 +622,41 @@ export function Gantt(props: GanttProps) {
                       y2={(i + 1) * M.rowH - 0.5}
                       stroke={GRID}
                     />
-                    <circle cx={10} cy={compact ? cy : cy - 5} r={compact ? 3.5 : 4} fill={robotTypeColor(r.type ?? "")} />
+                    {/* thin left stripe in the robot-type colour */}
+                    <rect x={0} y={i * M.rowH + 2} width={M.stripe} height={M.rowH - 4} rx={1} fill={typeColor} />
+                    <circle cx={13} cy={compact ? cy : cy - 6} r={compact ? 3.5 : 4} fill={typeColor} />
                     <text
-                      x={19}
-                      y={compact ? cy : cy - 5}
+                      x={22}
+                      y={compact ? cy : cy - 6}
                       dominantBaseline="central"
                       fontSize={M.font}
                       fontWeight={600}
-                      fill={failed ? DEADLINE_TEXT : INK}
-                      textDecoration={failed ? "line-through" : undefined}
+                      fill={failed ? FAILED : INK}
                     >
                       {r.id}
                     </text>
                     {!compact ? (
-                      <text x={19} y={cy + 8} dominantBaseline="central" fontSize={9} fill={MUTED}>
+                      <text x={22} y={cy + 9} dominantBaseline="central" fontSize={M.tick} fill={MUTED}>
                         {r.type ?? "unknown robot"}
                       </text>
                     ) : null}
-                    {failed ? (
+                    {failed && !failedAt.has(r.id) ? (
                       <text
                         x={M.labelW + 6}
                         y={cy}
                         dominantBaseline="central"
-                        fontSize={M.font - 1}
+                        fontSize={M.tick}
                         fontWeight={600}
-                        fill={DEADLINE_TEXT}
+                        fill={FAILED}
                       >
                         failed
                       </text>
-                    ) : idle && !compact ? (
+                    ) : idle && !failed && !compact ? (
                       <text
                         x={M.labelW + 6}
                         y={cy}
                         dominantBaseline="central"
-                        fontSize={M.font - 1}
+                        fontSize={M.tick}
                         fontStyle="italic"
                         fill={FAINT}
                       >
@@ -656,7 +690,14 @@ export function Gantt(props: GanttProps) {
                 const w = Math.max(x(e.end_h) - 1 - x0, 2);
                 const y0 = row * M.rowH + (M.rowH - M.barH) / 2;
                 const fill = task ? zoneColor(task.zone, model.zoneIds) : MISSING;
-                const fits = textWidth(e.task, M.font) + 10 <= w;
+                // the failed robot's X sits on its row at the failure hour: a bar it falls in
+                // keeps its label clear of the mark
+                const failT = failedAt.get(e.robot);
+                const labelAvail =
+                  failT !== undefined && e.start_h < failT && failT < e.end_h
+                    ? Math.min(w - 10, x(failT) - 10 - x0 - 5)
+                    : w - 10;
+                const text = barLabel(e.task, task?.name, labelAvail, M.font);
                 const isSel = selected === e.task;
                 const ringed = isSel || highlightSet.has(e.task);
                 const focused = focusKey === key;
@@ -725,23 +766,38 @@ export function Gantt(props: GanttProps) {
                       strokeWidth={1}
                       strokeOpacity={hovered ? 0.9 : 0.6}
                     />
-                    {fits ? (
-                      <text
-                        x={x0 + w / 2}
-                        y={y0 + M.barH / 2}
-                        textAnchor="middle"
-                        dominantBaseline="central"
-                        fontSize={M.font}
-                        fontWeight={600}
-                        fill={inkFor(fill)}
-                        pointerEvents="none"
-                      >
-                        {e.task}
-                      </text>
+                    {text ? (
+                      // a nested svg clips the label to the bar whatever the font metrics do
+                      <svg x={x0} y={y0} width={w} height={M.barH} overflow="hidden" pointerEvents="none">
+                        <text
+                          x={5}
+                          y={M.barH / 2}
+                          dominantBaseline="central"
+                          fontSize={M.font}
+                          fontWeight={500}
+                          fill={inkFor(fill)}
+                        >
+                          <tspan fontWeight={700}>{e.task}</tspan>
+                          {text.length > e.task.length ? <tspan> {text.slice(e.task.length + 1)}</tspan> : null}
+                        </text>
+                      </svg>
                     ) : null}
                   </g>
                 );
               })}
+
+              {/* work left of "now" is history: dim it (bars, bands and all) */}
+              {dimToX !== null && dimToX > M.labelW ? (
+                <rect
+                  x={M.labelW}
+                  y={0}
+                  width={dimToX - M.labelW}
+                  height={bodyH}
+                  fill={SURFACE}
+                  opacity={0.55}
+                  pointerEvents="none"
+                />
+              ) : null}
 
               {/* precedence arrows for the selected task */}
               {selEntry && selTask
@@ -792,18 +848,56 @@ export function Gantt(props: GanttProps) {
                   y1={0}
                   y2={bodyH}
                   stroke={a.line}
-                  strokeWidth={a.line === NOW ? 1.5 : 1}
+                  strokeWidth={a.now ? 1.5 : 1}
                   strokeOpacity={0.9}
                   pointerEvents="none"
                 />
               ))}
+
+              {/* failed robots: a red X on the axis at the failure hour, "failed at <t> h" next to it */}
+              {model.rows.map((r, i) => {
+                const t = failedAt.get(r.id);
+                if (t === undefined) return null;
+                const cy = i * M.rowH + M.rowH / 2;
+                const fx = Math.min(Math.max(x(t), M.labelW + 6), plotRight - 6);
+                const s = compact ? 4 : 5;
+                const text = `failed at ${fmtH(t)} h`;
+                const tw = textWidth(text, M.tick);
+                const right = fx + s + 5 + tw <= plotRight;
+                return (
+                  <g key={`fail-${r.id}`} pointerEvents="none" aria-hidden>
+                    <title>{`${r.id} · ${text}`}</title>
+                    <circle cx={fx} cy={cy} r={s + 3} fill={SURFACE} opacity={0.85} />
+                    <path
+                      d={`M${fx - s},${cy - s} L${fx + s},${cy + s} M${fx + s},${cy - s} L${fx - s},${cy + s}`}
+                      stroke={FAILED}
+                      strokeWidth={2.2}
+                      strokeLinecap="round"
+                    />
+                    <text
+                      x={right ? fx + s + 5 : fx - s - 5}
+                      y={cy}
+                      textAnchor={right ? "start" : "end"}
+                      dominantBaseline="central"
+                      fontSize={M.tick}
+                      fontWeight={600}
+                      fill={FAILED}
+                      stroke={SURFACE}
+                      strokeWidth={3}
+                      paintOrder="stroke"
+                    >
+                      {text}
+                    </text>
+                  </g>
+                );
+              })}
             </svg>
         )}
       </div>
 
       {/* legend */}
       {showLegend ? (
-        <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-slate-400">
+        <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted">
           {model.legendZones.map((z) => (
             <span key={z} className="inline-flex items-center gap-1">
               <span
@@ -819,6 +913,7 @@ export function Gantt(props: GanttProps) {
               not in task graph
             </span>
           ) : null}
+          <span className="text-dim">bars = zone · dot and stripe = robot type</span>
           {model.deadlineInPlot ? (
             <span className="ml-auto inline-flex items-center gap-1">
               <span className="inline-block w-4 border-t border-dashed" style={{ borderColor: DEADLINE }} />
@@ -831,6 +926,11 @@ export function Gantt(props: GanttProps) {
               now
             </span>
           ) : null}
+          {hasFailureMarks ? (
+            <span className="inline-flex items-center gap-1" style={{ color: FAILED }}>
+              <span aria-hidden className="font-bold">✕</span> robot failed
+            </span>
+          ) : null}
         </div>
       ) : null}
 
@@ -838,7 +938,7 @@ export function Gantt(props: GanttProps) {
       {hover && hoverEntry && tipStyle ? (
         <div
           role="tooltip"
-          className="pointer-events-none absolute z-20 rounded-md border border-white/15 bg-[#111827]/95 px-2.5 py-2 text-[11px] leading-snug text-slate-200 shadow-lg shadow-black/40 backdrop-blur"
+          className="pointer-events-none absolute z-20 rounded-md border border-white/15 bg-raised/95 px-2.5 py-2 text-[11px] leading-snug text-fg shadow-lg shadow-black/40 backdrop-blur"
           style={tipStyle}
         >
           <div className={`flex items-baseline gap-1.5 ${compact ? "whitespace-nowrap" : ""}`}>
@@ -847,44 +947,58 @@ export function Gantt(props: GanttProps) {
               {hoverTask ? hoverTask.name : "not in the task graph"}
             </span>
           </div>
-          <div className="mt-1 flex flex-wrap items-center gap-x-2 text-slate-400">
+          <div className="mt-1 flex flex-wrap items-center gap-x-2 text-muted">
             <span className="inline-flex items-center gap-1">
               <span
                 className="inline-block h-2 w-2 rounded-full"
                 style={{ background: robotTypeColor(robotTypeOf(hoverEntry.robot) ?? "") }}
               />
-              <span className="text-slate-200">{hoverEntry.robot}</span>
+              <span className="text-fg">{hoverEntry.robot}</span>
               {robotTypeOf(hoverEntry.robot) ? <span>{robotTypeOf(hoverEntry.robot)}</span> : null}
             </span>
             <span>
-              <span className="text-slate-200">
+              <span className="text-fg">
                 {fmtH(hoverEntry.start_h)}–{fmtH(hoverEntry.end_h)} h
               </span>{" "}
               ({fmtH(hoverEntry.end_h - hoverEntry.start_h)} h)
             </span>
           </div>
           {hoverTask ? (
-            <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-slate-400">
+            <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-muted">
               <span>
-                <span className="text-slate-200">{fmtWh(hoverTask.energy_wh)}</span> Wh
+                <span className="text-fg">{fmtWh(hoverTask.energy_wh)}</span> Wh
               </span>
               <span className="inline-flex items-center gap-1">
                 <span
                   className="inline-block h-2 w-2 rounded-sm"
                   style={{ background: zoneColor(hoverTask.zone, model.zoneIds) }}
                 />
-                zone <span className="text-slate-200">{hoverTask.zone}</span>
+                zone <span className="text-fg">{hoverTask.zone}</span>
               </span>
               {hoverTask.duration_h !== hoverEntry.end_h - hoverEntry.start_h ? (
                 <span>planned {fmtH(hoverTask.duration_h)} h</span>
               ) : null}
               <span className={compact ? "whitespace-nowrap" : ""}>
                 after{" "}
-                <span className="text-slate-200">
+                <span className="text-fg">
                   {hoverTask.after.length > 0 ? hoverTask.after.join(", ") : "none"}
                 </span>
               </span>
               {hoverTask.structure && !compact ? <span>structure {hoverTask.structure}</span> : null}
+            </div>
+          ) : null}
+          {hoverTask && hoverTask.quantity !== null && hoverTask.unit ? (
+            <div className="mt-0.5 text-muted">
+              <span className="text-fg">
+                {fmtH(hoverTask.quantity)} {hoverTask.unit === "m3" ? "m³" : hoverTask.unit === "m2" ? "m²" : hoverTask.unit}
+              </span>
+              {hoverTask.basis ? ` · ${hoverTask.basis}` : ""}
+              {hoverTask.estimated_duration_h !== null && hoverTask.estimated_energy_wh !== null ? (
+                <span>
+                  {" "}
+                  · model estimate {fmtH(hoverTask.estimated_duration_h)} h / {fmtWh(hoverTask.estimated_energy_wh)} Wh
+                </span>
+              ) : null}
             </div>
           ) : null}
         </div>

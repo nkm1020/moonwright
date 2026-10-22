@@ -2,7 +2,9 @@
 
 /* Mission-console tokens. Semantic colours (ok/fail/warn/info) mirror src/lib/palette.ts
    (STATUS_COLORS.working/failed, EVENT_COLORS.task_overrun, STATUS_COLORS.moving) so the
-   shell agrees with the Gantt, the replay and the event list. */
+   shell agrees with the Gantt, the replay and the event list.
+   Colour discipline: --accent (amber) is for primary actions and the current stage only;
+   charts take their colours from palette.ts (saturated robot types, muted zones). */
 :root {
   color-scheme: dark;
   --surface: #0b0f14;
@@ -11,12 +13,16 @@
   --line: rgb(255 255 255 / 0.1);
   --fg: #e6edf3;
   --fg-muted: #9aa7b4;
-  --fg-dim: #66727f;
+  /* 4.9:1 on --raised (the old #66727f measured 3.6:1 under 11 px labels) */
+  --fg-dim: #7b8896;
   --accent: #f59e0b;
   --ok: #22c55e;
   --fail: #ef4444;
   --warn: #eab308;
   --info: #38bdf8;
+  /* Monte Carlo histogram bins (palette.ts HISTOGRAM_COLORS): inside the horizon / past it */
+  --hist-in: #60a5fa;
+  --hist-late: #ef4444;
 }
 
 @theme inline {
@@ -32,6 +38,8 @@
   --color-fail: var(--fail);
   --color-warn: var(--warn);
   --color-info: var(--info);
+  --color-hist-in: var(--hist-in);
+  --color-hist-late: var(--hist-late);
   --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
   --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
 }
@@ -54,6 +62,13 @@ body {
   background: color-mix(in oklab, var(--accent) 35%, transparent);
 }
 
+/* Keyboard focus: one outline in the accent for every control that does not draw its own
+   ring (buttons with `focus:outline-none` keep their ring classes). */
+:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--accent) 80%, transparent);
+  outline-offset: 2px;
+}
+
 * {
   scrollbar-width: thin;
   scrollbar-color: rgb(255 255 255 / 0.15) transparent;
@@ -62,6 +77,22 @@ body {
 input[type="number"]::-webkit-inner-spin-button,
 input[type="number"]::-webkit-outer-spin-button {
   opacity: 0.35;
+}
+
+/* keyboard shortcut hint ("⌘ Enter") */
+kbd.mw-kbd {
+  display: inline-block;
+  min-width: 1.4em;
+  padding: 0 0.35em;
+  border: 1px solid rgb(255 255 255 / 0.18);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 16px;
+  text-align: center;
+  color: var(--fg-muted);
+  background: rgb(255 255 255 / 0.04);
 }
 
 @keyframes mw-pulse {

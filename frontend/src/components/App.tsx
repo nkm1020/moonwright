@@ -4,7 +4,7 @@
  * brief -> requirements -> plan (streamed trace) -> simulate -> robustness. All backend calls
  * happen here; the stage components are presentational.
  */
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type ReactNode } from "react";
 import type {
   ExampleBrief,
   Health,
@@ -17,9 +17,12 @@ import type {
   SimResult,
   StructureResponse,
   Task,
+  VerificationReceipt as ReceiptData,
 } from "@/lib/types";
+import { lastReceipt } from "@/lib/types";
 import {
   API_BASE,
+  ApiError,
   SAMPLE_IDS,
   errorMessage,
   getExamples,
@@ -30,18 +33,20 @@ import {
   postMonteCarlo,
   postSimulate,
   postStructure,
+  type SampleId,
 } from "@/lib/api";
 import { planStream } from "@/lib/sse";
 import { allTasks, tasksById } from "@/lib/tasks";
 import { EVENT_COLORS, robotTypeColor } from "@/lib/palette";
-import { fmtHours, fmtPercent, fmtSeconds, fmtWh, plural, titleFromBrief } from "@/lib/format";
+import { fmtHours, fmtPercent, fmtSeconds, fmtWh, plural, tidyHint, titleFromBrief } from "@/lib/format";
 import { TopBar, type FlowStage, type HealthStatus } from "./TopBar";
-import { BriefForm } from "./BriefForm";
+import { BriefForm, stripMarkdown } from "./BriefForm";
 import { RequirementsCard } from "./RequirementsCard";
 import { ProgressTrace } from "./ProgressTrace";
+import { VerificationReceipt } from "./VerificationReceipt";
 import { ExplanationCard } from "./ExplanationCard";
 import { MonteCarloPanel } from "./MonteCarloPanel";
-import { Badge, Card, Dot, Notice, Section, Stat, type Tone } from "./Section";
+import { Badge, Card, CurrentStageContext, Dot, IconChevron, Notice, Section, Stat, cx, type Tone } from "./Section";
 import { Gantt, type GanttMarker } from "./Gantt";
 import { TaskTable } from "./TaskTable";
 import { DEFAULT_SIMULATE_OPTIONS, SimControls, toSimulateRequest, type SimulateOptions } from "./SimControls";
@@ -65,9 +70,12 @@ function idle<T>(): Async<T> {
 interface PlanState extends Async<PlanResult> {
   steps: LoopStep[];
   startedAt: number | null;
+  /** The example the plan's requirements came from (sent as brief_id to the simulator and
+   *  Monte Carlo so recorded replan answers are looked up under the right key). */
+  briefId: string | null;
 }
 
-const idlePlan = (): PlanState => ({ ...idle<PlanResult>(), steps: [], startedAt: null });
+const idlePlan = (): PlanState => ({ ...idle<PlanResult>(), steps: [], startedAt: null, briefId: null });
 
 interface State {
   healthStatus: HealthStatus;
@@ -83,6 +91,9 @@ interface State {
   requirementsSource: "model" | "sample" | null;
   /** Bumped whenever requirements arrive from outside (remounts the editor). */
   requirementsVersion: number;
+  /** The brief (example id and text) the requirements were structured from; another brief in
+   *  the textarea makes the card stale (planning waits for a re-structure). */
+  requirementsBrief: { id: string | null; text: string } | null;
   maxRepairs: number;
   plan: PlanState;
   selectedTask: string | null;
@@ -105,6 +116,7 @@ const initialState: State = {
   requirementsOriginal: null,
   requirementsSource: null,
   requirementsVersion: 0,
+  requirementsBrief: null,
   maxRepairs: 3,
   plan: idlePlan(),
   selectedTask: null,
@@ -123,8 +135,10 @@ type Action =
   | { type: "structureDone"; response: StructureResponse }
   | { type: "structureError"; message: string }
   | { type: "requirements"; value: Requirements }
+  /** Requirements handed in from outside the editor (the Monte Carlo what-if fleet). */
+  | { type: "adoptRequirements"; value: Requirements }
   | { type: "maxRepairs"; value: number }
-  | { type: "planStart"; startedAt: number }
+  | { type: "planStart"; startedAt: number; briefId: string | null }
   | { type: "planStep"; step: LoopStep }
   | { type: "planDone"; result: PlanResult }
   | { type: "planError"; message: string }
@@ -137,7 +151,7 @@ type Action =
   | { type: "mcDone"; result: MonteCarloResult }
   | { type: "mcError"; message: string }
   | { type: "sampleStart" }
-  | { type: "sampleDone"; plan: PlanResult; sim: SimResult; id: string }
+  | { type: "sampleDone"; plan: PlanResult; sim: SimResult | null; mc: MonteCarloResult | null; id: SampleId }
   | { type: "sampleError"; message: string };
 
 function reducer(state: State, action: Action): State {
@@ -162,7 +176,7 @@ function reducer(state: State, action: Action): State {
       if (!response.requirements) {
         const f = response.step.failure;
         const why = f
-          ? `${f.hint || f.kind}${f.conflicts.length ? ` [${f.conflicts.join(", ")}]` : ""}`
+          ? `${tidyHint(f.hint) || f.kind}${f.conflicts.length ? ` [${f.conflicts.join(", ")}]` : ""}`
           : response.step.message || "the model returned no requirements";
         return { ...state, structure: { status: "error", result: response, error: why } };
       }
@@ -173,6 +187,7 @@ function reducer(state: State, action: Action): State {
         requirementsOriginal: response.requirements,
         requirementsSource: "model",
         requirementsVersion: state.requirementsVersion + 1,
+        requirementsBrief: { id: state.briefId, text: state.brief },
         plan: idlePlan(),
         sim: idle(),
         mc: idle(),
@@ -185,16 +200,18 @@ function reducer(state: State, action: Action): State {
       return { ...state, structure: { status: "error", result: null, error: action.message } };
     case "requirements":
       return { ...state, requirements: action.value };
+    case "adoptRequirements":
+      // the editor is keyed by requirementsVersion: bump it so the new fleet shows up; the
+      // original stays, so the "edited by you" badge marks the spares as a change
+      return { ...state, requirements: action.value, requirementsVersion: state.requirementsVersion + 1 };
     case "maxRepairs":
       return { ...state, maxRepairs: action.value };
     case "planStart":
+      // the previous plan, its simulation and its Monte Carlo stay on screen (dimmed) until the
+      // new result arrives; a request that fails leaves them untouched
       return {
         ...state,
-        plan: { status: "running", result: null, error: null, steps: [], startedAt: action.startedAt },
-        sim: idle(),
-        mc: idle(),
-        selectedTask: null,
-        sample: { ...state.sample, note: null },
+        plan: { ...state.plan, status: "running", error: null, steps: [], startedAt: action.startedAt, briefId: action.briefId },
       };
     case "planStep":
       if (state.plan.status !== "running") return state;
@@ -209,6 +226,10 @@ function reducer(state: State, action: Action): State {
           error: null,
           steps: action.result.steps.length ? action.result.steps : state.plan.steps,
         },
+        sim: idle(),
+        mc: idle(),
+        selectedTask: null,
+        sample: { ...state.sample, note: null },
       };
     case "planError":
       return { ...state, plan: { ...state.plan, status: "error", error: action.message } };
@@ -216,41 +237,53 @@ function reducer(state: State, action: Action): State {
       return { ...state, selectedTask: action.id };
     case "simOptions":
       return { ...state, simOptions: action.value };
+    // a run in progress or a failed request keeps the previous result on screen; only a new
+    // result replaces it
     case "simStart":
-      return { ...state, sim: { status: "running", result: null, error: null } };
+      return { ...state, sim: { status: "running", result: state.sim.result, error: null } };
     case "simDone":
       return { ...state, sim: { status: "done", result: action.result, error: null } };
     case "simError":
-      return { ...state, sim: { status: "error", result: null, error: action.message } };
+      return { ...state, sim: { status: "error", result: state.sim.result, error: action.message } };
     case "mcStart":
-      return { ...state, mc: { status: "running", result: null, error: null } };
+      return { ...state, mc: { status: "running", result: state.mc.result, error: null } };
     case "mcDone":
       return { ...state, mc: { status: "done", result: action.result, error: null } };
     case "mcError":
-      return { ...state, mc: { status: "error", result: null, error: action.message } };
+      return { ...state, mc: { status: "error", result: state.mc.result, error: action.message } };
     case "sampleStart":
       return { ...state, sample: { loading: true, note: null, error: null } };
     case "sampleDone": {
-      const failures = action.sim.events
+      const { plan, sim, mc, id } = action;
+      const failures = (sim?.events ?? [])
         .filter((e) => e.kind === "robot_failure" && e.robot !== null)
         .map((e) => ({ robot: e.robot as string, t_h: e.t_h }));
+      const parts = ["plan", sim ? "simulation" : null, mc ? "Monte Carlo" : null]
+        .filter((f): f is string => f !== null)
+        .join(" + ");
+      // the textarea holds plain prose: the example's text when the backend sent it, else the
+      // recorded brief, markdown markers stripped either way
+      const example = state.examples.find((ex) => ex.id === id);
+      const rawBrief = example?.text ?? plan.requirements.source_brief ?? null;
+      const brief = rawBrief ? stripMarkdown(rawBrief) : state.brief;
       return {
         ...state,
-        brief: action.plan.requirements.source_brief ?? state.brief,
-        briefId: action.id,
+        brief,
+        briefId: id,
         structure: idle(),
-        requirements: action.plan.requirements,
-        requirementsOriginal: action.plan.requirements,
+        requirements: plan.requirements,
+        requirementsOriginal: plan.requirements,
         requirementsSource: "sample",
         requirementsVersion: state.requirementsVersion + 1,
-        plan: { status: "done", result: action.plan, error: null, steps: action.plan.steps, startedAt: null },
+        requirementsBrief: { id, text: brief },
+        plan: { status: "done", result: plan, error: null, steps: plan.steps, startedAt: null, briefId: id },
         selectedTask: null,
         simOptions: { ...DEFAULT_SIMULATE_OPTIONS, failures },
-        sim: { status: "done", result: action.sim, error: null },
-        mc: idle(),
+        sim: sim ? { status: "done", result: sim, error: null } : idle(),
+        mc: mc ? { status: "done", result: mc, error: null } : idle(),
         sample: {
           loading: false,
-          note: `Sample result loaded from /samples/${action.id}.plan.json and .sim.json; no backend call was made.`,
+          note: `Recorded demo · ${parts}`,
           error: null,
         },
       };
@@ -263,11 +296,13 @@ function reducer(state: State, action: Action): State {
 }
 
 function deriveStage(s: State): { stage: FlowStage; busy: boolean } {
+  // a plan in progress comes first: the previous plan's simulation / Monte Carlo may still be
+  // on screen underneath it
+  if (s.plan.status === "running") return { stage: "plan", busy: true };
   if (s.mc.status === "running") return { stage: "robustness", busy: true };
   if (s.mc.result) return { stage: "robustness", busy: false };
   if (s.sim.status === "running") return { stage: "simulate", busy: true };
   if (s.sim.result) return { stage: "simulate", busy: false };
-  if (s.plan.status === "running") return { stage: "plan", busy: true };
   if (s.plan.result || s.plan.status === "error") return { stage: "plan", busy: false };
   if (s.structure.status === "running") return { stage: "requirements", busy: true };
   if (s.requirements) return { stage: "requirements", busy: false };
@@ -280,10 +315,40 @@ function scrollToSection(id: string) {
   }, 80);
 }
 
+/** Recorded MonteCarloResult next to a sample plan (only landing_pad ships one). */
+async function loadSampleMonteCarlo(id: SampleId): Promise<MonteCarloResult> {
+  const path = `/samples/${id}.mc.json`;
+  let res: Response;
+  try {
+    res = await fetch(path, { headers: { accept: "application/json" } });
+  } catch (e) {
+    throw new ApiError(0, `could not load ${path} (${errorMessage(e)})`);
+  }
+  if (!res.ok) throw new ApiError(res.status, `could not load ${path}`);
+  return (await res.json()) as MonteCarloResult;
+}
+
+/** A sample's optional companion file: null when the sample does not ship it (404), any
+ *  other failure propagates. */
+async function optionalSample<T>(load: Promise<T>): Promise<T | null> {
+  try {
+    return await load;
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 404) return null;
+    throw e;
+  }
+}
+
 // ------------------------------------------------------------------ component
 export function App() {
   const [state, dispatch] = useReducer(reducer, initialState);
   const planAbort = useRef<AbortController | null>(null);
+  // the requirements belong to the brief they were structured from: another example in the
+  // textarea, or edited text, means the card no longer matches what is on screen
+  const requirementsStale =
+    state.requirements !== null &&
+    state.requirementsBrief !== null &&
+    (state.requirementsBrief.id !== state.briefId || state.requirementsBrief.text.trim() !== state.brief.trim());
 
   const refreshHealth = useCallback(async (signal?: AbortSignal) => {
     try {
@@ -311,14 +376,16 @@ export function App() {
           .map((p, i) => ({
             id: SAMPLE_IDS[i],
             title: titleFromBrief(p.requirements.source_brief ?? "", SAMPLE_IDS[i]),
-            text: p.requirements.source_brief ?? "",
+            // mirrors the backend's ExampleBrief: plain prose in `text`, the file as written in
+            // `text_markdown`
+            text: stripMarkdown(p.requirements.source_brief ?? ""),
             text_markdown: p.requirements.source_brief ?? "",
           }))
           .filter((ex) => ex.text.length > 0);
         dispatch({
           type: "examples",
           examples,
-          note: "backend unreachable: example texts taken from the bundled sample plans",
+          note: "backend offline: example briefs taken from the bundled recordings",
         });
       } catch {
         dispatch({ type: "examples", examples: [], note: `could not load examples (${errorMessage(e)})` });
@@ -360,18 +427,21 @@ export function App() {
 
   const planWithRequirements = async () => {
     const requirements = state.requirements;
-    if (!requirements) return;
+    if (!requirements || requirementsStale) return;
     cancelPlan();
     const ctrl = new AbortController();
     planAbort.current = ctrl;
-    dispatch({ type: "planStart", startedAt: Date.now() });
+    // recorded answers are keyed by brief_id: send the id of the brief these requirements came
+    // from, never the example that merely sits in the textarea
+    const briefId = state.requirementsBrief?.id ?? null;
+    dispatch({ type: "planStart", startedAt: Date.now(), briefId });
     scrollToSection("plan");
     try {
       const result = await planStream(
         {
           requirements,
           max_repairs: state.maxRepairs,
-          ...(state.briefId ? { brief_id: state.briefId } : {}),
+          ...(briefId ? { brief_id: briefId } : {}),
         },
         (step) => {
           if (!ctrl.signal.aborted) dispatch({ type: "planStep", step });
@@ -401,7 +471,7 @@ export function App() {
       // frame_stride follows the step so that about one frame per hour is kept whatever
       // the slider says (see toSimulateRequest)
       const result = await postSimulate(
-        toSimulateRequest(plan, state.simOptions, state.briefId ? { brief_id: state.briefId } : {}),
+        toSimulateRequest(plan, state.simOptions, state.plan.briefId ? { brief_id: state.plan.briefId } : {}),
       );
       dispatch({ type: "simDone", result });
       scrollToSection("simulate");
@@ -420,12 +490,19 @@ export function App() {
     }
   };
 
-  const loadSample = async () => {
+  /** Load a recorded run from /samples into the normal state: the plan always, the simulation
+   *  and Monte Carlo result when the sample ships them (landing_pad does, tight_battery is a
+   *  plan with one repair round and no simulation). */
+  const loadSample = async (id: SampleId = "landing_pad") => {
     cancelPlan();
     dispatch({ type: "sampleStart" });
     try {
-      const [plan, sim] = await Promise.all([loadSamplePlan("landing_pad"), loadSampleSim("landing_pad")]);
-      dispatch({ type: "sampleDone", plan, sim, id: "landing_pad" });
+      const [plan, sim, mc] = await Promise.all([
+        loadSamplePlan(id),
+        optionalSample(loadSampleSim(id)),
+        optionalSample(loadSampleMonteCarlo(id)),
+      ]);
+      dispatch({ type: "sampleDone", plan, sim, mc, id });
       scrollToSection("plan");
     } catch (e) {
       dispatch({ type: "sampleError", message: errorMessage(e) });
@@ -449,6 +526,19 @@ export function App() {
   );
   const { stage, busy } = deriveStage(state);
   const verified = Boolean(planResult?.success && planResult.schedule && planResult.task_graph);
+  // the trace that goes with planResult: the streamed steps once the run is done, else the
+  // result's own steps (a previous plan kept while a new run streams or after one failed)
+  const resultSteps = useMemo(
+    () => (state.plan.status === "done" ? state.plan.steps : (planResult?.steps ?? [])),
+    [state.plan.status, state.plan.steps, planResult],
+  );
+  const receipt = useMemo<ReceiptData | null>(() => lastReceipt(resultSteps)?.receipt ?? null, [resultSteps]);
+  const planBusy = state.plan.status === "running";
+  /** a previous plan on screen while a new run streams or after a failed request */
+  const planKept = planResult !== null && state.plan.status !== "done";
+  const keptClass = planBusy ? "opacity-50 transition-opacity" : "transition-opacity";
+  const simBusy = state.sim.status === "running";
+  const planHorizonH = state.requirements?.horizon_h ?? planResult?.requirements.horizon_h ?? null;
   const highlight = useMemo(() => (state.selectedTask ? [state.selectedTask] : []), [state.selectedTask]);
   const selectTask = (id: string | null) => dispatch({ type: "selectTask", id });
   const requirementsEdited =
@@ -456,6 +546,7 @@ export function App() {
     JSON.stringify(state.requirements) !== JSON.stringify(state.requirementsOriginal);
 
   return (
+    <CurrentStageContext.Provider value={stage}>
     <div id="top" className="flex min-h-screen flex-col">
       <TopBar
         health={state.health}
@@ -463,7 +554,7 @@ export function App() {
         apiBase={API_BASE}
         stage={stage}
         busy={busy}
-        onLoadSample={loadSample}
+        onLoadSample={(id) => void loadSample(id)}
         sampleLoading={state.sample.loading}
         onRetryHealth={retryHealth}
       />
@@ -515,6 +606,8 @@ export function App() {
             onRestructure={structureBrief}
             restructuring={state.structure.status === "running"}
             canRestructure={state.brief.trim().length > 0}
+            tasks={planResult?.task_graph?.tasks ?? null}
+            staleBrief={requirementsStale}
           />
         )}
 
@@ -524,56 +617,83 @@ export function App() {
             step="03"
             title="Plan"
             subtitle="Nemotron proposes a task graph; the deterministic validator and OR-Tools CP-SAT verify precedence, one-robot-per-zone safety, per-robot no-overlap, battery budgets and the horizon. Infeasibility cores go back to the model for repair."
-            actions={state.sample.note ? <Badge tone="info">{state.sample.note}</Badge> : undefined}
+            actions={
+              planKept ? (
+                <Badge
+                  tone={planBusy ? "neutral" : "warn"}
+                  title={
+                    planBusy
+                      ? "The previous plan stays on screen until the new result arrives."
+                      : "The last planning request failed; the previous plan below is unchanged."
+                  }
+                >
+                  {planBusy ? "previous plan shown until the new one arrives" : "previous plan kept"}
+                </Badge>
+              ) : state.sample.note ? (
+                <Badge tone="info" title="Loaded from the bundled recording of this run; Nemotron and CP-SAT were not called.">
+                  {state.sample.note}
+                </Badge>
+              ) : undefined
+            }
           >
             <div className="space-y-5">
               <div className="grid grid-cols-[minmax(0,1fr)] gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
                 <ProgressTrace
                   steps={state.plan.steps}
-                  running={state.plan.status === "running"}
+                  running={planBusy}
                   startedAt={state.plan.startedAt}
-                  result={planResult}
+                  result={state.plan.status === "done" ? planResult : null}
                   error={state.plan.error}
                   onCancel={stopPlanning}
+                  horizonH={planHorizonH}
+                  tasks={planTasks}
                 />
-                {planResult && verified && <PlanSummary plan={planResult} tasks={planTasks} />}
+                {planResult && verified && (
+                  <div className={keptClass} aria-busy={planBusy || undefined}>
+                    <PlanSummary plan={planResult} tasks={planTasks} receipt={receipt} />
+                  </div>
+                )}
               </div>
 
               {planResult && verified && planResult.schedule && (
-                <>
-                  <Gantt
-                    schedule={planResult.schedule}
-                    tasks={planTasks}
-                    requirements={planResult.requirements}
-                    title={simMarkers.length > 0 ? "Verified schedule · simulation events marked" : "Verified schedule"}
-                    highlightTasks={highlight}
-                    markers={simMarkers}
-                    selectedTask={state.selectedTask}
-                    onSelectTask={selectTask}
-                  />
-                  <div className="grid grid-cols-[minmax(0,1fr)] gap-5 xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
-                    <div>
-                      <h3 className="mb-2 text-[13px] font-medium">Tasks</h3>
-                      <TaskTable
-                        tasks={planTasks}
-                        schedule={planResult.schedule}
-                        requirements={planResult.requirements}
-                        selectedTask={state.selectedTask}
-                        onSelectTask={selectTask}
-                      />
-                    </div>
-                    <ExplanationCard plan={planResult} />
-                  </div>
-                </>
+                <div className={cx("space-y-5", keptClass)} aria-busy={planBusy || undefined}>
+                  <VerificationReceipt plan={planResult} steps={resultSteps} horizonH={planHorizonH} />
+                  <Card bodyClassName="p-4 md:p-5">
+                    <Gantt
+                      schedule={planResult.schedule}
+                      tasks={planTasks}
+                      requirements={planResult.requirements}
+                      title={simMarkers.length > 0 ? "Verified schedule · simulation events marked" : "Verified schedule"}
+                      highlightTasks={highlight}
+                      markers={simMarkers}
+                      selectedTask={state.selectedTask}
+                      onSelectTask={selectTask}
+                    />
+                  </Card>
+                  <ExplanationCard plan={planResult} />
+                  <TaskTableDisclosure tasks={planTasks}>
+                    <TaskTable
+                      tasks={planTasks}
+                      schedule={planResult.schedule}
+                      requirements={planResult.requirements}
+                      selectedTask={state.selectedTask}
+                      onSelectTask={selectTask}
+                    />
+                  </TaskTableDisclosure>
+                </div>
               )}
 
-              {planResult && !verified && planResult.task_graph && (
-                <div className="grid grid-cols-[minmax(0,1fr)] gap-5 xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
-                  <div>
-                    <h3 className="mb-2 text-[13px] font-medium">Last task graph (not scheduled)</h3>
-                    <TaskTable tasks={planTasks} schedule={null} requirements={planResult.requirements} />
-                  </div>
-                  <ExplanationCard plan={planResult} />
+              {planResult && !verified && (
+                <div className={cx("space-y-5", keptClass)} aria-busy={planBusy || undefined}>
+                  <VerificationReceipt plan={planResult} steps={resultSteps} horizonH={planHorizonH} />
+                  {planResult.task_graph && (
+                    <>
+                      <ExplanationCard plan={planResult} />
+                      <TaskTableDisclosure tasks={planTasks} label="Last task graph (not scheduled)" defaultOpen>
+                        <TaskTable tasks={planTasks} schedule={null} requirements={planResult.requirements} />
+                      </TaskTableDisclosure>
+                    </>
+                  )}
                 </div>
               )}
             </div>
@@ -601,12 +721,13 @@ export function App() {
                 {state.sim.error && (
                   <Notice tone="fail" title="Simulation failed" className="mt-3">
                     {state.sim.error}
+                    {simResult && <div className="mt-1 text-xs">The previous run stays below.</div>}
                   </Notice>
                 )}
               </Card>
 
               {simResult && (
-                <>
+                <div className={cx("space-y-5", simBusy ? "opacity-50 transition-opacity" : "transition-opacity")} aria-busy={simBusy || undefined}>
                   <CompletionLine sim={simResult} horizonH={planResult.requirements.horizon_h} />
                   <ReplayPane sim={simResult} plan={planResult} tasks={everyTask} />
                   {simResult.replans.map((record, i) => (
@@ -618,7 +739,7 @@ export function App() {
                       index={i + 1}
                     />
                   ))}
-                </>
+                </div>
               )}
             </div>
           </Section>
@@ -627,25 +748,68 @@ export function App() {
         {planResult && verified && (
           <MonteCarloPanel
             plan={planResult}
-            briefId={state.briefId}
+            briefId={state.plan.briefId}
             result={state.mc.result}
             running={state.mc.status === "running"}
             error={state.mc.error}
             onRun={runMonteCarlo}
+            onAdoptRequirements={(requirements) => {
+              dispatch({ type: "adoptRequirements", value: requirements });
+              scrollToSection("requirements");
+            }}
           />
         )}
       </main>
 
-      <footer className="mt-8 border-t border-line py-5 text-center text-[11px] text-dim">
-        Moonwright · Nemotron on Nebius Token Factory + OR-Tools CP-SAT ·{" "}
-        <span className="font-mono">API {API_BASE}</span>
+      <footer className="mt-8 border-t border-line px-4 py-5 text-center text-[12px] text-muted">
+        Moonwright · Nemotron on Nebius Token Factory + OR-Tools CP-SAT
+        {process.env.NODE_ENV !== "production" && (
+          <>
+            {" · "}
+            <span className="font-mono">API {API_BASE}</span>
+          </>
+        )}
       </footer>
     </div>
+    </CurrentStageContext.Provider>
+  );
+}
+
+// ------------------------------------------------------------------ task table disclosure
+/** The task table folded under one row: "Show task table · 14 tasks · 123 h · 15,700 Wh". */
+function TaskTableDisclosure({
+  tasks,
+  label = "task table",
+  defaultOpen = false,
+  children,
+}: {
+  tasks: Task[];
+  label?: string;
+  defaultOpen?: boolean;
+  children: ReactNode;
+}) {
+  const hours = tasks.reduce((acc, t) => acc + t.duration_h, 0);
+  const wh = tasks.reduce((acc, t) => acc + t.energy_wh, 0);
+  return (
+    <details className="group rounded-lg border border-line bg-raised" open={defaultOpen || undefined}>
+      <summary className="flex cursor-pointer select-none list-none items-center gap-2 px-4 py-2.5 text-[13px] font-medium text-fg hover:bg-white/[0.03] [&::-webkit-details-marker]:hidden">
+        <IconChevron className="size-3 text-dim transition-transform group-open:rotate-90" />
+        <span className="group-open:hidden">Show {label}</span>
+        <span className="hidden group-open:inline">Hide {label}</span>
+        <span className="font-mono text-[11px] font-normal tabular-nums text-dim">
+          {plural(tasks.length, "task")} · {fmtHours(hours, 0)} · {fmtWh(wh)}
+        </span>
+      </summary>
+      <div className="border-t border-line p-4 md:p-5">{children}</div>
+    </details>
   );
 }
 
 // ------------------------------------------------------------------ plan summary
-function PlanSummary({ plan, tasks }: { plan: PlanResult; tasks: Task[] }) {
+/** Per-robot load. Battery figures come from the verification receipt when the trace carries
+ *  one (work plus the transit the robot's sequence drives, the numbers the receipt prints),
+ *  else from the task energies alone. */
+function PlanSummary({ plan, tasks, receipt }: { plan: PlanResult; tasks: Task[]; receipt: ReceiptData | null }) {
   const schedule = plan.schedule;
   if (!schedule) return null;
   const req = plan.requirements;
@@ -654,9 +818,13 @@ function PlanSummary({ plan, tasks }: { plan: PlanResult; tasks: Task[] }) {
   const rows = req.robots.map((robot) => {
     const entries = schedule.entries.filter((e) => e.robot === robot.id);
     const busy = entries.reduce((acc, e) => acc + (e.end_h - e.start_h), 0);
-    const energy = entries.reduce((acc, e) => acc + (byId[e.task]?.energy_wh ?? 0), 0);
+    const fromReceipt = receipt?.battery.find((b) => b.robot === robot.id);
+    const energy = fromReceipt
+      ? fromReceipt.used_wh
+      : entries.reduce((acc, e) => acc + (byId[e.task]?.energy_wh ?? 0), 0);
     return { robot, count: entries.length, busy, energy, ratio: robot.battery_wh > 0 ? energy / robot.battery_wh : 0 };
   });
+  const withTransit = Boolean(receipt?.travel_allowance);
   return (
     <Card
       title="Plan summary"
@@ -668,7 +836,7 @@ function PlanSummary({ plan, tasks }: { plan: PlanResult; tasks: Task[] }) {
         <Stat label="Repairs" value={plan.repairs} sub={`solver ${fmtSeconds(schedule.solve_time_s)}`} />
       </div>
       <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-white/10" aria-hidden="true">
-        <div className="h-full rounded-full bg-accent" style={{ width: `${Math.min(100, util * 100)}%` }} />
+        <div className="h-full rounded-full bg-muted" style={{ width: `${Math.min(100, util * 100)}%` }} />
       </div>
       <div className="mt-4 overflow-x-auto">
       <table className="w-full text-xs">
@@ -677,7 +845,7 @@ function PlanSummary({ plan, tasks }: { plan: PlanResult; tasks: Task[] }) {
             <th className="pb-1 font-medium">Robot</th>
             <th className="pb-1 font-medium">Tasks</th>
             <th className="pb-1 font-medium">Busy</th>
-            <th className="pb-1 font-medium">Battery budget</th>
+            <th className="pb-1 font-medium">{withTransit ? "Battery budget (incl. transit)" : "Battery budget"}</th>
           </tr>
         </thead>
         <tbody>
@@ -696,7 +864,7 @@ function PlanSummary({ plan, tasks }: { plan: PlanResult; tasks: Task[] }) {
                 <div className="flex items-center gap-2">
                   <div className="h-1.5 w-24 overflow-hidden rounded-full bg-white/10" aria-hidden="true">
                     <div
-                      className={ratio > 0.9 ? "h-full rounded-full bg-warn" : "h-full rounded-full bg-accent"}
+                      className={ratio > 0.9 ? "h-full rounded-full bg-warn" : "h-full rounded-full bg-muted"}
                       style={{ width: `${Math.min(100, ratio * 100)}%` }}
                     />
                   </div>
@@ -722,24 +890,30 @@ function ReplayPane({ sim, plan, tasks }: { sim: SimResult; plan: PlanResult; ta
   const [nowH, setNowH] = useState<number | null>(null);
   const [seek, setSeek] = useState<{ t_h: number } | null>(null);
   return (
-    <div className="grid grid-cols-[minmax(0,1fr)] gap-5 xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
-      <div>
-        <h3 className="mb-2 text-[13px] font-medium">Replay</h3>
-        <SimReplay sim={sim} plan={plan} tasks={tasks} autoPlay seekRequest={seek} onTimeChange={setNowH} />
-      </div>
-      <div>
-        <h3 className="mb-2 text-[13px] font-medium">
-          Events <span className="font-normal text-dim">{plural(sim.events.length, "event")}</span>
-          {nowH !== null && <span className="ml-2 font-mono text-[11px] font-normal text-dim">t = {formatHours(nowH)}</span>}
-        </h3>
-        <EventList
-          events={sim.events}
-          replans={sim.replans}
-          nowH={nowH ?? undefined}
-          onSeek={(t_h) => setSeek({ t_h })}
-        />
-      </div>
-    </div>
+    <SimReplay
+      sim={sim}
+      plan={plan}
+      tasks={tasks}
+      autoPlay
+      seekRequest={seek}
+      onTimeChange={setNowH}
+      maxHeight={600}
+      heading={<h3 className="text-[14px] font-medium">Replay</h3>}
+      aside={
+        <div>
+          <h3 className="mb-2 text-[14px] font-medium">
+            Events <span className="font-normal text-dim">{plural(sim.events.length, "event")}</span>
+            {nowH !== null && <span className="ml-2 font-mono text-[11px] font-normal text-dim">t = {formatHours(nowH)}</span>}
+          </h3>
+          <EventList
+            events={sim.events}
+            replans={sim.replans}
+            nowH={nowH ?? undefined}
+            onSeek={(t_h) => setSeek({ t_h })}
+          />
+        </div>
+      }
+    />
   );
 }
 
@@ -767,7 +941,7 @@ function CompletionLine({ sim, horizonH }: { sim: SimResult; horizonH: number })
     const lastReplan = sim.replans[sim.replans.length - 1];
     if (lastReplan && !lastReplan.after.success) {
       const f = lastReplan.after.failure;
-      detail = `replan ${sim.replans.length} failed: ${f ? f.hint || f.kind : "no verified schedule"}${f && f.conflicts.length ? ` [${f.conflicts.join(", ")}]` : ""}`;
+      detail = `replan ${sim.replans.length} failed: ${f ? tidyHint(f.hint) || f.kind : "no verified schedule"}${f && f.conflicts.length ? ` [${f.conflicts.join(", ")}]` : ""}`;
     } else if (sim.frames.length > 0) {
       detail = `the simulation stopped at ${formatHours(sim.frames[sim.frames.length - 1].t_h)} with work remaining · ${eventSummary(sim.events)} · ${plural(sim.replans.length, "replan")}`;
     } else {

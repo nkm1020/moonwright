@@ -1,15 +1,25 @@
 "use client";
-import { useState, type ReactNode } from "react";
-import type { LoopStep, Requirements, Robot, Site, Structure } from "@/lib/types";
+/**
+ * Step 02: what the model understood from the brief, editable. The site is drawn as a tiny
+ * map (grid, zone circles, depot) so geometry mistakes are visible at a glance; every
+ * structure reads as prose ("20 m diameter · 0.4 m deep") with the task-graph quantities
+ * under it once a plan exists; validation mirrors the backend's pydantic limits.
+ */
+import { useMemo, useState, type ReactNode } from "react";
+import type { LoopStep, Requirements, Robot, Site, Structure, Task, Unit } from "@/lib/types";
 import { ID_PATTERN, LIMITS } from "@/lib/types";
 import { ROBOT_TYPE_COLORS, robotTypeColor, zoneColor } from "@/lib/palette";
 import {
   dimLabel,
   fmtCompact,
   fmtHorizon,
+  fmtHours,
+  fmtNum,
   fmtSeconds,
+  fmtWh,
   plural,
-  shortModel,
+  modelDisplayName,
+  modelTitle,
   structureDims,
 } from "@/lib/format";
 import {
@@ -30,7 +40,7 @@ import {
 export interface RequirementsCardProps {
   value: Requirements;
   onChange: (next: Requirements) => void;
-  /** The structure step that produced the requirements (model, tokens, duration). */
+  /** The structure step that produced the requirements (model, tokens, duration, warnings). */
   structureStep: LoopStep | null;
   source: "model" | "sample" | null;
   edited: boolean;
@@ -41,6 +51,11 @@ export interface RequirementsCardProps {
   onRestructure: () => void;
   restructuring: boolean;
   canRestructure: boolean;
+  /** Additive: the task graph of the current plan; shows per-structure quantities, hours and Wh. */
+  tasks?: Task[] | null;
+  /** Additive: the brief in the textarea is not the one these requirements were structured
+   *  from (another example loaded, or the text edited): planning waits for a re-structure. */
+  staleBrief?: boolean;
 }
 
 const RESERVED_KEYS = ["id", "type", "zone"];
@@ -103,6 +118,88 @@ export function validateRequirements(req: Requirements): string[] {
   return problems;
 }
 
+// ------------------------------------------------------------------ prose helpers
+const DIM_PHRASES: Record<string, (v: string) => string> = {
+  diameter_m: (v) => `${v} m diameter`,
+  radius_m: (v) => `${v} m radius`,
+  length_m: (v) => `${v} m long`,
+  width_m: (v) => `${v} m wide`,
+  depth_m: (v) => `${v} m deep`,
+  height_m: (v) => `${v} m high`,
+  thickness_m: (v) => `${v} m thick`,
+  trench_depth_m: (v) => `${v} m trench`,
+};
+
+/** "20 m diameter · 0.4 m deep · 0.3 m thick" from a structure's numeric extras. */
+export function structureSummary(s: Structure): string {
+  const parts = structureDims(s).map(([k, v]) => {
+    const num = fmtNum(v, 2);
+    const phrase = DIM_PHRASES[k];
+    if (phrase) return phrase(num);
+    const m = /^(.*)_(m|m2|m3|cm|mm|kg|t|wh|kwh|h|deg)$/i.exec(k);
+    const base = (m ? m[1] : k).replace(/_/g, " ");
+    return m ? `${num} ${m[2]} ${base}` : `${num} ${base}`;
+  });
+  return parts.join(" · ");
+}
+
+const UNIT_LABELS: Record<Unit, string> = { m3: "m³", m2: "m²", m: "m", ea: "ea" };
+
+/** "5 tasks · 46 h · 5,800 Wh · 126 m³ + 314 m²" for the tasks of one structure. */
+export function structureWork(tasks: Task[]): string | null {
+  if (tasks.length === 0) return null;
+  const hours = tasks.reduce((a, t) => a + t.duration_h, 0);
+  const wh = tasks.reduce((a, t) => a + t.energy_wh, 0);
+  const byUnit = new Map<Unit, number>();
+  for (const t of tasks) if (t.quantity !== null && t.unit) byUnit.set(t.unit, (byUnit.get(t.unit) ?? 0) + t.quantity);
+  const quantities = [...byUnit].map(([u, q]) => `${fmtNum(q, 1)} ${UNIT_LABELS[u]}`).join(" + ");
+  return `${plural(tasks.length, "task")} · ${fmtHours(hours, 1)} · ${fmtWh(wh)}${quantities ? ` · ${quantities}` : ""}`;
+}
+
+// ------------------------------------------------------------------ geometry
+export interface GeometryNote {
+  level: "warn" | "fail";
+  text: string;
+}
+
+/** Soft geometry checks drawn from the current site: zones outside the grid or overlapping,
+ *  structures without a declared zone, a missing depot. The backend reports the same kinds
+ *  of warnings on the structure step. */
+export function geometryNotes(site: Site, structures: Structure[]): GeometryNote[] {
+  const notes: GeometryNote[] = [];
+  const [gx, gy] = site.grid;
+  const zones = site.zones;
+  for (const z of zones) {
+    const [cx0, cy0] = z.center;
+    if (cx0 - z.radius < 0 || cy0 - z.radius < 0 || cx0 + z.radius > gx || cy0 + z.radius > gy) {
+      notes.push({ level: "fail", text: `zone ${z.id} reaches outside the ${gx} × ${gy} grid` });
+    }
+  }
+  for (let i = 0; i < zones.length; i++) {
+    for (let j = i + 1; j < zones.length; j++) {
+      const a = zones[i];
+      const b = zones[j];
+      const d = Math.hypot(a.center[0] - b.center[0], a.center[1] - b.center[1]);
+      if (d < a.radius + b.radius) notes.push({ level: "warn", text: `zones ${a.id} and ${b.id} overlap` });
+    }
+  }
+  const unzoned = structures.filter((s) => s.zone === null).map((s) => s.id || "?");
+  if (unzoned.length > 0) {
+    notes.push({ level: "warn", text: `${unzoned.join(", ")} ${unzoned.length === 1 ? "has" : "have"} no zone: the planner will auto-place it` });
+  }
+  if (!site.depot) notes.push({ level: "warn", text: "no depot: robots start at the grid origin" });
+  else if (site.depot[0] < 0 || site.depot[1] < 0 || site.depot[0] > gx || site.depot[1] > gy) {
+    notes.push({ level: "fail", text: `depot (${site.depot[0]}, ${site.depot[1]}) is outside the grid` });
+  }
+  return notes;
+}
+
+/** Warnings the structure step carried (StructurePayload.warnings), if any. */
+function stepWarnings(step: LoopStep | null): string[] {
+  const w = step?.payload?.warnings;
+  return Array.isArray(w) ? w.filter((x): x is string => typeof x === "string") : [];
+}
+
 function nextId(prefix: string, existing: string[]): string {
   for (let n = 1; ; n++) {
     const id = `${prefix}${n}`;
@@ -133,6 +230,8 @@ export function RequirementsCard({
   onRestructure,
   restructuring,
   canRestructure,
+  tasks,
+  staleBrief = false,
 }: RequirementsCardProps) {
   const problems = validateRequirements(value);
   const repairsOk = Number.isInteger(maxRepairs) && maxRepairs >= 0 && maxRepairs <= 10;
@@ -141,6 +240,18 @@ export function RequirementsCard({
   const duplicateRobots = new Set(robotIds.filter((id, i) => robotIds.indexOf(id) !== i));
   const structureIds = value.structures.map((s) => s.id);
   const duplicateStructures = new Set(structureIds.filter((id, i) => structureIds.indexOf(id) !== i));
+  const notes = geometryNotes(value.site, value.structures);
+  const warnings = stepWarnings(structureStep);
+  const tasksByStructure = useMemo(() => {
+    const m = new Map<string, Task[]>();
+    for (const t of tasks ?? []) {
+      if (!t.structure) continue;
+      const list = m.get(t.structure) ?? [];
+      list.push(t);
+      m.set(t.structure, list);
+    }
+    return m;
+  }, [tasks]);
 
   const update = (patch: Partial<Requirements>) => onChange({ ...value, ...patch });
   const updateSite = (patch: Partial<Site>) => update({ site: { ...value.site, ...patch } });
@@ -176,8 +287,8 @@ export function RequirementsCard({
     <>
       {source === "sample" && <Badge tone="info">from the bundled sample</Badge>}
       {source === "model" && structureStep && (
-        <Badge title={usage?.model || "no model call recorded"}>
-          {usage?.model ? shortModel(usage.model) : "offline fixture"}
+        <Badge title={modelTitle(usage?.model)}>
+          {usage?.model ? modelDisplayName(usage.model) : "recorded answer"}
           {" · "}
           {fmtSeconds(structureStep.duration_s)}
           {usage && usage.input_tokens + usage.output_tokens > 0 && (
@@ -188,9 +299,12 @@ export function RequirementsCard({
           )}
         </Badge>
       )}
-      {edited && <Badge tone="accent">edited by you</Badge>}
+      {edited && <Badge tone="info">edited by you</Badge>}
     </>
   );
+
+  const typeCounts = new Map<string, number>();
+  for (const r of value.robots) typeCounts.set(r.type || "?", (typeCounts.get(r.type || "?") ?? 0) + 1);
 
   return (
     <Section
@@ -215,74 +329,73 @@ export function RequirementsCard({
         <div className="grid grid-cols-[minmax(0,1fr)] gap-6 p-4 md:p-5 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
           <div className="space-y-6">
             <Group title="Site">
-              <div className="grid grid-cols-2 gap-3">
-                <Field label="Site name" className="col-span-2">
-                  <TextInput
-                    value={value.site.name}
-                    onChange={(e) => updateSite({ name: e.target.value })}
-                    invalid={!value.site.name.trim()}
-                  />
-                </Field>
-                <Field label="Grid (cells)" as="div">
-                  <div className="flex items-center gap-1.5">
-                    <NumberInput
-                      aria-label="grid width"
-                      value={value.site.grid[0]}
-                      min={1}
-                      step={1}
-                      invalid={!isPosInt(value.site.grid[0])}
-                      onChange={(n) => updateSite({ grid: [n, value.site.grid[1]] })}
+              <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-4">
+                <div className="grid grid-cols-2 gap-3">
+                  <Field label="Site name" className="col-span-2">
+                    <TextInput
+                      value={value.site.name}
+                      onChange={(e) => updateSite({ name: e.target.value })}
+                      invalid={!value.site.name.trim()}
                     />
-                    <span className="text-dim">×</span>
+                  </Field>
+                  <Field label="Grid (cells)" as="div">
+                    <div className="flex items-center gap-1.5">
+                      <NumberInput
+                        aria-label="grid width"
+                        value={value.site.grid[0]}
+                        min={1}
+                        step={1}
+                        invalid={!isPosInt(value.site.grid[0])}
+                        onChange={(n) => updateSite({ grid: [n, value.site.grid[1]] })}
+                      />
+                      <span className="text-dim">×</span>
+                      <NumberInput
+                        aria-label="grid height"
+                        value={value.site.grid[1]}
+                        min={1}
+                        step={1}
+                        invalid={!isPosInt(value.site.grid[1])}
+                        onChange={(n) => updateSite({ grid: [value.site.grid[0], n] })}
+                      />
+                    </div>
+                  </Field>
+                  <Field
+                    label="Horizon (h)"
+                    hint={isPosInt(value.horizon_h) ? fmtHorizon(value.horizon_h) : undefined}
+                    error={
+                      !isPosInt(value.horizon_h)
+                        ? "positive whole hours"
+                        : value.horizon_h > LIMITS.horizonH
+                          ? `at most ${fmtLimit(LIMITS.horizonH)} h`
+                          : undefined
+                    }
+                  >
                     <NumberInput
-                      aria-label="grid height"
-                      value={value.site.grid[1]}
+                      value={value.horizon_h}
                       min={1}
+                      max={LIMITS.horizonH}
                       step={1}
-                      invalid={!isPosInt(value.site.grid[1])}
-                      onChange={(n) => updateSite({ grid: [value.site.grid[0], n] })}
+                      invalid={!isPosInt(value.horizon_h) || value.horizon_h > LIMITS.horizonH}
+                      onChange={(n) => update({ horizon_h: n })}
                     />
-                  </div>
-                </Field>
-                <Field
-                  label="Horizon (h)"
-                  hint={isPosInt(value.horizon_h) ? fmtHorizon(value.horizon_h) : undefined}
-                  error={
-                    !isPosInt(value.horizon_h)
-                      ? "positive whole hours"
-                      : value.horizon_h > LIMITS.horizonH
-                        ? `at most ${fmtLimit(LIMITS.horizonH)} h`
-                        : undefined
-                  }
-                >
-                  <NumberInput
-                    value={value.horizon_h}
-                    min={1}
-                    max={LIMITS.horizonH}
-                    step={1}
-                    invalid={!isPosInt(value.horizon_h) || value.horizon_h > LIMITS.horizonH}
-                    onChange={(n) => update({ horizon_h: n })}
-                  />
-                </Field>
+                  </Field>
+                </div>
+                <SiteMap site={value.site} structures={value.structures} notes={notes} />
               </div>
-              <div className="mt-3 flex flex-wrap items-center gap-1.5 text-xs">
-                <span className="mr-1 text-dim">Zones</span>
-                {value.site.zones.map((z) => (
-                  <Badge key={z.id} mono title={`centre (${z.center[0]}, ${z.center[1]}), radius ${z.radius}`}>
-                    <Dot color={zoneColor(z.id, zoneIds)} />
-                    {z.id}
-                    <span className="text-dim">
-                      ({z.center[0]},{z.center[1]}) r{z.radius}
-                    </span>
-                  </Badge>
-                ))}
-                {value.site.zones.length === 0 && <span className="text-dim">none declared</span>}
-                {value.site.depot && (
-                  <Badge mono title="robot depot">
-                    depot ({value.site.depot[0]},{value.site.depot[1]})
-                  </Badge>
-                )}
-              </div>
+              {(notes.length > 0 || warnings.length > 0) && (
+                <ul className="mt-2 space-y-0.5 text-[11px]">
+                  {notes.map((n, i) => (
+                    <li key={`n${i}`} className={n.level === "fail" ? "text-fail" : "text-dim"}>
+                      geometry · {n.text}
+                    </li>
+                  ))}
+                  {warnings.map((w, i) => (
+                    <li key={`w${i}`} className="text-dim">
+                      structure step · {w}
+                    </li>
+                  ))}
+                </ul>
+              )}
             </Group>
 
             <Group
@@ -331,6 +444,8 @@ export function RequirementsCard({
                     index={i}
                     zoneIds={zoneIds}
                     duplicate={duplicateStructures.has(s.id)}
+                    work={tasks ? structureWork(tasksByStructure.get(s.id) ?? []) : null}
+                    hasPlan={Boolean(tasks)}
                     onChange={(next) => setStructure(i, next)}
                     onRemove={() => removeStructure(i)}
                   />
@@ -339,7 +454,16 @@ export function RequirementsCard({
             </Group>
 
             <Group
-              title={`Robots · ${value.robots.length}`}
+              title={
+                <>
+                  Robots · {value.robots.length}
+                  {typeCounts.size > 0 && (
+                    <span className="ml-2 font-normal normal-case tracking-normal text-dim">
+                      {[...typeCounts].map(([t, n]) => `${n} ${t}`).join(" · ")}
+                    </span>
+                  )}
+                </>
+              }
               action={
                 <Button size="sm" variant="ghost" onClick={addRobot}>
                   + Add robot
@@ -425,6 +549,15 @@ export function RequirementsCard({
           </div>
         )}
 
+        {staleBrief && (
+          <div className="border-t border-line px-4 py-3 md:px-5">
+            <Notice tone="warn" title="The brief changed since these requirements were structured">
+              Re-structure the brief to refresh this card. Planning waits until then, so the planner never
+              gets a card that came from another brief.
+            </Notice>
+          </div>
+        )}
+
         <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-line px-4 py-3 md:px-5">
           <div className="flex flex-wrap items-center gap-3">
             <Field label="Repair rounds" className="w-24">
@@ -456,7 +589,8 @@ export function RequirementsCard({
               variant="primary"
               onClick={onPlan}
               loading={planning}
-              disabled={problems.length > 0 || !repairsOk || restructuring}
+              disabled={problems.length > 0 || !repairsOk || restructuring || staleBrief}
+              title={staleBrief ? "Re-structure the brief first: these requirements came from another brief" : undefined}
             >
               {planning ? "Planning…" : "Plan with these requirements"}
             </Button>
@@ -464,6 +598,144 @@ export function RequirementsCard({
         </footer>
       </Card>
     </Section>
+  );
+}
+
+// ------------------------------------------------------------------ site map
+const MAP_W = 176;
+const MAP_MAX_H = 176;
+
+/** The site as the simulator lays it out: grid cells, zone circles in the zone colours with
+ *  the structures they hold, the depot as a diamond; north is up (y grows northward). */
+function SiteMap({ site, structures, notes }: { site: Site; structures: Structure[]; notes: GeometryNote[] }) {
+  const [gx, gy] = site.grid;
+  if (!isPosInt(gx) || !isPosInt(gy)) {
+    return (
+      <div className="flex h-24 w-44 items-center justify-center rounded-md border border-dashed border-fail/40 text-center text-[11px] text-fail">
+        grid must be positive whole numbers to draw the site
+      </div>
+    );
+  }
+  const s = Math.min(MAP_W / gx, MAP_MAX_H / gy);
+  const W = Math.max(96, Math.round(gx * s));
+  const H = Math.max(96, Math.round(gy * s));
+  const sx = W / gx;
+  const sy = H / gy;
+  const px = (x: number) => x * sx;
+  const py = (y: number) => H - y * sy;
+  const zoneIds = site.zones.map((z) => z.id);
+  const bad = new Set(
+    notes
+      .filter((n) => n.level === "fail")
+      .flatMap((n) => zoneIds.filter((id) => n.text.includes(`zone ${id} `))),
+  );
+  const gridStep = gx <= 20 && gy <= 20 ? 5 : 10;
+  const byZone = new Map<string, string[]>();
+  for (const st of structures) {
+    if (!st.zone) continue;
+    byZone.set(st.zone, [...(byZone.get(st.zone) ?? []), st.id || "?"]);
+  }
+  const summary = `${gx} × ${gy} cells · ${plural(site.zones.length, "zone")}${
+    site.depot ? ` · depot (${site.depot[0]}, ${site.depot[1]})` : " · no depot"
+  }`;
+  return (
+    <figure className="shrink-0">
+      <svg
+        width={W}
+        height={H}
+        viewBox={`0 0 ${W} ${H}`}
+        role="img"
+        aria-label={`Site map: ${summary}; zones ${site.zones.map((z) => `${z.id} at (${z.center[0]}, ${z.center[1]}) radius ${z.radius}`).join(", ") || "none"}`}
+        className="block rounded-md border border-white/10 bg-surface"
+      >
+        {Array.from({ length: Math.floor(gx / gridStep) }, (_, i) => (i + 1) * gridStep)
+          .filter((v) => v < gx)
+          .map((v) => (
+            <line key={`vx${v}`} x1={px(v)} x2={px(v)} y1={0} y2={H} stroke="rgba(255,255,255,0.06)" />
+          ))}
+        {Array.from({ length: Math.floor(gy / gridStep) }, (_, i) => (i + 1) * gridStep)
+          .filter((v) => v < gy)
+          .map((v) => (
+            <line key={`hy${v}`} x1={0} x2={W} y1={py(v)} y2={py(v)} stroke="rgba(255,255,255,0.06)" />
+          ))}
+        {site.zones.map((z) => {
+          const color = zoneColor(z.id, zoneIds);
+          const held = byZone.get(z.id) ?? [];
+          const r = Math.max(z.radius * sx, 2);
+          return (
+            <g key={z.id}>
+              <title>{`${z.id} · centre (${z.center[0]}, ${z.center[1]}) · radius ${z.radius}${held.length ? ` · ${held.join(", ")}` : " · no structure"}`}</title>
+              <circle
+                cx={px(z.center[0])}
+                cy={py(z.center[1])}
+                r={r}
+                fill={color}
+                fillOpacity={0.28}
+                stroke={bad.has(z.id) ? "#ef4444" : color}
+                strokeWidth={bad.has(z.id) ? 1.5 : 1}
+                strokeDasharray={bad.has(z.id) ? "3 2" : undefined}
+              />
+              <text
+                x={px(z.center[0])}
+                y={py(z.center[1]) - (held.length ? 4 : 0)}
+                textAnchor="middle"
+                dominantBaseline="central"
+                fontSize={11}
+                fontWeight={600}
+                fill="#e6edf3"
+                fontFamily="var(--font-mono)"
+              >
+                {z.id}
+              </text>
+              {held.length > 0 && (
+                <text
+                  x={px(z.center[0])}
+                  y={py(z.center[1]) + 8}
+                  textAnchor="middle"
+                  dominantBaseline="central"
+                  fontSize={10}
+                  fill="#9aa7b4"
+                  fontFamily="var(--font-mono)"
+                >
+                  {held.join(" ")}
+                </text>
+              )}
+            </g>
+          );
+        })}
+        {site.depot && (
+          <g>
+            <title>{`depot (${site.depot[0]}, ${site.depot[1]})`}</title>
+            <rect
+              x={px(site.depot[0]) - 4}
+              y={py(site.depot[1]) - 4}
+              width={8}
+              height={8}
+              transform={`rotate(45 ${px(site.depot[0])} ${py(site.depot[1])})`}
+              fill="#0b0f14"
+              stroke="#e6edf3"
+              strokeWidth={1.5}
+            />
+            <text
+              x={px(site.depot[0])}
+              y={Math.min(H - 4, py(site.depot[1]) + 14)}
+              textAnchor="middle"
+              fontSize={10}
+              fill="#9aa7b4"
+              fontFamily="var(--font-mono)"
+            >
+              depot
+            </text>
+          </g>
+        )}
+        <text x={4} y={12} fontSize={10} fill="#66727f" fontFamily="var(--font-mono)">
+          N ↑
+        </text>
+      </svg>
+      <figcaption className="mt-1.5 font-mono text-[11px] leading-snug text-dim" style={{ maxWidth: W }}>
+        {summary}
+      </figcaption>
+    </figure>
   );
 }
 
@@ -499,6 +771,8 @@ function StructureRow({
   index,
   zoneIds,
   duplicate,
+  work,
+  hasPlan,
   onChange,
   onRemove,
 }: {
@@ -506,11 +780,16 @@ function StructureRow({
   index: number;
   zoneIds: string[];
   duplicate: boolean;
+  /** "5 tasks · 46 h · 5,800 Wh · 126 m³" when a task graph exists. */
+  work: string | null;
+  hasPlan: boolean;
   onChange: (next: Structure) => void;
   onRemove: () => void;
 }) {
   const dims = structureDims(structure);
   const unknownZone = structure.zone !== null && !zoneIds.includes(structure.zone);
+  const invalidDim = dims.some(([, v]) => !isPos(v));
+  const summary = structureSummary(structure);
   return (
     <li className="rounded-md border border-white/10 bg-surface/60 p-3">
       <div className="grid grid-cols-[4rem_minmax(0,1fr)_7rem_auto] items-center gap-2">
@@ -529,40 +808,57 @@ function StructureRow({
           placeholder="type, e.g. landing_pad"
           invalid={!structure.type.trim()}
         />
-        <select
-          aria-label={`structure ${index + 1} zone`}
-          value={structure.zone ?? ""}
-          onChange={(e) => onChange({ ...structure, zone: e.target.value || null })}
-          aria-invalid={unknownZone || undefined}
-          className={cx(inputClass, "font-mono")}
-        >
-          <option value="">no zone</option>
-          {zoneIds.map((z) => (
-            <option key={z} value={z}>
-              {z}
-            </option>
-          ))}
-          {unknownZone && structure.zone && <option value={structure.zone}>{structure.zone} (unknown)</option>}
-        </select>
+        <div className="flex items-center gap-1.5">
+          {structure.zone && !unknownZone && <Dot color={zoneColor(structure.zone, zoneIds)} />}
+          <select
+            aria-label={`structure ${index + 1} zone`}
+            value={structure.zone ?? ""}
+            onChange={(e) => onChange({ ...structure, zone: e.target.value || null })}
+            aria-invalid={unknownZone || undefined}
+            className={cx(inputClass, "font-mono")}
+          >
+            <option value="">no zone</option>
+            {zoneIds.map((z) => (
+              <option key={z} value={z}>
+                {z}
+              </option>
+            ))}
+            {unknownZone && structure.zone && <option value={structure.zone}>{structure.zone} (unknown)</option>}
+          </select>
+        </div>
         <RemoveButton onClick={onRemove} label={`remove structure ${structure.id || index + 1}`} />
       </div>
-      <div className="mt-2 flex flex-wrap items-end gap-2">
-        {dims.map(([key, v]) => (
-          <Field key={key} label={dimLabel(key)} className="w-32" error={isPos(v) ? undefined : "must be > 0"}>
-            <div className="flex items-center gap-0.5">
-              <NumberInput
-                value={v}
-                min={0}
-                step="any"
-                invalid={!isPos(v)}
-                onChange={(n) => onChange(withDim(structure, key, n))}
-              />
-              <RemoveButton onClick={() => onChange(omitKey(structure, key))} label={`remove ${dimLabel(key)}`} />
-            </div>
-          </Field>
-        ))}
-        <DimAdder existing={dims.map(([k]) => k)} onAdd={(key) => onChange(withDim(structure, key, 1))} />
-      </div>
+      <p className={cx("mt-2 text-[12.5px]", summary ? "text-fg" : "text-dim")}>
+        {summary || "no dimensions stated: the rate model cannot price this structure"}
+      </p>
+      {hasPlan && (
+        <p className="mt-0.5 font-mono text-[11px] text-muted">
+          {work ?? "no task in the graph builds this structure"}
+        </p>
+      )}
+      <details className="group mt-1.5" open={invalidDim || dims.length === 0 || undefined}>
+        <summary className="cursor-pointer select-none text-[11px] text-dim hover:text-fg">
+          {dims.length === 0 ? "add dimensions" : "edit dimensions"}
+          {invalidDim ? <span className="ml-1 text-fail">· a dimension must be &gt; 0</span> : null}
+        </summary>
+        <div className="mt-2 flex flex-wrap items-end gap-2">
+          {dims.map(([key, v]) => (
+            <Field key={key} label={dimLabel(key)} className="w-28" error={isPos(v) ? undefined : "must be > 0"}>
+              <div className="flex items-center gap-0.5">
+                <NumberInput
+                  value={v}
+                  min={0}
+                  step="any"
+                  invalid={!isPos(v)}
+                  onChange={(n) => onChange(withDim(structure, key, n))}
+                />
+                <RemoveButton onClick={() => onChange(omitKey(structure, key))} label={`remove ${dimLabel(key)}`} />
+              </div>
+            </Field>
+          ))}
+          <DimAdder existing={dims.map(([k]) => k)} onAdd={(key) => onChange(withDim(structure, key, 1))} />
+        </div>
+      </details>
     </li>
   );
 }

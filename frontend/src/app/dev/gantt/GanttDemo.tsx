@@ -102,7 +102,7 @@ export function GanttDemo() {
 
         {error ? (
           <div className="rounded-md border border-red-400/40 bg-red-400/10 p-3 text-sm text-red-200">
-            Failed to load the sample payloads: {error}
+            Failed to load the sample files: {error}
           </div>
         ) : null}
         {!data && !error ? <div className="text-sm text-slate-400">Loading sample plans…</div> : null}
@@ -189,7 +189,7 @@ function LoadedSections({
 
       <Section
         title="Replay view: now = 30 h, marker at 30 h"
-        hint="The amber now line and a robot_failure marker share the same hour; labels are nudged apart."
+        hint="The white now line and a robot failure marker share the same hour; labels are nudged apart."
       >
         <Gantt
           schedule={lpSchedule}

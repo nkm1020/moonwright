@@ -4,11 +4,15 @@
  * notices and stat tiles. Colours come from the tokens in globals.css (one amber accent,
  * semantic ok/fail/warn/info mirrored from lib/palette.ts).
  */
-import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode } from "react";
+import { createContext, useContext, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode } from "react";
 
 export function cx(...parts: Array<string | false | null | undefined>): string {
   return parts.filter(Boolean).join(" ");
 }
+
+/** Id of the section the console is currently at (the TopBar stage); the matching
+ *  Section paints its step number in the accent, every other step stays neutral. */
+export const CurrentStageContext = createContext<string | null>(null);
 
 export type Tone = "neutral" | "accent" | "ok" | "fail" | "warn" | "info";
 
@@ -52,25 +56,32 @@ export interface SectionProps {
 }
 
 export function Section({ id, step, title, subtitle, actions, children, className }: SectionProps) {
+  const current = useContext(CurrentStageContext) === id;
   return (
     <section
       id={id}
       aria-labelledby={`${id}-title`}
       className={cx("scroll-mt-24 border-t border-line py-8 first:border-t-0 md:py-10", className)}
     >
-      <header className="mb-4 flex flex-wrap items-end justify-between gap-3">
+      <header className="mb-5 flex flex-wrap items-end justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-baseline gap-2.5">
             {step && (
-              <span className="font-mono text-[11px] font-medium tracking-[0.18em] text-accent">
+              <span
+                aria-hidden="true"
+                className={cx(
+                  "font-mono text-[12px] font-medium tracking-[0.16em]",
+                  current ? "text-accent" : "text-dim",
+                )}
+              >
                 {step}
               </span>
             )}
-            <h2 id={`${id}-title`} className="text-[17px] font-semibold tracking-tight text-fg">
+            <h2 id={`${id}-title`} className="text-[19px] font-semibold tracking-tight text-fg">
               {title}
             </h2>
           </div>
-          {subtitle && <p className="mt-1 max-w-3xl text-[13px] text-muted">{subtitle}</p>}
+          {subtitle && <p className="mt-1.5 max-w-3xl text-[13.5px] leading-relaxed text-muted">{subtitle}</p>}
         </div>
         {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
       </header>
@@ -93,7 +104,7 @@ export function Card({ children, className, title, aside, bodyClassName = "p-4 m
     <div className={cx("rounded-lg border border-line bg-raised", className)}>
       {(title || aside) && (
         <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b border-line px-4 py-2.5">
-          <div className="text-[13px] font-medium text-fg">{title}</div>
+          <div className="text-[14px] font-medium text-fg">{title}</div>
           {aside && <div className="text-xs text-muted">{aside}</div>}
         </div>
       )}
@@ -276,14 +287,14 @@ export function Stat({ label, value, sub, hero, tone = "neutral" }: StatProps) {
       <div className="text-[11px] font-medium uppercase tracking-wider text-dim">{label}</div>
       <div
         className={cx(
-          "mt-0.5 font-semibold tracking-tight",
-          hero ? "text-4xl md:text-5xl" : "text-xl tabular-nums",
+          "mt-0.5 font-semibold tracking-tight tabular-nums",
+          hero ? "text-[36px] leading-none md:text-[44px]" : "text-xl",
           TONE_TEXT[tone],
         )}
       >
         {value}
       </div>
-      {sub && <div className="mt-0.5 text-xs text-muted">{sub}</div>}
+      {sub && <div className={cx("text-xs text-muted", hero ? "mt-1.5" : "mt-0.5")}>{sub}</div>}
     </div>
   );
 }
@@ -316,6 +327,15 @@ export function IconCheck({ className }: { className?: string }) {
   return (
     <svg className={className ?? "size-3"} viewBox="0 0 16 16" fill="none" aria-hidden="true">
       <path d="M3 8.5l3 3 7-7" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+/** Right-pointing chevron; rotate it 90° for an open disclosure. */
+export function IconChevron({ className }: { className?: string }) {
+  return (
+    <svg className={className ?? "size-3"} viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path d="M6 3.5l4.5 4.5L6 12.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }

@@ -4,14 +4,20 @@
  * current (interpolated) frame with status ring, battery bar and task caption, transport
  * controls, a scrubber with event ticks and replan markers, and a live task readout.
  *
- * Playback state (time, hover, cluster offsets) lives in refs and is drawn by
+ * The climax: around each event a banner in the event colour runs across the top of the map
+ * ("30.0 h · EX2 failed on T4 (79% done) → CP-SAT rescheduled 11 tasks in <0.01 s →
+ * verified, 80 h → 91 h"), and autoplay holds for HOLD_MS (4 s) at every robot failure and
+ * replan marker (click the map or press space to continue). Failed robots keep a red X at their last
+ * position with "failed at 30 h"; robots queued behind a busy zone read "waiting · zone Z1".
+ *
+ * Playback state (time, hold, hover, cluster offsets) lives in refs and is drawn by
  * requestAnimationFrame; React state is only updated ~12 times per second for the readouts.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { PlanResult, RobotStatus, SimEvent, SimFrame, SimResult, Task, Zone } from "@/lib/types";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import type { EventKind, PlanResult, RobotStatus, SimEvent, SimFrame, SimResult, Task, Zone } from "@/lib/types";
 import { EVENT_COLORS, STATUS_COLORS, robotTypeColor, zoneColor } from "@/lib/palette";
 import { zoneOrder } from "@/lib/tasks";
-import { eventKindLabel, formatHours, withAlpha } from "./EventList";
+import { eventKindLabel, eventPhrase, formatHours, replanOutcome, replanSegments, withAlpha } from "./EventList";
 
 export interface SimReplayProps {
   sim: SimResult;
@@ -25,20 +31,59 @@ export interface SimReplayProps {
   onTimeChange?: (t_h: number) => void;
   /** Additive: cap on the canvas height in CSS px (default 640). */
   maxHeight?: number;
+  /** Additive: autoplay holds HOLD_MS at each robot failure and replan marker; a click on the
+   *  map or the space bar continues (default true). */
+  holdOnEvents?: boolean;
+  /** Additive: where the playhead starts when a new SimResult loads (default 0 h). */
+  startAtH?: number;
+  /** Additive: a heading rendered above the map, level with the top of `aside`. */
+  heading?: ReactNode;
+  /** Additive: content for a right-hand column (the event list): the map, transport and
+   *  scrubber take the left 3/5 from xl, the aside, the live task list and the legend stack
+   *  on the right, so the replay's climax has no empty column next to it. */
+  aside?: ReactNode;
 }
 
 /** Playback speeds; 1x replays one simulated hour per real second. */
 export const REPLAY_SPEEDS = [1, 4, 16] as const;
 const HOURS_PER_SECOND = 1;
 const PUBLISH_MS = 80;
-const PULSE_H = 2.5; // how long an event ring keeps expanding, in simulated hours
+/** Window around an event (simulated hours, either side) in which its banner shows and its
+ *  ring keeps expanding. */
+export const PULSE_H = 1.5;
+const BANNER_FADE_H = 0.3; // banner opacity ramps over the last 0.3 h of the window
+/** Real time the autoplay holds on an event when holdOnEvents is set: long enough to read the
+ *  banner aloud at any speed (click the map or press space to continue earlier). */
+export const HOLD_MS = 4000;
+const BANNER_H = 38;
 const R = 7; // marker radius
 const RING = R + 4.5; // status ring radius
 const BAR_W = 26;
 const PAD = 18;
 
-const FONT_SANS = 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-const FONT_MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+/** Canvas font families: system faces on the server and before the first draw, the console's
+ *  Geist faces (next/font sets --font-geist-sans / --font-geist-mono on <html>) from the first
+ *  draw on, so the map's labels match the page. A family list the canvas cannot parse is
+ *  ignored (the fallback stays). */
+let FONT_SANS = 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+let FONT_MONO = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+let fontsResolved = false;
+function resolveFonts() {
+  if (fontsResolved || typeof document === "undefined") return;
+  fontsResolved = true;
+  const style = getComputedStyle(document.documentElement);
+  const probe = document.createElement("canvas").getContext("2d");
+  const accept = (family: string): boolean => {
+    if (!family || !probe) return false;
+    probe.font = "10px serif";
+    probe.font = `10px ${family}`;
+    return probe.font !== "10px serif";
+  };
+  const sans = style.getPropertyValue("--font-geist-sans").trim();
+  const mono = style.getPropertyValue("--font-geist-mono").trim();
+  if (accept(`${sans}, ${FONT_SANS}`)) FONT_SANS = `${sans}, ${FONT_SANS}`;
+  if (accept(`${mono}, ${FONT_MONO}`)) FONT_MONO = `${mono}, ${FONT_MONO}`;
+}
 
 /** The canvas is a map of the lunar site: always a dark surface, whatever the page theme. */
 const C = {
@@ -53,6 +98,7 @@ const C = {
   track: "rgba(148,163,184,0.28)",
   tooltipBg: "rgba(15,23,42,0.94)",
   tooltipBorder: "rgba(148,163,184,0.35)",
+  batteryOk: "#cbd5e1",
 };
 
 // ------------------------------------------------------------------ model & snapshot
@@ -61,6 +107,20 @@ interface RobotMeta {
   type: string;
   cap: number;
   index: number;
+}
+
+/** One event's banner, built once from the SimEvent and the ReplanRecord it triggered. */
+interface Banner {
+  t: number;
+  kind: EventKind;
+  color: string;
+  /** "EX2 failed on T4 (79% done)" */
+  lead: string;
+  /** clauses drawn after arrows; the last one carries the verdict glyph when set */
+  outcome: string[];
+  verdict: "ok" | "fail" | null;
+  /** tie-break when two events share a time: failures first */
+  rank: number;
 }
 
 interface Model {
@@ -77,8 +137,21 @@ interface Model {
   frames: SimFrame[];
   events: SimEvent[];
   replanTimes: number[];
+  banners: Banner[];
+  /** sorted, distinct: robot failures and replan markers */
+  holdTimes: number[];
+  /** robot id -> hour it failed (the event's time; a frame's time when no event names it) */
+  failedAt: Record<string, number>;
+  /** robot id -> the failure event's detail (for the tooltip) */
+  failedDetail: Record<string, string>;
   tMax: number;
   horizonH: number;
+}
+
+const KIND_RANK: Record<EventKind, number> = { robot_failure: 3, battery_low: 2, task_overrun: 1 };
+
+function sameEvent(a: SimEvent, b: SimEvent): boolean {
+  return a.t_h === b.t_h && a.kind === b.kind && a.robot === b.robot && a.task === b.task;
 }
 
 function buildModel(sim: SimResult, plan: PlanResult, tasks: Task[]): Model {
@@ -96,6 +169,38 @@ function buildModel(sim: SimResult, plan: PlanResult, tasks: Task[]): Model {
   }));
   const robots = Object.fromEntries(robotList.map((r) => [r.id, r]));
   const frames = sim.frames;
+
+  const failedAt: Record<string, number> = {};
+  const failedDetail: Record<string, string> = {};
+  for (const e of sim.events) {
+    if (e.kind !== "robot_failure" || !e.robot || e.robot in failedAt) continue;
+    failedAt[e.robot] = e.t_h;
+    if (e.detail) failedDetail[e.robot] = e.detail;
+  }
+  for (const f of frames) {
+    for (const r of f.robots) if (r.status === "failed" && !(r.id in failedAt)) failedAt[r.id] = f.t_h;
+  }
+
+  const banners: Banner[] = sim.events.map((e) => {
+    const record = sim.replans.find((r) => sameEvent(r.event, e));
+    const outcome = record ? replanOutcome(record) : null;
+    return {
+      t: e.t_h,
+      kind: e.kind,
+      color: EVENT_COLORS[e.kind] ?? "#94a3b8",
+      lead: eventPhrase(e),
+      outcome: outcome ? replanSegments(outcome) : [],
+      verdict: outcome ? (outcome.ok ? "ok" : "fail") : null,
+      rank: (KIND_RANK[e.kind] ?? 0) + (record ? 10 : 0),
+    };
+  });
+  const holdTimes = Array.from(
+    new Set([
+      ...sim.events.filter((e) => e.kind === "robot_failure").map((e) => e.t_h),
+      ...sim.replans.map((r) => r.t_h),
+    ]),
+  ).sort((a, b) => a - b);
+
   return {
     siteName: req.site.name,
     grid: req.site.grid,
@@ -110,6 +215,10 @@ function buildModel(sim: SimResult, plan: PlanResult, tasks: Task[]): Model {
     frames,
     events: sim.events,
     replanTimes: sim.replans.map((r) => r.t_h),
+    banners,
+    holdTimes,
+    failedAt,
+    failedDetail,
     tMax: frames.length ? frames[frames.length - 1].t_h : 0,
     horizonH: req.horizon_h,
   };
@@ -123,6 +232,8 @@ interface SnapRobot {
   battery: number;
   status: RobotStatus;
   task: string | null;
+  /** "working on T3", "→ T4", "waiting · zone Z1", "waiting · T9 after T3", "failed at 30 h" */
+  caption: string;
 }
 
 interface Snapshot {
@@ -134,6 +245,37 @@ interface Snapshot {
 }
 
 const lerp = (a: number, b: number, k: number) => a + (b - a) * k;
+const clamp01 = (x: number) => Math.max(0, Math.min(1, x));
+
+function captionFor(
+  r: Omit<SnapRobot, "caption">,
+  model: Model,
+  workingIn: Map<string, string>,
+  done: Set<string>,
+): string {
+  switch (r.status) {
+    case "working":
+      return r.task ? `working on ${r.task}` : "working";
+    case "moving":
+      return r.task ? `→ ${r.task}` : "moving";
+    case "idle": {
+      if (!r.task) return "idle";
+      const task = model.taskMap[r.task];
+      const holder = task ? workingIn.get(task.zone) : undefined;
+      if (task && holder && holder !== r.id) return `waiting · zone ${task.zone}`;
+      const pending = task?.after.filter((a) => !done.has(a)) ?? [];
+      return pending.length ? `waiting · ${r.task} after ${pending[0]}` : `waiting · ${r.task}`;
+    }
+    case "failed": {
+      const at = model.failedAt[r.id];
+      return at !== undefined ? `failed at ${formatHours(at)}` : "failed";
+    }
+    case "done":
+      return "done";
+    default:
+      return r.status;
+  }
+}
 
 /** Frame state at time t: positions, batteries and progress interpolated between the thinned
  *  frames; statuses sample-and-hold, except that a robot whose position changes is "moving". */
@@ -152,10 +294,10 @@ function snapshotAt(model: Model, t: number): Snapshot | null {
   const span = fj.t_h - fi.t_h;
   const alpha = span > 0 ? Math.max(0, Math.min(1, (t - fi.t_h) / span)) : 0;
   const next = new Map(fj.robots.map((r) => [r.id, r]));
-  const robots: SnapRobot[] = fi.robots.map((r) => {
+  const raw: Omit<SnapRobot, "caption">[] = fi.robots.map((r) => {
     const meta = model.robots[r.id];
     const n = alpha > 0 ? next.get(r.id) : undefined;
-    const base: SnapRobot = {
+    const base: Omit<SnapRobot, "caption"> = {
       id: r.id,
       type: meta?.type ?? "",
       cap: meta?.cap ?? r.battery_wh,
@@ -175,6 +317,15 @@ function snapshotAt(model: Model, t: number): Snapshot | null {
       task: moving ? (n.current_task ?? r.current_task) : alpha >= 1 ? n.current_task : r.current_task,
     };
   });
+  // zone -> robot working there (one robot per zone: the others queue outside as "idle")
+  const workingIn = new Map<string, string>();
+  for (const r of raw) {
+    if (r.status !== "working" || !r.task) continue;
+    const zone = model.taskMap[r.task]?.zone;
+    if (zone) workingIn.set(zone, r.id);
+  }
+  const done = new Set(fi.done_tasks);
+  const robots: SnapRobot[] = raw.map((r) => ({ ...r, caption: captionFor(r, model, workingIn, done) }));
   const progress: Record<string, number> = {};
   for (const k of new Set([...Object.keys(fi.progress), ...Object.keys(fj.progress)])) {
     const a = fi.progress[k] ?? 0;
@@ -281,25 +432,50 @@ function label(
   ctx.fillText(text, x, y);
 }
 
-function batteryColor(frac: number): string {
-  return frac > 0.5 ? STATUS_COLORS.working : frac > 0.2 ? EVENT_COLORS.battery_low : STATUS_COLORS.failed;
+/** Text in a fill: no halo, left aligned at (x, y); returns the advance. */
+function plainText(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, font: string, color: string): number {
+  ctx.font = font;
+  ctx.textAlign = "left";
+  ctx.textBaseline = "alphabetic";
+  ctx.fillStyle = color;
+  ctx.fillText(text, x, y);
+  return ctx.measureText(text).width;
 }
 
-function caption(r: SnapRobot): string | null {
-  switch (r.status) {
-    case "working":
-      return r.task ? `working on ${r.task}` : "working";
-    case "moving":
-      return r.task ? `→ ${r.task}` : "moving";
-    case "idle":
-      return r.task ? `waiting · ${r.task}` : "idle";
-    case "failed":
-      return "failed";
-    case "done":
-      return "done";
-    default:
-      return null;
+function measure(ctx: CanvasRenderingContext2D, text: string, font: string): number {
+  ctx.font = font;
+  return ctx.measureText(text).width;
+}
+
+/** Ellipsise `text` (in the context's current font) to fit maxW. */
+function fitText(ctx: CanvasRenderingContext2D, text: string, font: string, maxW: number): string {
+  ctx.font = font;
+  if (ctx.measureText(text).width <= maxW) return text;
+  let lo = 0;
+  let hi = text.length;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (ctx.measureText(text.slice(0, mid).trimEnd() + "…").width <= maxW) lo = mid;
+    else hi = mid - 1;
   }
+  return lo === 0 ? "" : text.slice(0, lo).trimEnd() + "…";
+}
+
+/** WCAG relative luminance of a 6-digit hex colour (0 = black, 1 = white). */
+function luminance(hex: string): number {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex);
+  if (!m) return 0;
+  const n = parseInt(m[1], 16);
+  const ch = (v: number) => {
+    const c = v / 255;
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  };
+  return 0.2126 * ch((n >> 16) & 255) + 0.7152 * ch((n >> 8) & 255) + 0.0722 * ch(n & 255);
+}
+
+/** Battery bar fill: neutral when the charge is fine, amber under 20%, red under 10%. */
+function batteryColor(frac: number): string {
+  return frac < 0.1 ? STATUS_COLORS.failed : frac < 0.2 ? EVENT_COLORS.battery_low : C.batteryOk;
 }
 
 interface Placed extends SnapRobot {
@@ -310,12 +486,12 @@ interface Placed extends SnapRobot {
 
 /** Vertical extent of a robot's marker plus its label stack (mirrors drawRobot's layout). */
 function labelTop(p: Placed): number {
-  if (p.dir[1] < -0.3) return p.y - (RING + 5) - 3 - (caption(p) ? 12 : 0) - 15 - 2;
+  if (p.dir[1] < -0.3) return p.y - (RING + 5) - 3 - (p.caption ? 12 : 0) - 15 - 2;
   return p.y - RING - 2;
 }
 function labelBottom(p: Placed): number {
-  if (p.dir[1] > 0.3) return p.y + RING + 5 + 10 + (caption(p) ? 12 : 0) + 5 + 5;
-  if (Math.abs(p.dir[1]) <= 0.3) return p.y + (caption(p) ? 9 : -2) + 5 + 5;
+  if (p.dir[1] > 0.3) return p.y + RING + 5 + 10 + (p.caption ? 12 : 0) + 5 + 5;
+  if (Math.abs(p.dir[1]) <= 0.3) return p.y + (p.caption ? 9 : -2) + 5 + 5;
   return p.y + RING + 2;
 }
 
@@ -360,6 +536,8 @@ interface DrawInput {
   placed: Placed[];
   hover: string | null;
   pointer: { x: number; y: number } | null;
+  /** fraction of the hold still to run while autoplay waits on an event, else null */
+  hold: { frac: number } | null;
 }
 
 function drawSite({ ctx, geo, model, snap, placed }: DrawInput) {
@@ -395,10 +573,10 @@ function drawSite({ ctx, geo, model, snap, placed }: DrawInput) {
   ctx.strokeRect(Math.round(x0) + 0.5, Math.round(yTop) + 0.5, Math.round(s * gx), Math.round(s * gy));
   // tick labels every 10 cells
   for (let x = 0; x <= gx; x += 10) {
-    label(ctx, String(x), x0 + x * s, yBot + 11, `9px ${FONT_MONO}`, C.faint, "center");
+    label(ctx, String(x), x0 + x * s, yBot + 13, `11px ${FONT_MONO}`, C.faint, "center");
   }
   for (let y = 0; y <= gy; y += 10) {
-    label(ctx, String(y), x0 - 4, yBot - y * s + 3, `9px ${FONT_MONO}`, C.faint, "right");
+    label(ctx, String(y), x0 - 5, yBot - y * s + 4, `11px ${FONT_MONO}`, C.faint, "right");
   }
 
   // zones
@@ -424,7 +602,7 @@ function drawSite({ ctx, geo, model, snap, placed }: DrawInput) {
     let extra = structures.join(", ");
     if (extra.length > 30) extra = extra.slice(0, 29) + "…";
     const idFont = `600 12px ${FONT_SANS}`;
-    const extraFont = `10px ${FONT_SANS}`;
+    const extraFont = `11px ${FONT_SANS}`;
     ctx.font = idFont;
     const idW = ctx.measureText(z.id).width;
     ctx.font = extraFont;
@@ -448,7 +626,7 @@ function drawSite({ ctx, geo, model, snap, placed }: DrawInput) {
     ctx.strokeStyle = withAlpha("#cbd5e1", 0.55);
     ctx.stroke();
     ctx.restore();
-    label(ctx, "Depot", dx, dy - half - 5, `10px ${FONT_SANS}`, C.muted);
+    label(ctx, "Depot", dx, dy - half - 5, `11px ${FONT_SANS}`, C.muted);
   }
 
   // heading lines for moving robots (under the markers)
@@ -469,7 +647,7 @@ function drawSite({ ctx, geo, model, snap, placed }: DrawInput) {
     ctx.restore();
   }
 
-  // event pulses
+  // event pulses: a ring expanding from the robot for PULSE_H after the event
   for (const e of model.events) {
     const age = snap.t - e.t_h;
     if (age < 0 || age > PULSE_H || !e.robot) continue;
@@ -486,7 +664,8 @@ function drawSite({ ctx, geo, model, snap, placed }: DrawInput) {
 
 function drawRobot(ctx: CanvasRenderingContext2D, p: Placed, hovered: boolean) {
   const color = robotTypeColor(p.type);
-  const dim = p.status === "failed" ? 0.35 : p.status === "done" ? 0.6 : 1;
+  const failed = p.status === "failed";
+  const dim = failed ? 0.3 : p.status === "done" ? 0.6 : 1;
 
   if (hovered) {
     ctx.beginPath();
@@ -505,17 +684,23 @@ function drawRobot(ctx: CanvasRenderingContext2D, p: Placed, hovered: boolean) {
   markerPath(ctx, p.type, p.x, p.y, R);
   ctx.fillStyle = withAlpha(color, dim);
   ctx.fill();
-  if (p.status === "failed") {
-    const k = R + 2;
-    ctx.lineWidth = 2.5;
+  if (failed) {
+    // red X over the last position, with a surface halo so it reads on any zone fill
+    const k = R + 3;
     ctx.lineCap = "round";
-    ctx.strokeStyle = STATUS_COLORS.failed;
-    ctx.beginPath();
-    ctx.moveTo(p.x - k, p.y - k);
-    ctx.lineTo(p.x + k, p.y + k);
-    ctx.moveTo(p.x + k, p.y - k);
-    ctx.lineTo(p.x - k, p.y + k);
-    ctx.stroke();
+    for (const [width, stroke] of [
+      [5, C.halo],
+      [2.5, STATUS_COLORS.failed],
+    ] as const) {
+      ctx.lineWidth = width;
+      ctx.strokeStyle = stroke;
+      ctx.beginPath();
+      ctx.moveTo(p.x - k, p.y - k);
+      ctx.lineTo(p.x + k, p.y + k);
+      ctx.moveTo(p.x + k, p.y - k);
+      ctx.lineTo(p.x - k, p.y + k);
+      ctx.stroke();
+    }
     ctx.lineCap = "butt";
   }
 
@@ -525,27 +710,27 @@ function drawRobot(ctx: CanvasRenderingContext2D, p: Placed, hovered: boolean) {
   const ay = p.y + dy * (RING + 5);
   const align: CanvasTextAlign = Math.abs(dx) > 0.3 ? (dx > 0 ? "left" : "right") : "center";
   const vert = dy > 0.3 ? "down" : dy < -0.3 ? "up" : "middle";
-  const cap = caption(p);
-  const idFont = `600 11px ${FONT_MONO}`;
-  const capFont = `10px ${FONT_SANS}`;
+  const cap = p.caption;
+  const idFont = `600 12px ${FONT_MONO}`;
+  const capFont = `11px ${FONT_SANS}`;
   let idY: number;
   let capY: number | null;
   let barY: number;
   if (vert === "down") {
-    idY = ay + 10;
-    capY = cap ? idY + 12 : null;
+    idY = ay + 11;
+    capY = cap ? idY + 13 : null;
     barY = (capY ?? idY) + 5;
   } else if (vert === "up") {
     idY = ay - 3;
-    capY = cap ? idY - 12 : null;
-    barY = (capY ?? idY) - 15;
+    capY = cap ? idY - 13 : null;
+    barY = (capY ?? idY) - 16;
   } else {
     idY = p.y - 2;
-    capY = cap ? idY + 11 : null;
+    capY = cap ? idY + 12 : null;
     barY = (capY ?? idY) + 5;
   }
   label(ctx, p.id, ax, idY, idFont, hovered ? "#ffffff" : C.text, align);
-  if (cap && capY !== null) label(ctx, cap, ax, capY, capFont, C.muted, align);
+  if (cap && capY !== null) label(ctx, cap, ax, capY, capFont, failed ? STATUS_COLORS.failed : C.muted, align);
   const frac = p.cap > 0 ? Math.max(0, Math.min(1, p.battery / p.cap)) : 0;
   const bx = align === "left" ? ax : align === "right" ? ax - BAR_W : ax - BAR_W / 2;
   roundRect(ctx, bx, barY, BAR_W, 3, 1.5);
@@ -553,8 +738,14 @@ function drawRobot(ctx: CanvasRenderingContext2D, p: Placed, hovered: boolean) {
   ctx.fill();
   if (frac > 0) {
     roundRect(ctx, bx, barY, Math.max(2, BAR_W * frac), 3, 1.5);
-    ctx.fillStyle = withAlpha(batteryColor(frac), p.status === "failed" ? 0.5 : 1);
+    ctx.fillStyle = withAlpha(batteryColor(frac), failed ? 0.5 : 1);
     ctx.fill();
+  }
+  // a low battery is quantified next to its bar (text in text colour; the bar carries the state)
+  if (frac < 0.2 && !failed) {
+    const pct = `${Math.round(frac * 100)}%`;
+    const px = align === "right" ? bx - 4 : bx + BAR_W + 4;
+    label(ctx, pct, px, barY + 4, `600 11px ${FONT_MONO}`, C.text, align === "right" ? "right" : "left");
   }
 }
 
@@ -565,8 +756,8 @@ function drawTooltip({ ctx, geo, model, pointer, placed, hover }: DrawInput) {
   const task = p.task ? model.taskMap[p.task] : undefined;
   const state =
     p.status === "working" || p.status === "moving" || (p.status === "idle" && p.task)
-      ? `${caption(p)}${task ? ` · ${task.name}` : ""}`
-      : (caption(p) ?? p.status);
+      ? `${p.caption}${task ? ` · ${task.name}` : ""}`
+      : p.caption;
   const pct = p.cap > 0 ? Math.round((100 * p.battery) / p.cap) : 0;
   const lines: { text: string; font: string; color: string }[] = [
     { text: `${p.id} · ${p.type || "robot"}`, font: `600 12px ${FONT_SANS}`, color: C.text },
@@ -574,6 +765,8 @@ function drawTooltip({ ctx, geo, model, pointer, placed, hover }: DrawInput) {
     { text: `battery ${Math.round(p.battery)} / ${Math.round(p.cap)} Wh (${pct}%)`, font: `11px ${FONT_SANS}`, color: C.muted },
     { text: `position (${p.pos[0].toFixed(1)}, ${p.pos[1].toFixed(1)})`, font: `11px ${FONT_SANS}`, color: C.muted },
   ];
+  const detail = p.status === "failed" ? model.failedDetail[p.id] : undefined;
+  if (detail) lines.splice(2, 0, { text: detail, font: `11px ${FONT_SANS}`, color: C.muted });
   let width = 0;
   for (const l of lines) {
     ctx.font = l.font;
@@ -602,12 +795,144 @@ function drawTooltip({ ctx, geo, model, pointer, placed, hover }: DrawInput) {
   });
 }
 
-function drawOverlay({ ctx, geo, model, snap }: DrawInput) {
+/** The banner shown at time t: the nearest event inside its window; at equal distance the
+ *  failure (and the event that triggered a replan) wins. */
+function pickBanner(model: Model, t: number): Banner | null {
+  let best: Banner | null = null;
+  let bestD = Infinity;
+  for (const b of model.banners) {
+    const d = Math.abs(t - b.t);
+    if (d > PULSE_H + 1e-9) continue;
+    if (d < bestD - 1e-9 || (Math.abs(d - bestD) <= 1e-9 && best !== null && b.rank > best.rank)) {
+      best = b;
+      bestD = d;
+    }
+  }
+  return best;
+}
+
+/** Verdict glyph (check or cross) centred at (cx, cy), 10 px tall. */
+function drawVerdict(ctx: CanvasRenderingContext2D, verdict: "ok" | "fail", cx: number, cy: number, ink: string) {
+  ctx.save();
+  ctx.lineWidth = 2;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.strokeStyle = ink;
+  ctx.beginPath();
+  if (verdict === "ok") {
+    ctx.moveTo(cx - 5, cy + 0.5);
+    ctx.lineTo(cx - 1.5, cy + 4);
+    ctx.lineTo(cx + 5.5, cy - 4);
+  } else {
+    ctx.moveTo(cx - 4.5, cy - 4.5);
+    ctx.lineTo(cx + 4.5, cy + 4.5);
+    ctx.moveTo(cx + 4.5, cy - 4.5);
+    ctx.lineTo(cx - 4.5, cy + 4.5);
+  }
+  ctx.stroke();
+  ctx.restore();
+}
+
+/**
+ * Event banner across the top of the canvas, in the event colour: "30.0 h · EX2 failed on T4
+ * (79% done) → CP-SAT rescheduled 11 tasks in <0.01 s → ✓ verified, 80 h → 91 h". One line
+ * when it fits, otherwise the outcome wraps to a second line; clauses that still overflow are
+ * ellipsised. While autoplay holds on the event a countdown bar drains along the bottom edge
+ * and a hint says how to continue. Returns the banner height (0 when none is showing).
+ */
+function drawBanner({ ctx, geo, model, snap, hold }: DrawInput): number {
+  const b = pickBanner(model, snap.t);
+  if (!b) return 0;
+  const fade = clamp01((PULSE_H - Math.abs(snap.t - b.t)) / BANNER_FADE_H);
+  if (fade <= 0) return 0;
+  const darkInk = luminance(b.color) > 0.35; // amber and yellow bands take dark ink
+  const ink = darkInk ? "#0b0f14" : "#ffffff";
+  const inkMuted = darkInk ? "rgba(11,15,23,0.7)" : "rgba(255,255,255,0.78)";
+  const padX = 12;
+  const lineH = 18;
+  const maxW = geo.w - padX * 2;
+  const timeFont = `700 13px ${FONT_MONO}`;
+  const leadFont = `600 13px ${FONT_SANS}`;
+  const restFont = `500 13px ${FONT_SANS}`;
+  const hintFont = `12px ${FONT_SANS}`;
+  const time = `${b.t.toFixed(1)} h`;
+  const sep = " · ";
+  const arrow = "  →  ";
+  const glyphW = 16;
+
+  const timeW = measure(ctx, time, timeFont);
+  const sepW = measure(ctx, sep, leadFont);
+  const leadW = measure(ctx, b.lead, leadFont);
+  const arrowW = measure(ctx, arrow, restFont);
+  const outcomeW = b.outcome.reduce(
+    (acc, text, i) => acc + arrowW + (i === b.outcome.length - 1 && b.verdict ? glyphW : 0) + measure(ctx, text, restFont),
+    0,
+  );
+  const twoLines = b.outcome.length > 0 && timeW + sepW + leadW + outcomeW > maxW;
+  const H = twoLines ? lineH * 2 + 12 : BANNER_H;
+
+  ctx.save();
+  ctx.globalAlpha = fade;
+  ctx.fillStyle = b.color;
+  ctx.fillRect(0, 0, geo.w, H);
+  // a light tint on dark-ink bands, a shade on white-ink bands: keeps text contrast above 4.5:1
+  ctx.fillStyle = darkInk ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.18)";
+  ctx.fillRect(0, 0, geo.w, H);
+  ctx.fillStyle = "rgba(0,0,0,0.35)";
+  ctx.fillRect(0, H - 1, geo.w, 1);
+
+  // line 1: time · lead
+  const y1 = twoLines ? 8 + 13 : H / 2 + 4.5;
+  let x = padX;
+  x += plainText(ctx, time, x, y1, timeFont, ink);
+  x += plainText(ctx, sep, x, y1, leadFont, inkMuted);
+  x += plainText(ctx, fitText(ctx, b.lead, leadFont, Math.max(0, geo.w - padX - x)), x, y1, leadFont, ink);
+
+  // outcome clauses, each after an arrow; the verdict glyph before the last one
+  let y = y1;
+  if (twoLines) {
+    x = padX;
+    y = y1 + lineH;
+  }
+  b.outcome.forEach((text, i) => {
+    const last = i === b.outcome.length - 1;
+    x += plainText(ctx, arrow, x, y, restFont, inkMuted);
+    if (last && b.verdict) {
+      drawVerdict(ctx, b.verdict, x + 6, y - 4.5, ink);
+      x += glyphW;
+    }
+    x += plainText(ctx, fitText(ctx, text, restFont, Math.max(0, geo.w - padX - x)), x, y, restFont, ink);
+  });
+
+  // hold: a countdown bar drains along the banner's bottom edge; the hint sits in a pill at the
+  // bottom right of the map, where there is always room
+  if (hold) {
+    ctx.fillStyle = inkMuted;
+    ctx.fillRect(0, H - 3, geo.w * clamp01(hold.frac), 3);
+    const hint = "paused on the event · click the map or press space to continue";
+    const pw = Math.min(geo.w - 16, measure(ctx, hint, hintFont) + 20);
+    const ph = 22;
+    const px = geo.w - 8 - pw;
+    const py = geo.h - 8 - ph;
+    roundRect(ctx, px, py, pw, ph, 6);
+    ctx.fillStyle = C.tooltipBg;
+    ctx.fill();
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = withAlpha(b.color, 0.7);
+    ctx.stroke();
+    plainText(ctx, fitText(ctx, hint, hintFont, pw - 20), px + 10, py + 15, hintFont, C.text);
+  }
+  ctx.restore();
+  return H;
+}
+
+function drawOverlay({ ctx, geo, model, snap }: DrawInput, topInset: number) {
   const day = Math.floor(snap.t / 24) + 1;
   const [x0, yTop] = toPx(geo, 0, geo.gy);
   const [x1] = toPx(geo, geo.gx, 0);
-  label(ctx, `${model.siteName} · t = ${snap.t.toFixed(1)} h · day ${day}`, x0 + 8, yTop + 16, `600 12px ${FONT_SANS}`, C.text, "left");
-  label(ctx, `${snap.done.length}/${model.total} tasks done`, x1 - 8, yTop + 16, `11px ${FONT_SANS}`, C.muted, "right");
+  const y = topInset > 0 ? topInset + 16 : yTop + 16;
+  label(ctx, `${model.siteName} · t = ${snap.t.toFixed(1)} h · day ${day}`, x0 + 8, y, `600 13px ${FONT_SANS}`, C.text, "left");
+  label(ctx, `${snap.done.length}/${model.total} tasks done`, x1 - 8, y, `12px ${FONT_SANS}`, C.muted, "right");
 }
 
 // ------------------------------------------------------------------ small SVG pieces for the DOM
@@ -633,10 +958,31 @@ function PlayIcon({ playing }: { playing: boolean }) {
   );
 }
 
+function FailedIcon() {
+  return (
+    <svg width="14" height="14" viewBox="-7 -7 14 14" aria-hidden className="shrink-0">
+      <circle r="5.5" fill="none" stroke={STATUS_COLORS.failed} strokeWidth="1.5" />
+      <path d="M-3 -3 L3 3 M3 -3 L-3 3" stroke={STATUS_COLORS.failed} strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 const mutedClass = "text-muted";
 
 // ------------------------------------------------------------------ component
-export function SimReplay({ sim, plan, tasks, autoPlay, seekRequest, onTimeChange, maxHeight = 640 }: SimReplayProps) {
+export function SimReplay({
+  sim,
+  plan,
+  tasks,
+  autoPlay,
+  seekRequest,
+  onTimeChange,
+  maxHeight = 640,
+  holdOnEvents = true,
+  startAtH = 0,
+  heading,
+  aside,
+}: SimReplayProps) {
   const model = useMemo(() => buildModel(sim, plan, tasks), [sim, plan, tasks]);
 
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -653,11 +999,17 @@ export function SimReplay({ sim, plan, tasks, autoPlay, seekRequest, onTimeChang
   const lastPubRef = useRef(0);
   const lastSentRef = useRef<number | null>(null);
   const onTimeChangeRef = useRef(onTimeChange);
+  /** the hold in progress: when it ends (performance.now ms) and the event time */
+  const holdRef = useRef<{ until: number; t: number } | null>(null);
+  const holdOnRef = useRef(holdOnEvents);
+  const holdingRef = useRef<number | null>(null);
 
   const [playing, setPlaying] = useState(Boolean(autoPlay));
   const [speed, setSpeed] = useState<number>(REPLAY_SPEEDS[0]);
   const [uiT, setUiT] = useState(0);
   const [size, setSize] = useState({ w: 0, h: 0 });
+  /** event time the autoplay is holding on (for the transport hint), else null */
+  const [holding, setHolding] = useState<number | null>(null);
 
   useEffect(() => {
     modelRef.current = model;
@@ -665,8 +1017,21 @@ export function SimReplay({ sim, plan, tasks, autoPlay, seekRequest, onTimeChang
   useEffect(() => {
     onTimeChangeRef.current = onTimeChange;
   }, [onTimeChange]);
+  useEffect(() => {
+    holdOnRef.current = holdOnEvents;
+  }, [holdOnEvents]);
+
+  const setHold = useCallback((value: { until: number; t: number } | null) => {
+    holdRef.current = value;
+    const t = value ? value.t : null;
+    if (holdingRef.current !== t) {
+      holdingRef.current = t;
+      setHolding(t);
+    }
+  }, []);
 
   const draw = useCallback((ease: number) => {
+    resolveFonts();
     const canvas = canvasRef.current;
     const { w, h, dpr } = sizeRef.current;
     if (!canvas || w < 20 || h < 20) return;
@@ -684,13 +1049,16 @@ export function SimReplay({ sim, plan, tasks, autoPlay, seekRequest, onTimeChang
     const geo = geometry(w, h, m.grid);
     const placed = placeRobots(snap.robots, m, geo, offsetsRef.current, ease);
     hitRef.current = placed.map((p) => ({ id: p.id, x: p.x, y: p.y }));
-    const input: DrawInput = { ctx, geo, model: m, snap, placed, hover: hoverRef.current, pointer: pointerRef.current };
+    const hd = holdRef.current;
+    const hold = hd ? { frac: clamp01((hd.until - performance.now()) / HOLD_MS) } : null;
+    const input: DrawInput = { ctx, geo, model: m, snap, placed, hover: hoverRef.current, pointer: pointerRef.current, hold };
     drawSite(input);
     const hover = hoverRef.current;
     for (const p of placed) if (p.id !== hover) drawRobot(ctx, p, false);
     const hp = hover ? placed.find((p) => p.id === hover) : undefined;
     if (hp) drawRobot(ctx, hp, true);
-    drawOverlay(input);
+    const bannerH = drawBanner(input);
+    drawOverlay(input, bannerH);
     drawTooltip(input);
   }, []);
 
@@ -748,15 +1116,17 @@ export function SimReplay({ sim, plan, tasks, autoPlay, seekRequest, onTimeChang
     requestDraw();
   }, [size, requestDraw]);
 
-  // a new SimResult rewinds (pass a stable object; key the component per run if in doubt)
+  // a new SimResult rewinds to startAtH (pass a stable object; key the component per run if in doubt)
   useEffect(() => {
-    tRef.current = 0;
+    const tMax = modelRef.current.tMax;
+    tRef.current = Math.max(0, Math.min(tMax, Number.isFinite(startAtH) ? startAtH : 0));
     offsetsRef.current.clear();
     hoverRef.current = null;
+    holdRef.current = null;
     const id = requestAnimationFrame(() => setPlaying(Boolean(autoPlay)));
     requestDraw();
     return () => cancelAnimationFrame(id);
-  }, [sim, autoPlay, requestDraw]);
+  }, [sim, autoPlay, startAtH, requestDraw]);
 
   useEffect(() => {
     requestDraw();
@@ -768,6 +1138,7 @@ export function SimReplay({ sim, plan, tasks, autoPlay, seekRequest, onTimeChang
     const tMax = modelRef.current.tMax;
     tRef.current = Math.max(0, Math.min(tMax, seekRequest.t_h));
     offsetsRef.current.clear();
+    holdRef.current = null;
     requestDraw();
   }, [seekRequest, requestDraw]);
 
@@ -784,13 +1155,35 @@ export function SimReplay({ sim, plan, tasks, autoPlay, seekRequest, onTimeChang
     const tick = (now: number) => {
       const dt = Math.min(0.1, Math.max(0, (now - last) / 1000));
       last = now;
-      const tMax = modelRef.current.tMax;
-      let t = tRef.current + dt * speed * HOURS_PER_SECOND;
-      const ended = t >= tMax;
-      if (ended) t = tMax;
+      const m = modelRef.current;
+      const hd = holdRef.current;
+      if (hd) {
+        if (now < hd.until) {
+          // holding on an event: time stands still, the countdown bar drains
+          draw(1 - Math.exp(-dt * 12));
+          raf = requestAnimationFrame(tick);
+          return;
+        }
+        setHold(null);
+      } else if (holdingRef.current !== null) {
+        setHold(null);
+      }
+      const t0 = tRef.current;
+      let t = t0 + dt * speed * HOURS_PER_SECOND;
+      let held = false;
+      if (holdOnRef.current) {
+        const h = m.holdTimes.find((x) => x > t0 + 1e-9 && x <= t + 1e-9);
+        if (h !== undefined) {
+          t = h;
+          held = true;
+        }
+      }
+      const ended = t >= m.tMax;
+      if (ended) t = m.tMax;
       tRef.current = t;
+      if (held && !ended) setHold({ until: now + HOLD_MS, t });
       draw(1 - Math.exp(-dt * 12));
-      publish(ended);
+      publish(ended || held);
       if (ended) {
         setPlaying(false);
         return;
@@ -800,24 +1193,80 @@ export function SimReplay({ sim, plan, tasks, autoPlay, seekRequest, onTimeChang
     raf = requestAnimationFrame(tick);
     return () => {
       loopRef.current = false;
+      holdRef.current = null;
       cancelAnimationFrame(raf);
     };
-  }, [playing, speed, draw, publish]);
+  }, [playing, speed, draw, publish, setHold]);
 
-  const togglePlay = () => {
-    if (!playing && tRef.current >= model.tMax - 1e-9) {
+  const togglePlay = useCallback(() => {
+    setHold(null);
+    if (!playing && tRef.current >= modelRef.current.tMax - 1e-9) {
       tRef.current = 0;
       offsetsRef.current.clear();
     }
     setPlaying((p) => !p);
-  };
+  }, [playing, setHold]);
 
-  const seek = (t: number) => {
-    tRef.current = Math.max(0, Math.min(model.tMax, t));
-    setUiT(tRef.current);
-    lastSentRef.current = tRef.current;
-    onTimeChange?.(tRef.current);
-    requestDraw();
+  /** Ends a hold early; true when there was one. */
+  const continueHold = useCallback(() => {
+    if (!holdRef.current) return false;
+    setHold(null);
+    return true;
+  }, [setHold]);
+
+  const seek = useCallback(
+    (t: number) => {
+      const tMax = modelRef.current.tMax;
+      tRef.current = Math.max(0, Math.min(tMax, t));
+      setHold(null);
+      setUiT(tRef.current);
+      lastSentRef.current = tRef.current;
+      onTimeChangeRef.current?.(tRef.current);
+      requestDraw();
+    },
+    [requestDraw, setHold],
+  );
+
+  // space: continue a hold from anywhere outside a form control; play / pause when the map has focus
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.key !== " " && e.code !== "Space") || e.repeat) return;
+      const target = e.target as HTMLElement | null;
+      const inWrap = Boolean(target && wrapRef.current?.contains(target));
+      const onBody = !target || target === document.body || target === document.documentElement;
+      if (!inWrap && !onBody) return;
+      if (continueHold()) {
+        e.preventDefault();
+        return;
+      }
+      if (inWrap) {
+        e.preventDefault();
+        togglePlay();
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [continueHold, togglePlay]);
+
+  const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const step = e.shiftKey ? 6 : 1;
+    switch (e.key) {
+      case "ArrowRight":
+        seek(tRef.current + step);
+        break;
+      case "ArrowLeft":
+        seek(tRef.current - step);
+        break;
+      case "Home":
+        seek(0);
+        break;
+      case "End":
+        seek(modelRef.current.tMax);
+        break;
+      default:
+        return;
+    }
+    e.preventDefault();
   };
 
   const onPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
@@ -858,19 +1307,127 @@ export function SimReplay({ sim, plan, tasks, autoPlay, seekRequest, onTimeChang
     snap?.robots.find((r) => r.task === taskId)?.id ??
     "";
   const atEnd = uiT >= tMax - 1e-9;
+  const banner = snap ? pickBanner(model, snap.t) : null;
   const summary = snap
     ? `${model.siteName} at ${uiT.toFixed(1)} hours: ${doneCount} of ${model.total} tasks done; ` +
-      snap.robots.map((r) => `${r.id} ${caption(r) ?? r.status}`).join(", ")
+      snap.robots.map((r) => `${r.id} ${r.caption}`).join(", ") +
+      (banner ? `. Event at ${banner.t.toFixed(1)} h: ${[banner.lead, ...banner.outcome].join(", then ")}` : "")
     : "No simulation frames";
   const robotTypes = Array.from(new Set(model.robotList.map((r) => r.type)));
   const statuses: RobotStatus[] = ["idle", "moving", "working", "failed", "done"];
+  const eventKinds = Object.keys(EVENT_COLORS).filter((k) => k !== "battery_low");
   const [gx, gy] = model.grid;
 
+  const legend = (
+    <div className={`flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[11px] ${mutedClass}`}>
+      {robotTypes.map((t) => (
+        <span key={t} className="inline-flex items-center gap-1.5">
+          <MarkerIcon type={t} color={robotTypeColor(t)} />
+          {t}
+        </span>
+      ))}
+      <span className="h-3 w-px bg-white/15" aria-hidden />
+      {statuses.map((s) => (
+        <span key={s} className="inline-flex items-center gap-1.5">
+          {s === "failed" ? (
+            <FailedIcon />
+          ) : (
+            <span className="h-3 w-3 rounded-full border-2" style={{ borderColor: STATUS_COLORS[s] }} aria-hidden />
+          )}
+          {s}
+        </span>
+      ))}
+      <span className="h-3 w-px bg-white/15" aria-hidden />
+      {eventKinds.map((k) => (
+        <span key={k} className="inline-flex items-center gap-1.5">
+          <span className="h-3 w-0.5 rounded-full" style={{ backgroundColor: EVENT_COLORS[k] }} aria-hidden />
+          {eventKindLabel(k)}
+        </span>
+      ))}
+      <span className="inline-flex items-center gap-1.5">
+        <span className="h-1.5 w-1.5 rotate-45 bg-info" aria-hidden />
+        replan
+      </span>
+      <span className="h-3 w-px bg-white/15" aria-hidden />
+      <span className="inline-flex items-center gap-1.5">
+        <span className="inline-flex h-1 w-5 overflow-hidden rounded-full bg-white/15" aria-hidden>
+          <span className="h-full w-1/5" style={{ backgroundColor: EVENT_COLORS.battery_low }} />
+        </span>
+        battery &lt;20%
+      </span>
+      <span className="inline-flex items-center gap-1.5">
+        <span className="inline-flex h-1 w-5 overflow-hidden rounded-full bg-white/15" aria-hidden>
+          <span className="h-full w-[10%]" style={{ backgroundColor: STATUS_COLORS.failed }} />
+        </span>
+        &lt;10%
+      </span>
+    </div>
+  );
+
+  const activeTasks = (
+    <div>
+      <div className="flex items-baseline justify-between text-sm">
+        <span className="font-medium tabular-nums">
+          {doneCount}/{model.total} tasks done
+        </span>
+        <span className={`text-xs ${mutedClass}`}>{active.length} active</span>
+      </div>
+      <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-white/10">
+        <div className="h-full rounded-full bg-info transition-[width]" style={{ width: `${model.total ? (100 * doneCount) / model.total : 0}%` }} />
+      </div>
+      <ul className="mt-2 space-y-1.5">
+        {active.map((id) => {
+          const task = model.taskMap[id];
+          const robot = robotOnTask(id);
+          const type = model.robots[robot]?.type ?? "";
+          const pct = Math.round(100 * (snap?.progress[id] ?? 0));
+          return (
+            <li key={id}>
+              <div className="flex items-baseline justify-between gap-2 text-xs">
+                <span className="min-w-0 truncate">
+                  <span className="font-mono font-semibold">{id}</span>{" "}
+                  <span className={mutedClass}>{task?.name ?? ""}</span>
+                </span>
+                <span className={`shrink-0 font-mono tabular-nums ${mutedClass}`}>
+                  {robot}
+                  {robot ? " · " : ""}
+                  {pct}%
+                </span>
+              </div>
+              <div className="mt-0.5 h-1 w-full overflow-hidden rounded-full bg-white/10">
+                <div className="h-full rounded-full" style={{ width: `${pct}%`, backgroundColor: robotTypeColor(type) }} />
+              </div>
+            </li>
+          );
+        })}
+        {active.length === 0 && (
+          <li className={`text-xs ${mutedClass}`}>
+            {atEnd
+              ? sim.completed
+                ? "All tasks finished."
+                : "The run ended with unfinished tasks."
+              : "No task in progress: robots are moving or waiting."}
+          </li>
+        )}
+      </ul>
+    </div>
+  );
+
   return (
-    <div className="space-y-3">
+    <div className={aside ? "grid grid-cols-[minmax(0,1fr)] gap-5 xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]" : "space-y-3"}>
+    <div className="min-w-0 space-y-3">
+      {heading}
       <div
         ref={wrapRef}
-        className="relative w-full overflow-hidden rounded-xl border border-line"
+        role="group"
+        tabIndex={0}
+        aria-label="Simulation replay map. Space plays, pauses or continues past a held event; arrow keys step one hour, shift for six."
+        aria-keyshortcuts="Space ArrowLeft ArrowRight Home End"
+        onClick={() => {
+          if (!continueHold()) togglePlay();
+        }}
+        onKeyDown={onKeyDown}
+        className="relative w-full overflow-hidden rounded-xl border border-line focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
         style={{ aspectRatio: `${gx} / ${gy}`, maxHeight, backgroundColor: C.bg }}
       >
         <canvas
@@ -909,6 +1466,11 @@ export function SimReplay({ sim, plan, tasks, autoPlay, seekRequest, onTimeChang
             </button>
           ))}
         </div>
+        {/* the hold hint is drawn on the canvas (bottom-right pill); this copy is for screen
+            readers only, so the transport row never reflows while the replay holds */}
+        <span className="sr-only" role="status">
+          {holding !== null && playing ? `holding at ${formatHours(holding)} · click the map or press space to continue` : ""}
+        </span>
         <div className="ml-auto flex flex-wrap items-baseline gap-x-3 gap-y-0.5 tabular-nums">
           <span className="text-xl font-semibold leading-none">{uiT.toFixed(1)} h</span>
           <span className={`text-sm ${mutedClass}`}>
@@ -939,7 +1501,10 @@ export function SimReplay({ sim, plan, tasks, autoPlay, seekRequest, onTimeChang
                 className="absolute top-1.5 h-3.5 w-3 -translate-x-1/2 cursor-pointer"
                 style={{ left: `${(100 * e.t_h) / tMax}%` }}
               >
-                <span className="absolute inset-y-0 left-1/2 w-0.5 -translate-x-1/2 rounded-full" style={{ backgroundColor: EVENT_COLORS[e.kind] ?? "#94a3b8" }} />
+                <span
+                  className={`absolute left-1/2 -translate-x-1/2 rounded-full ${e.kind === "robot_failure" ? "inset-y-0 w-[3px]" : "inset-y-0.5 w-0.5"}`}
+                  style={{ backgroundColor: EVENT_COLORS[e.kind] ?? "#94a3b8" }}
+                />
               </button>
             ))}
         </div>
@@ -966,89 +1531,29 @@ export function SimReplay({ sim, plan, tasks, autoPlay, seekRequest, onTimeChang
                 style={{ left: `${(100 * t) / tMax}%` }}
               >
                 <span className="h-1.5 w-1.5 rotate-45 bg-info" />
-                <span className="mt-0.5 text-[9px] font-semibold leading-none text-info">R{i + 1}</span>
+                <span className="mt-0.5 text-[10px] font-semibold leading-none text-info">R{i + 1}</span>
               </button>
             ))}
         </div>
-        <div className={`pointer-events-none absolute inset-x-0 bottom-0 flex justify-between text-[10px] tabular-nums ${mutedClass}`}>
+        <div className={`pointer-events-none absolute inset-x-0 bottom-0 flex justify-between text-[11px] tabular-nums ${mutedClass}`}>
           <span>0 h</span>
           <span>{formatHours(tMax)}</span>
         </div>
       </div>
-
-      <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,18rem)]">
-        {/* legend */}
-        <div className={`flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[11px] ${mutedClass}`}>
-          {robotTypes.map((t) => (
-            <span key={t} className="inline-flex items-center gap-1.5">
-              <MarkerIcon type={t} color={robotTypeColor(t)} />
-              {t}
-            </span>
-          ))}
-          <span className="h-3 w-px bg-white/15" aria-hidden />
-          {statuses.map((s) => (
-            <span key={s} className="inline-flex items-center gap-1.5">
-              <span className="h-3 w-3 rounded-full border-2" style={{ borderColor: STATUS_COLORS[s] }} aria-hidden />
-              {s}
-            </span>
-          ))}
-          <span className="h-3 w-px bg-white/15" aria-hidden />
-          {Object.keys(EVENT_COLORS).map((k) => (
-            <span key={k} className="inline-flex items-center gap-1.5">
-              <span className="h-3 w-0.5 rounded-full" style={{ backgroundColor: EVENT_COLORS[k] }} aria-hidden />
-              {eventKindLabel(k)}
-            </span>
-          ))}
+      {!aside && (
+        <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,18rem)]">
+          {legend}
+          {activeTasks}
         </div>
-
-        {/* active tasks */}
-        <div>
-          <div className="flex items-baseline justify-between text-sm">
-            <span className="font-medium tabular-nums">
-              {doneCount}/{model.total} tasks done
-            </span>
-            <span className={`text-xs ${mutedClass}`}>{active.length} active</span>
-          </div>
-          <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-white/10">
-            <div className="h-full rounded-full bg-info transition-[width]" style={{ width: `${model.total ? (100 * doneCount) / model.total : 0}%` }} />
-          </div>
-          <ul className="mt-2 space-y-1.5">
-            {active.map((id) => {
-              const task = model.taskMap[id];
-              const robot = robotOnTask(id);
-              const type = model.robots[robot]?.type ?? "";
-              const pct = Math.round(100 * (snap?.progress[id] ?? 0));
-              return (
-                <li key={id}>
-                  <div className="flex items-baseline justify-between gap-2 text-xs">
-                    <span className="min-w-0 truncate">
-                      <span className="font-mono font-semibold">{id}</span>{" "}
-                      <span className={mutedClass}>{task?.name ?? ""}</span>
-                    </span>
-                    <span className={`shrink-0 font-mono tabular-nums ${mutedClass}`}>
-                      {robot}
-                      {robot ? " · " : ""}
-                      {pct}%
-                    </span>
-                  </div>
-                  <div className="mt-0.5 h-1 w-full overflow-hidden rounded-full bg-white/10">
-                    <div className="h-full rounded-full" style={{ width: `${pct}%`, backgroundColor: robotTypeColor(type) }} />
-                  </div>
-                </li>
-              );
-            })}
-            {active.length === 0 && (
-              <li className={`text-xs ${mutedClass}`}>
-                {atEnd
-                  ? sim.completed
-                    ? "All tasks finished."
-                    : "The run ended with unfinished tasks."
-                  : "No task in progress: robots are moving or waiting."}
-              </li>
-            )}
-          </ul>
-        </div>
+      )}
+    </div>
+    {aside && (
+      <div className="min-w-0 space-y-5">
+        {aside}
+        {activeTasks}
+        <div className="border-t border-line pt-3">{legend}</div>
       </div>
+    )}
     </div>
   );
 }

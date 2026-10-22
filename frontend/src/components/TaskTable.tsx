@@ -1,13 +1,14 @@
 "use client";
 /**
- * Table twin of the Gantt: every task of the graph with its robot type, zone, duration, energy,
- * predecessors and (when scheduled) its robot and time window. Sortable by column, default by
- * start time with unscheduled tasks last. Row click (or Enter / Space) selects a task; clicking an
- * `after` chip selects that predecessor.
+ * Table twin of the Gantt: every task of the graph with its robot type, zone, quantity (with
+ * the rate-model basis as a tooltip), duration, energy (the model's own estimate on hover when
+ * the rate model re-priced the task), predecessors and (when scheduled) its robot and time
+ * window. Sortable by column, default by start time with unscheduled tasks last. Row click (or
+ * Enter / Space) selects a task; clicking an `after` chip selects that predecessor.
  */
 import { useMemo, useState } from "react";
 import type { KeyboardEvent } from "react";
-import type { Requirements, Schedule, ScheduleEntry, Task } from "@/lib/types";
+import type { Requirements, Schedule, ScheduleEntry, Task, Unit } from "@/lib/types";
 import { robotTypeColor, zoneColor } from "@/lib/palette";
 
 export interface TaskTableProps {
@@ -20,16 +21,19 @@ export interface TaskTableProps {
   zoneIds?: string[];
 }
 
-type SortKey = "start" | "id" | "name" | "type" | "zone" | "duration" | "energy" | "robot";
+type SortKey = "start" | "id" | "name" | "type" | "zone" | "quantity" | "duration" | "energy" | "robot";
 
 const COLUMNS: { key: SortKey; label: string; align?: "right" }[] = [
   { key: "id", label: "Id" },
   { key: "name", label: "Task" },
   { key: "type", label: "Robot type" },
   { key: "zone", label: "Zone" },
+  { key: "quantity", label: "Quantity", align: "right" },
   { key: "duration", label: "Duration", align: "right" },
   { key: "energy", label: "Energy", align: "right" },
 ];
+
+export const UNIT_LABELS: Record<Unit, string> = { m3: "m³", m2: "m²", m: "m", ea: "ea" };
 
 function naturalCompare(a: string, b: string): number {
   const ma = /^(.*?)(\d+)$/.exec(a);
@@ -40,6 +44,28 @@ function naturalCompare(a: string, b: string): number {
 
 function fmtH(h: number): string {
   return Number.isInteger(h) ? String(h) : h.toFixed(1);
+}
+
+function fmtWh(wh: number): string {
+  return Math.round(wh).toLocaleString("en-US");
+}
+
+/** "126 m³" (integers plain, otherwise one decimal). */
+export function fmtQuantity(q: number, unit: Unit | null): string {
+  const n = Number.isInteger(q) ? q.toLocaleString("en-US") : q.toFixed(1);
+  return unit ? `${n} ${UNIT_LABELS[unit]}` : n;
+}
+
+/** "model estimate 10 h / 1,000 Wh" when the model's own figures differ from the rate model's;
+ *  null when the task was not re-priced (or the figures agree). */
+export function estimateNote(t: Task): string | null {
+  if (t.estimated_duration_h === null && t.estimated_energy_wh === null) return null;
+  const sameH = t.estimated_duration_h === null || Math.abs(t.estimated_duration_h - t.duration_h) < 0.05;
+  const sameWh = t.estimated_energy_wh === null || Math.abs(t.estimated_energy_wh - t.energy_wh) < 0.5;
+  if (sameH && sameWh) return null;
+  const h = t.estimated_duration_h !== null ? `${fmtH(t.estimated_duration_h)} h` : "—";
+  const wh = t.estimated_energy_wh !== null ? `${fmtWh(t.estimated_energy_wh)} Wh` : "—";
+  return `model estimate ${h} / ${wh}`;
 }
 
 export function TaskTable({
@@ -81,6 +107,12 @@ export function TaskTable({
           return a.robot_type.localeCompare(b.robot_type, "en") || naturalCompare(a.id, b.id);
         case "zone":
           return zoneIds.indexOf(a.zone) - zoneIds.indexOf(b.zone) || naturalCompare(a.id, b.id);
+        case "quantity":
+          return (
+            (a.unit ?? "").localeCompare(b.unit ?? "", "en") ||
+            (a.quantity ?? -1) - (b.quantity ?? -1) ||
+            naturalCompare(a.id, b.id)
+          );
         case "duration":
           return a.duration_h - b.duration_h || naturalCompare(a.id, b.id);
         case "energy":
@@ -120,6 +152,7 @@ export function TaskTable({
   };
 
   const scheduled = tasks.filter((t) => entryByTask.has(t.id)).length;
+  const priced = tasks.filter((t) => t.quantity !== null).length;
   const totalWh = tasks.reduce((s, t) => s + t.energy_wh, 0);
   const totalH = tasks.reduce((s, t) => s + t.duration_h, 0);
 
@@ -134,7 +167,7 @@ export function TaskTable({
       <button
         type="button"
         onClick={() => toggleSort(col.key)}
-        className="inline-flex items-center gap-1 rounded text-slate-400 hover:text-slate-200 focus:outline-none focus-visible:ring-1 focus-visible:ring-slate-300"
+        className="inline-flex items-center gap-1 rounded text-muted hover:text-fg focus:outline-none focus-visible:ring-1 focus-visible:ring-white/40"
       >
         {col.label}
         <span className="w-2 text-[9px]" aria-hidden>
@@ -144,14 +177,16 @@ export function TaskTable({
     </th>
   );
 
+  const estimateCell = "underline decoration-dotted decoration-white/30 underline-offset-2";
+
   return (
-    <div className="w-full min-w-0 text-xs text-slate-200">
+    <div className="w-full min-w-0 text-xs text-fg">
       <div className="overflow-x-auto rounded-md border border-white/10">
         <table className="w-full border-collapse" style={{ fontVariantNumeric: "tabular-nums" }}>
           <thead className="bg-white/[0.04] text-[11px]">
             <tr>
               {COLUMNS.map(headerCell)}
-              <th scope="col" className="px-2 py-1.5 text-left font-medium text-slate-400">
+              <th scope="col" className="px-2 py-1.5 text-left font-medium text-muted">
                 After
               </th>
               {headerCell({ key: "robot", label: "Robot" })}
@@ -162,6 +197,13 @@ export function TaskTable({
             {rows.map((t) => {
               const e = entryByTask.get(t.id);
               const isSel = selectedTask === t.id;
+              const note = estimateNote(t);
+              const quantityTitle =
+                t.quantity !== null
+                  ? t.basis
+                    ? `${fmtQuantity(t.quantity, t.unit)} · ${t.basis}`
+                    : fmtQuantity(t.quantity, t.unit)
+                  : "no quantity stated: duration and energy are the model's own estimate";
               return (
                 <tr
                   key={t.id}
@@ -197,13 +239,22 @@ export function TaskTable({
                       {t.zone}
                     </span>
                   </td>
-                  <td className="whitespace-nowrap px-2 py-1.5 text-right">{fmtH(t.duration_h)} h</td>
-                  <td className="whitespace-nowrap px-2 py-1.5 text-right">
-                    {Math.round(t.energy_wh).toLocaleString("en-US")} Wh
+                  <td className="whitespace-nowrap px-2 py-1.5 text-right" title={quantityTitle}>
+                    {t.quantity !== null ? (
+                      <span className={t.basis ? estimateCell : undefined}>{fmtQuantity(t.quantity, t.unit)}</span>
+                    ) : (
+                      <span className="text-dim">—</span>
+                    )}
+                  </td>
+                  <td className="whitespace-nowrap px-2 py-1.5 text-right" title={note ?? undefined}>
+                    <span className={note ? estimateCell : undefined}>{fmtH(t.duration_h)} h</span>
+                  </td>
+                  <td className="whitespace-nowrap px-2 py-1.5 text-right" title={note ?? undefined}>
+                    <span className={note ? estimateCell : undefined}>{fmtWh(t.energy_wh)} Wh</span>
                   </td>
                   <td className="whitespace-nowrap px-2 py-1.5">
                     {t.after.length === 0 ? (
-                      <span className="text-slate-500">—</span>
+                      <span className="text-dim">—</span>
                     ) : (
                       <span className="inline-flex flex-wrap gap-1">
                         {t.after.map((p) => (
@@ -214,10 +265,10 @@ export function TaskTable({
                               ev.stopPropagation();
                               select(p);
                             }}
-                            className={`rounded border px-1 font-mono text-[10px] leading-4 ${
+                            className={`rounded border px-1 font-mono text-[11px] leading-4 ${
                               selectedTask === p
-                                ? "border-slate-200 bg-white/15 text-slate-100"
-                                : "border-white/15 bg-white/[0.04] text-slate-300 hover:border-white/40"
+                                ? "border-white/60 bg-white/15 text-fg"
+                                : "border-white/15 bg-white/[0.04] text-muted hover:border-white/40 hover:text-fg"
                             }`}
                             title={`select ${p}`}
                           >
@@ -227,14 +278,14 @@ export function TaskTable({
                       </span>
                     )}
                   </td>
-                  <td className="whitespace-nowrap px-2 py-1.5">
-                    {e ? e.robot : <span className="text-slate-500">—</span>}
+                  <td className="whitespace-nowrap px-2 py-1.5 font-mono">
+                    {e ? e.robot : <span className="text-dim">—</span>}
                   </td>
                   <td className="whitespace-nowrap px-2 py-1.5 text-right">
                     {e ? (
                       `${fmtH(e.start_h)}–${fmtH(e.end_h)} h`
                     ) : (
-                      <span className="text-slate-500">unscheduled</span>
+                      <span className="text-dim">unscheduled</span>
                     )}
                   </td>
                 </tr>
@@ -242,7 +293,7 @@ export function TaskTable({
             })}
             {rows.length === 0 ? (
               <tr>
-                <td colSpan={9} className="px-2 py-4 text-center italic text-slate-500">
+                <td colSpan={10} className="px-2 py-4 text-center italic text-dim">
                   No tasks in the graph
                 </td>
               </tr>
@@ -250,12 +301,23 @@ export function TaskTable({
           </tbody>
         </table>
       </div>
-      <div className="mt-1.5 flex flex-wrap gap-x-3 text-[10px] text-slate-400">
+      <div className="mt-2 flex flex-wrap gap-x-3 text-[11px] text-muted">
         <span>
           {tasks.length} {tasks.length === 1 ? "task" : "tasks"}, {scheduled} scheduled
         </span>
         <span>· {fmtH(totalH)} robot-hours</span>
-        <span>· {Math.round(totalWh).toLocaleString("en-US")} Wh</span>
+        <span>· {fmtWh(totalWh)} Wh</span>
+        {tasks.length > 0 ? (
+          <span
+            title={
+              priced > 0
+                ? "tasks with a stated quantity: their duration and energy come from the rate table (hover a cell for the model's own estimate)"
+                : "no task states a quantity: every duration and energy is the model's own estimate"
+            }
+          >
+            · {priced} of {tasks.length} priced by the rate model
+          </span>
+        ) : null}
         {schedule ? (
           <span>
             · makespan {fmtH(schedule.makespan_h)} h ({schedule.status})

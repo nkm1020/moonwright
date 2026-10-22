@@ -1,16 +1,28 @@
 "use client";
 /**
  * One replan: the schedule in force before the event next to the replanned schedule, both in
- * absolute simulator hours on the same horizon, plus makespan delta, repair count, the
- * replanning trace and the context the planner was given.
+ * absolute simulator hours on the same axis, plus the outcome (CP-SAT alone, or escalated to
+ * Nemotron), the makespan delta, the re-verification summary, the replanning trace and the
+ * context the planner was given.
  */
 import { useMemo } from "react";
-import type { Failure, LoopStep, ReplanRecord, Requirements, Schedule, Task } from "@/lib/types";
+import type {
+  Failure,
+  FailureSpec,
+  LoopStep,
+  PlanResult,
+  ReplanOutcomePayload,
+  ReplanRecord,
+  Requirements,
+  Schedule,
+  Task,
+  VerificationReceipt,
+} from "@/lib/types";
 import { CONFLICT_PREFIXES, conflictPrefix } from "@/lib/types";
-import { EVENT_COLORS, STAGE_LABELS } from "@/lib/palette";
-import { fmtSeconds } from "@/lib/format";
-import { Gantt } from "./Gantt";
-import { KindPill, eventKindLabel, formatHours } from "./EventList";
+import { EVENT_COLORS, STAGE_LABELS, robotTypeColor, zoneColor } from "@/lib/palette";
+import { fmtHours, fmtSeconds, isFixtureModel, modelDisplayName, plural, tidyHint, tidyUnits } from "@/lib/format";
+import { Gantt, defaultZoneIds } from "./Gantt";
+import { ESCALATION_MODEL, KindPill, escalationText, eventKindLabel, formatHours, replanOutcome as outcomeOf } from "./EventList";
 import { Badge } from "./Section";
 
 export interface BeforeAfterProps {
@@ -70,8 +82,63 @@ function signed(h: number): string {
   return `${h > 0 ? "+" : h < 0 ? "−" : "±"}${formatHours(Math.abs(h))}`;
 }
 
-const cardClass =
-  "rounded-xl border border-line bg-raised p-4";
+/** The closing `replan` step's payload (ReplanOutcomePayload), when the trace has one. */
+function replanOutcome(steps: LoopStep[]): { step: LoopStep; payload: ReplanOutcomePayload | null } | null {
+  for (let i = steps.length - 1; i >= 0; i--) {
+    const s = steps[i];
+    if (s.stage !== "replan") continue;
+    const p = s.payload;
+    const payload = p && typeof p.escalated === "boolean" ? (p as unknown as ReplanOutcomePayload) : null;
+    return { step: s, payload };
+  }
+  return null;
+}
+
+/** The model that answered the last repair prompt of a replan trace, for the headline. */
+function repairModel(steps: LoopStep[]): string {
+  for (let i = steps.length - 1; i >= 0; i--) {
+    const s = steps[i];
+    if (s.stage !== "repair" || !s.usage?.model) continue;
+    return isFixtureModel(s.usage.model) ? "Nemotron (recorded answer)" : modelDisplayName(s.usage.model);
+  }
+  return ESCALATION_MODEL;
+}
+
+/** The one-line story of the replan, built from the closing step's payload when it parses
+ *  ("CP-SAT rescheduled 11 tasks in <0.01 s, Nemotron not needed · makespan 80 h → 91 h");
+ *  for older recordings and failed replans the backend message minus its time-base flag. */
+function outcomeHeadline(
+  outcome: { step: LoopStep; payload: ReplanOutcomePayload | null } | null,
+  after: PlanResult,
+  escalated: boolean,
+): string | null {
+  if (!outcome) return null;
+  const p = outcome.payload;
+  const ok = after.success && after.schedule !== null;
+  if (p && ok && p.after_makespan_h !== null) {
+    const n = plural(p.remaining_tasks, "task");
+    const solve = p.solve_time_s !== null ? ` in ${fmtSeconds(p.solve_time_s)}` : "";
+    const span = `makespan ${fmtHours(p.before_makespan_h, 0)} → ${fmtHours(p.after_makespan_h, 0)}`;
+    if (!escalated) return `CP-SAT rescheduled ${n}${solve}, Nemotron not needed · ${span}`;
+    return `CP-SAT could not finish ${n}; ${repairModel(after.steps)} repaired the graph and CP-SAT re-verified it${solve} · ${span}`;
+  }
+  const msg = outcome.step.message;
+  return msg ? tidyUnits(msg.replace(/\s*\((absolute|relative)\)\s*$/, "").replace(/ -> /g, " → ")) : null;
+}
+
+/** The verification receipt of the last ok `schedule` step of the replan trace. */
+function replanReceipt(steps: LoopStep[]): VerificationReceipt | null {
+  for (let i = steps.length - 1; i >= 0; i--) {
+    const s = steps[i];
+    if (s.stage !== "schedule" || !s.ok) continue;
+    const v = s.payload?.verification;
+    if (v && typeof v === "object" && "battery" in (v as object)) return v as VerificationReceipt;
+    return null;
+  }
+  return null;
+}
+
+const cardClass = "rounded-lg border border-line bg-raised p-4 md:p-5";
 const mutedClass = "text-muted";
 
 export function BeforeAfter({ record, requirements, tasks, index, onSelectTask, defaultOpen }: BeforeAfterProps) {
@@ -86,16 +153,34 @@ export function BeforeAfter({ record, requirements, tasks, index, onSelectTask, 
   );
   const reassigned = changes.filter((c) => c.robotBefore !== null && c.robotBefore !== c.robotAfter);
   const highlightAfter = (reassigned.length > 0 ? reassigned : changes).map((c) => c.task);
-  // robots the replan could no longer use (the failed one, and any lost earlier)
-  const failedRobots = useMemo(() => {
+  // robots the replan could no longer use: the one that failed now (with its hour) and any
+  // lost earlier (hour unknown here)
+  const failedNow: FailureSpec[] = useMemo(
+    () => (event.kind === "robot_failure" && event.robot ? [{ robot: event.robot, t_h: event.t_h }] : []),
+    [event],
+  );
+  const failedEarlier = useMemo(() => {
     const alive = new Set(after.requirements.robots.map((r) => r.id));
-    return requirements.robots.map((r) => r.id).filter((id) => !alive.has(id));
-  }, [requirements, after.requirements]);
+    return requirements.robots
+      .map((r) => r.id)
+      .filter((id) => !alive.has(id) && !failedNow.some((f) => f.robot === id));
+  }, [requirements, after.requirements, failedNow]);
   const eventMarker = {
     t_h: event.t_h,
     label: `${eventKindLabel(event.kind)}${event.robot ? ` ${event.robot}` : ""}`,
     color: kindColor,
   };
+
+  const zoneIds = useMemo(() => defaultZoneIds(requirements, tasks), [requirements, tasks]);
+  const legendZones = zoneIds.filter((z) => tasks.some((t) => t.zone === z));
+  const robotTypes = [...new Set(requirements.robots.map((r) => r.type))];
+
+  const outcome = replanOutcome(after.steps);
+  const summary = outcomeOf(record);
+  const escalated = record.escalated || outcome?.payload?.escalated === true;
+  const headline = outcomeHeadline(outcome, after, escalated);
+  const receipt = afterSchedule ? replanReceipt(after.steps) : null;
+  const tightest = receipt?.battery.find((b) => b.robot === receipt.tightest_robot) ?? null;
 
   const delta = afterSchedule ? afterSchedule.makespan_h - before.makespan_h : null;
   // same time axis on both charts: the later of the two makespans (the Gantt adds the horizon
@@ -113,24 +198,52 @@ export function BeforeAfter({ record, requirements, tasks, index, onSelectTask, 
         ? "border-warn/50 bg-warn/10 text-warn"
         : "border-ok/50 bg-ok/10 text-ok";
 
+  const outcomeChip = afterSchedule ? (
+    escalated ? (
+      <Badge
+        tone="info"
+        title={`CP-SAT alone could not finish the remaining work: a repair prompt with the infeasibility core went to ${ESCALATION_MODEL} and the solver re-verified its answer`}
+      >
+        {escalationText(summary)}
+      </Badge>
+    ) : (
+      <Badge
+        tone="neutral"
+        title={`The remaining ${plural(record.remaining_tasks.length, "task")} were rescheduled by CP-SAT alone${
+          outcome?.payload?.solve_time_s !== null && outcome?.payload?.solve_time_s !== undefined
+            ? ` in ${fmtSeconds(outcome.payload.solve_time_s)}`
+            : ""
+        }; no model call was needed`}
+      >
+        CP-SAT rescheduled, Nemotron not needed
+      </Badge>
+    )
+  ) : escalated ? (
+    <Badge tone="warn" title="CP-SAT alone could not finish the remaining work, so a repair prompt was due to Nemotron">
+      {escalationText(summary)}
+    </Badge>
+  ) : null;
+
   return (
     <section className={`${cardClass} space-y-4`} aria-labelledby={`replan-${index}-heading`}>
-      <header className="space-y-1">
+      <header className="space-y-1.5">
         <div className="flex flex-wrap items-center gap-2">
           <h3 id={`replan-${index}-heading`} className="text-base font-semibold tracking-tight">
             Replan #{index} at {formatHours(record.t_h)} after {eventKindLabel(event.kind)}
             {event.robot ? ` ${event.robot}` : ""}
           </h3>
           <Badge tone={afterSchedule ? "ok" : "fail"}>{afterSchedule ? "re-verified" : "replan failed"}</Badge>
+          {outcomeChip}
         </div>
         <div className={`flex flex-wrap items-center gap-x-2 gap-y-1 text-sm ${mutedClass}`}>
           <KindPill kind={event.kind} />
           {event.task && <span className="font-mono text-xs">{event.task}</span>}
           <span>{event.detail ?? "No detail recorded."}</span>
         </div>
+        {headline ? <p className="text-[13px] text-fg">{headline}</p> : null}
         <p className={`text-xs ${mutedClass}`}>
-          {record.remaining_tasks.length} tasks remaining · horizon {formatHours(horizonH)} ·{" "}
-          {after.requirements.robots.length} robots available
+          {plural(record.remaining_tasks.length, "task")} remaining · {formatHours(horizonH - record.t_h)} of the{" "}
+          {formatHours(horizonH)} horizon left · {plural(after.requirements.robots.length, "robot")} available
         </p>
       </header>
 
@@ -147,6 +260,11 @@ export function BeforeAfter({ record, requirements, tasks, index, onSelectTask, 
             highlightTasks={event.task ? [event.task] : []}
             compact
             minSpanH={sharedSpanH}
+            showLegend={false}
+            failures={failedNow}
+            failedRobots={failedEarlier}
+            dimBeforeNow
+            zoneIds={zoneIds}
             onSelectTask={onSelectTask}
           />
         </div>
@@ -164,13 +282,49 @@ export function BeforeAfter({ record, requirements, tasks, index, onSelectTask, 
               compact
               minSpanH={sharedSpanH}
               showLegend={false}
-              failedRobots={failedRobots}
+              failures={failedNow}
+              failedRobots={failedEarlier}
+              dimBeforeNow
+              zoneIds={zoneIds}
               onSelectTask={onSelectTask}
             />
           ) : (
             <FailurePanel failure={after.failure} />
           )}
         </div>
+      </div>
+
+      {/* one legend for both charts */}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted">
+        <span className="text-dim">bars = zone · dot and stripe = robot type</span>
+        {legendZones.map((z) => (
+          <span key={z} className="inline-flex items-center gap-1">
+            <span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ background: zoneColor(z, zoneIds) }} />
+            zone {z}
+          </span>
+        ))}
+        <span className="text-dim" aria-hidden>
+          ·
+        </span>
+        {robotTypes.map((t) => (
+          <span key={t} className="inline-flex items-center gap-1">
+            <span className="inline-block h-2 w-2 rounded-full" style={{ background: robotTypeColor(t) }} />
+            {t}
+          </span>
+        ))}
+        <span className="ml-auto inline-flex items-center gap-1">
+          <span className="inline-block w-4 border-t-2 border-white" />
+          now
+        </span>
+        {failedNow.length > 0 ? (
+          <span className="inline-flex items-center gap-1 text-fail">
+            <span aria-hidden className="font-bold">
+              ✕
+            </span>
+            robot failed
+          </span>
+        ) : null}
+        <span className="text-dim">left of now = done</span>
       </div>
 
       <dl className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
@@ -181,7 +335,7 @@ export function BeforeAfter({ record, requirements, tasks, index, onSelectTask, 
             <span aria-hidden>→</span>
             <span className="font-semibold">{afterSchedule ? formatHours(afterSchedule.makespan_h) : "—"}</span>
             {delta !== null && (
-              <span className={`rounded-full border px-2 py-0.5 text-xs font-medium ${deltaTone}`}>
+              <span className={`rounded-full border px-2 py-0.5 text-sm font-semibold ${deltaTone}`}>
                 {signed(delta)}
               </span>
             )}
@@ -192,13 +346,26 @@ export function BeforeAfter({ record, requirements, tasks, index, onSelectTask, 
         </div>
         <div className="flex items-center gap-2">
           <dt className={mutedClass}>Repairs used</dt>
-          <dd className="tabular-nums">{after.repairs}</dd>
+          <dd className="tabular-nums">
+            {summary.repairsAnswered}
+            {summary.noAnswer && <span className="ml-1.5 text-xs text-muted">offline, no recorded repair</span>}
+          </dd>
         </div>
         {afterSchedule && (
           <div className="flex items-center gap-2">
             <dt className={mutedClass}>Solver</dt>
             <dd className="tabular-nums">
               {afterSchedule.status} · {fmtSeconds(afterSchedule.solve_time_s)}
+            </dd>
+          </div>
+        )}
+        {receipt && (
+          <div className="flex items-center gap-2">
+            <dt className={mutedClass}>Re-verified</dt>
+            <dd className="tabular-nums text-xs" title={receipt.recheck}>
+              {plural(receipt.precedence_edges, "precedence edge")} · {plural(receipt.robot_rows, "robot row")} ·{" "}
+              {plural(receipt.zone_groups, "zone group")}
+              {tightest ? ` · tightest battery ${tightest.robot} ${Math.round(tightest.pct)}%` : ""}
             </dd>
           </div>
         )}
@@ -267,10 +434,13 @@ function TraceChips({ steps }: { steps: LoopStep[] }) {
   if (steps.length === 0) return <span className={`text-xs ${mutedClass}`}>no steps recorded</span>;
   return (
     <ol className="flex flex-wrap items-center gap-1">
-      {steps.map((s, i) => (
+      {steps.map((s, i) => {
+        // repair rounds count from the first repair; the backend's `attempt` counts task graphs
+        const round = s.stage === "repair" ? steps.slice(0, i + 1).filter((x) => x.stage === "repair").length : null;
+        return (
         <li key={i} className="flex items-center gap-1">
           <span
-            title={[s.message, s.failure?.hint].filter(Boolean).join(" — ") || undefined}
+            title={[s.message, s.failure ? tidyHint(s.failure.hint) : null].filter(Boolean).join(" — ") || undefined}
             className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium leading-4 ${
               s.ok
                 ? "border-ok/40 bg-ok/10"
@@ -279,15 +449,20 @@ function TraceChips({ steps }: { steps: LoopStep[] }) {
           >
             <span className={`h-1.5 w-1.5 rounded-full ${s.ok ? "bg-ok" : "bg-fail"}`} aria-hidden />
             {STAGE_LABELS[s.stage] ?? s.stage}
-            {s.attempt > 1 && <span className={mutedClass}>#{s.attempt}</span>}
+            {round !== null ? (
+              <span className={mutedClass}>round {round}</span>
+            ) : s.attempt > 1 ? (
+              <span className={mutedClass}>graph v{s.attempt}</span>
+            ) : null}
           </span>
           {i < steps.length - 1 && (
-            <span className={`text-[10px] ${mutedClass}`} aria-hidden>
+            <span className={`text-[11px] ${mutedClass}`} aria-hidden>
               →
             </span>
           )}
         </li>
-      ))}
+        );
+      })}
     </ol>
   );
 }
@@ -314,7 +489,7 @@ function FailurePanel({ failure }: { failure: Failure | null }) {
               ))}
             </div>
           )}
-          {failure.hint && <p className={mutedClass}>{failure.hint}</p>}
+          {failure.hint && <p className={mutedClass}>{tidyHint(failure.hint)}</p>}
           {failure.details.length > 0 && (
             <ul className={`list-disc space-y-0.5 pl-5 text-xs ${mutedClass}`}>
               {failure.details.slice(0, 6).map((d, i) => (

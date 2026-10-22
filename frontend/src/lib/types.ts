@@ -62,6 +62,20 @@ export interface Requirements {
  *  surveyed, m of linear work, ea for discrete items. */
 export type Unit = "m3" | "m2" | "m" | "ea";
 
+/** Display labels of the quantity units (chips, task table, diff chips). */
+export const UNIT_LABELS: Record<Unit, string> = {
+  m3: "m³",
+  m2: "m²",
+  m: "m",
+  ea: "ea",
+};
+
+/** "m3" -> "m³"; null / unknown -> "" so a quantity without a unit prints bare. */
+export function unitLabel(unit: Unit | string | null | undefined): string {
+  if (!unit) return "";
+  return UNIT_LABELS[unit as Unit] ?? unit;
+}
+
 export interface Task {
   id: string;
   name: string;
@@ -136,6 +150,7 @@ export const CONFLICT_PREFIXES: Record<string, string> = {
   changed: "remaining task redefined by the replan",
   scope: "structure lacks a required phase or lost every task",
   locked: "task underway at the event redefined by the repair",
+  quantity: "physical task without a priced quantity",
 };
 
 export function conflictPrefix(conflict: string): string {
@@ -199,6 +214,16 @@ export interface TaskGraphPayload {
 }
 
 export type DiffField = "duration_h" | "energy_wh" | "quantity" | "robot_type" | "zone" | "after";
+
+/** Short words for the diff chips ("T4 energy 4,000 → 2,100 Wh"). */
+export const DIFF_FIELD_LABELS: Record<DiffField, string> = {
+  duration_h: "duration",
+  energy_wh: "energy",
+  quantity: "quantity",
+  robot_type: "robot type",
+  zone: "zone",
+  after: "after",
+};
 
 /** Added to a `repair` step payload (`diff`) when the answer validated: what the model
  *  changed relative to the graph the repair answered. */
@@ -297,6 +322,72 @@ export interface PlanResult {
   repairs: number;
   success: boolean;
   failure: Failure | null;
+}
+
+// ------------------------------------------------------------------ payload accessors
+/** Typed views of LoopStep.payload. Each returns null (or []) for a step of another stage,
+ *  a failed step, or a payload recorded before the field existed, so the trace renders older
+ *  PlanResults without special cases. */
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+/** The receipt carried by an ok `schedule` step. */
+export function scheduleReceipt(step: LoopStep): VerificationReceipt | null {
+  if (step.stage !== "schedule" || !step.ok || !step.payload) return null;
+  const v = step.payload.verification;
+  return isRecord(v) && Array.isArray(v.battery) ? (v as unknown as VerificationReceipt) : null;
+}
+
+/** The last ok schedule step of a trace and its receipt: the schedule the plan carries. */
+export function lastReceipt(steps: LoopStep[]): { step: LoopStep; receipt: VerificationReceipt } | null {
+  for (let i = steps.length - 1; i >= 0; i -= 1) {
+    const receipt = scheduleReceipt(steps[i]);
+    if (receipt) return { step: steps[i], receipt };
+  }
+  return null;
+}
+
+/** The diff of a validated repair answer. */
+export function repairDiff(step: LoopStep): RepairDiff | null {
+  if (step.stage !== "repair" || !step.ok || !step.payload) return null;
+  const d = step.payload.diff;
+  return isRecord(d) && Array.isArray(d.changed) ? (d as unknown as RepairDiff) : null;
+}
+
+/** Advisories of a taskgraph / repair / validate step (warnings, never conflicts). */
+export function stepAdvisories(step: LoopStep): string[] {
+  const a = step.payload?.advisories;
+  return Array.isArray(a) ? a.filter((x): x is string => typeof x === "string") : [];
+}
+
+/** Rate-model summary of an ok taskgraph / repair step. */
+export function taskGraphPayload(step: LoopStep): TaskGraphPayload | null {
+  if ((step.stage !== "taskgraph" && step.stage !== "repair") || !step.ok || !step.payload) return null;
+  const p = step.payload;
+  if (typeof p.rate_model !== "boolean" || typeof p.grounded !== "number") return null;
+  return { advisories: stepAdvisories(step), rate_model: p.rate_model, grounded: p.grounded };
+}
+
+/** Zone geometry summary of an ok structure step. */
+export function structurePayload(step: LoopStep): StructurePayload | null {
+  if (step.stage !== "structure" || !step.ok || !step.payload) return null;
+  const p = step.payload;
+  if (typeof p.zones !== "number" || !Array.isArray(p.grid)) return null;
+  return {
+    zones: p.zones,
+    grid: p.grid as [number, number],
+    depot: Array.isArray(p.depot) ? (p.depot as [number, number]) : null,
+    warnings: Array.isArray(p.warnings) ? p.warnings.filter((w): w is string => typeof w === "string") : [],
+  };
+}
+
+/** The closing step of a replan trace. */
+export function replanOutcome(step: LoopStep): ReplanOutcomePayload | null {
+  if (step.stage !== "replan" || !step.payload) return null;
+  const p = step.payload;
+  if (typeof p.escalated !== "boolean" || typeof p.remaining_tasks !== "number") return null;
+  return p as unknown as ReplanOutcomePayload;
 }
 
 // ------------------------------------------------------------------ simulation

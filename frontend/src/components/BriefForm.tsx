@@ -1,22 +1,33 @@
 "use client";
-import type { KeyboardEvent } from "react";
+/**
+ * Step 01: the brief. A three-tile strip says what the console does (propose, prove / repair,
+ * stress), example cards load a brief, the textarea holds plain prose (markdown markers are
+ * stripped) and the primary action structures it with Nemotron. The landing-pad example is
+ * pre-filled once the examples arrive and the textarea is still empty.
+ */
+import { useEffect, useRef, type KeyboardEvent } from "react";
 import type { ExampleBrief } from "@/lib/types";
 import { Badge, Button, Card, Notice, Section, Spinner, cx } from "./Section";
 
 export interface BriefFormProps {
   brief: string;
-  /** Example id sent as brief_id (offline fixtures are keyed by it); null for a free brief. */
+  /** Example id sent as brief_id (recorded answers are keyed by it); null for a free brief. */
   briefId: string | null;
   onBriefChange: (text: string) => void;
   examples: ExampleBrief[];
   examplesLoading: boolean;
-  /** Shown next to the chips, e.g. when the examples came from the bundled samples. */
+  /** Shown next to the cards, e.g. when the examples came from the bundled samples. */
   examplesNote: string | null;
   onUseExample: (example: ExampleBrief) => void;
   onStructure: () => void;
   structuring: boolean;
   error: string | null;
   disabled?: boolean;
+  /** Additive: the backend replays recorded answers keyed by brief_id (llm=fixture). Shows the
+   *  "replays recorded answers for <id>" note; omitted (live mode) = hidden. */
+  offline?: boolean;
+  /** Additive: example pre-filled when the textarea is empty on first load. */
+  defaultExampleId?: string;
 }
 
 const PLACEHOLDER = `Site. LS-1 plateau near the lunar south pole, 80 m by 80 m of loose regolith; depot on the south edge; no recharging.
@@ -24,10 +35,123 @@ Structures. 1. Landing pad: circular, 20 m diameter, excavate 0.4 m, compact, si
 Fleet. EX1 and EX2 (excavators, 5000 Wh), HL1 (hauler, 3000 Wh), CP1 (compactor, 3500 Wh), PR1 (printer, 4000 Wh), SV1 (surveyor, 1500 Wh).
 Deadline. 14 days. Only one robot per zone at a time.`;
 
-const chipBase =
-  "max-w-full truncate rounded-full border px-3 py-1 text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-50";
-const chipIdle = "border-white/10 bg-white/5 text-muted hover:border-white/20 hover:text-fg";
-const chipActive = "border-accent/60 bg-accent/10 text-accent";
+/** Mirrors the backend's strip_markdown: ATX heading markers, **bold** / __bold__, *em* /
+ *  _em_ (word-bounded, so landing_pad survives) and inline `code` are removed; lists,
+ *  numbering and line breaks stay. */
+export function stripMarkdown(text: string): string {
+  return text
+    .replace(/^[ \t]{0,3}#{1,6}[ \t]+/gm, "")
+    .replace(/(\*\*|__)(?=\S)([\s\S]+?)(?<=\S)\1/g, "$2")
+    .replace(/(?<![*\w])\*(?=\S)([^*\n]+?)(?<=\S)\*(?![*\w])/g, "$1")
+    .replace(/(?<![\w_])_(?=\S)([^_\n]+?)(?<=\S)_(?![\w_])/g, "$1")
+    .replace(/`([^`\n]+)`/g, "$1");
+}
+
+function plainExample(ex: ExampleBrief): ExampleBrief {
+  const text = stripMarkdown(ex.text);
+  return text === ex.text ? ex : { ...ex, text };
+}
+
+// ------------------------------------------------------------------ mechanism strip
+const MECHANISM: { title: string; text: string; glyph: "propose" | "prove" | "stress" }[] = [
+  {
+    title: "Nemotron proposes",
+    text: "Nemotron structures the brief and proposes a task graph with quantities",
+    glyph: "propose",
+  },
+  {
+    title: "CP-SAT proves, Nemotron repairs",
+    text:
+      "A rate model prices it; CP-SAT proves it against five constraint families or names the conflict and Nemotron repairs it",
+    glyph: "prove",
+  },
+  {
+    title: "The simulator stresses it",
+    text: "The simulator injects failures, the agent replans, Monte Carlo gives P(on time)",
+    glyph: "stress",
+  },
+];
+
+function Glyph({ kind }: { kind: "propose" | "prove" | "stress" }) {
+  const common = { className: "size-4 shrink-0 text-muted", viewBox: "0 0 16 16", fill: "none", "aria-hidden": true as const };
+  if (kind === "propose") {
+    // three task nodes with edges: a graph
+    return (
+      <svg {...common}>
+        <path d="M4 4.5h5M9 4.5l-5 7M9 4.5l3 7" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+        <circle cx="3.5" cy="4.5" r="2" fill="currentColor" />
+        <circle cx="9.5" cy="4.5" r="2" fill="currentColor" />
+        <circle cx="3.5" cy="11.5" r="2" fill="currentColor" />
+        <circle cx="12.5" cy="11.5" r="2" fill="currentColor" />
+      </svg>
+    );
+  }
+  if (kind === "prove") {
+    // a check inside a shield
+    return (
+      <svg {...common}>
+        <path d="M8 1.5l5.5 2v4.2c0 3.1-2.3 5.4-5.5 6.8C4.8 13.1 2.5 10.8 2.5 7.7V3.5L8 1.5z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
+        <path d="M5.3 8l1.9 1.9 3.6-3.8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    );
+  }
+  // histogram bars with a marker: Monte Carlo
+  return (
+    <svg {...common}>
+      <path d="M2 13.5h12" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+      <rect x="3" y="8" width="2.2" height="5" fill="currentColor" />
+      <rect x="6.4" y="4" width="2.2" height="9" fill="currentColor" />
+      <rect x="9.8" y="6.5" width="2.2" height="6.5" fill="currentColor" />
+      <path d="M12.8 2.5v11" stroke="currentColor" strokeWidth="1.2" strokeDasharray="2 1.5" />
+    </svg>
+  );
+}
+
+// ------------------------------------------------------------------ example cards
+interface ExampleMeta {
+  fleet: string;
+  structures: string;
+  demonstrates: string | null;
+}
+
+/** What the bundled briefs demonstrate (ids of backend/examples/briefs); other briefs are
+ *  described from their text. */
+const EXAMPLE_META: Record<string, ExampleMeta> = {
+  landing_pad: {
+    fleet: "7 robots · 5 types",
+    structures: "landing pad + blast berm",
+    demonstrates: "Landing pad: feasible first try. The sortie for a mid-mission robot failure and a solver-only replan.",
+  },
+  tight_battery: {
+    fleet: "5 robots · 4 types",
+    structures: "pad + berm + apron",
+    demonstrates:
+      "Tight battery: both excavators over their battery budget; CP-SAT names the conflicting tasks, Nemotron re-splits the dig.",
+  },
+  access_road: {
+    fleet: "5 robots · 4 types",
+    structures: "road + foundation + berm",
+    demonstrates: "Access road: linear work, road segments graded in order with two compactors and no printer.",
+  },
+};
+
+/** Robot ids like EX1 / HL2, numbered structures and the deadline, read from the prose. */
+function deriveMeta(text: string): ExampleMeta {
+  const robots = new Set(text.match(/\b[A-Z]{2}\d\b/g) ?? []);
+  const structures = (text.match(/^\s*\d+\.\s+\S/gm) ?? []).length;
+  return {
+    fleet: robots.size > 0 ? `${robots.size} robots` : "fleet in text",
+    structures: structures > 0 ? `${structures} structure${structures === 1 ? "" : "s"}` : "structures in text",
+    demonstrates: null,
+  };
+}
+
+function deriveHorizon(text: string): string | null {
+  const m = /(\d+(?:\.\d+)?)\s*(days?|d|hours?|h)\b/i.exec(text.match(/deadline[^\n]*/i)?.[0] ?? "");
+  if (!m) return null;
+  const n = Number(m[1]);
+  return /^d/i.test(m[2]) ? `${n} d` : `${n} h`;
+}
 
 export function BriefForm({
   brief,
@@ -41,9 +165,21 @@ export function BriefForm({
   structuring,
   error,
   disabled = false,
+  offline = false,
+  defaultExampleId = "landing_pad",
 }: BriefFormProps) {
   const canStructure = brief.trim().length > 0 && !structuring && !disabled;
   const words = brief.trim() ? brief.trim().split(/\s+/).length : 0;
+
+  // pre-fill the default example once, only while the textarea is still untouched
+  const prefilled = useRef(false);
+  useEffect(() => {
+    if (prefilled.current || examplesLoading || examples.length === 0) return;
+    prefilled.current = true;
+    if (brief.trim().length > 0 || briefId) return;
+    const ex = examples.find((e) => e.id === defaultExampleId) ?? examples[0];
+    onUseExample(plainExample(ex));
+  }, [examples, examplesLoading, brief, briefId, defaultExampleId, onUseExample]);
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && canStructure) {
@@ -57,30 +193,83 @@ export function BriefForm({
       id="brief"
       step="01"
       title="Brief"
-      subtitle="Describe the site, the structures, the robot fleet and the deadline in plain English. Nemotron turns it into structured requirements that you can correct before anything is scheduled."
+      subtitle="Describe the site, the structures, the robot fleet and the deadline in plain English. Nemotron turns it into structured requirements you can correct before anything is scheduled."
     >
       <Card>
-        <div className="mb-3 flex flex-wrap items-center gap-2">
-          <span className="text-xs text-dim">Examples</span>
-          {examplesLoading && <Spinner className="size-3 text-dim" />}
-          {examples.map((ex) => (
-            <button
-              key={ex.id}
-              type="button"
-              onClick={() => onUseExample(ex)}
-              disabled={disabled || structuring}
-              aria-pressed={briefId === ex.id}
-              className={cx(chipBase, briefId === ex.id ? chipActive : chipIdle)}
-              title={ex.id}
+        {/* mechanism strip */}
+        <ol className="mb-4 grid gap-2 lg:grid-cols-3" aria-label="How Moonwright works">
+          {MECHANISM.map((m, i) => (
+            <li
+              key={m.glyph}
+              className="relative flex gap-2.5 rounded-md border border-white/10 bg-white/[0.02] px-3 py-2.5"
             >
-              {ex.title}
-            </button>
+              <span className="mt-0.5 flex items-center gap-1.5">
+                <span className="font-mono text-[10px] tabular-nums text-dim">{i + 1}</span>
+                <Glyph kind={m.glyph} />
+              </span>
+              <span className="min-w-0">
+                <span className="block text-[13px] font-semibold text-fg">{m.title}</span>
+                <span className="mt-0.5 block text-[12.5px] leading-snug text-muted">{m.text}</span>
+              </span>
+              {i < MECHANISM.length - 1 && (
+                <span
+                  aria-hidden="true"
+                  className="absolute -right-[9px] top-1/2 hidden -translate-y-1/2 text-[13px] text-dim lg:inline"
+                >
+                  ›
+                </span>
+              )}
+            </li>
           ))}
+        </ol>
+
+        {/* example cards */}
+        <div className="mb-2 flex flex-wrap items-center gap-2">
+          <span className="text-[12.5px] font-medium text-muted">Example briefs</span>
+          {examplesLoading && <Spinner className="size-3 text-dim" />}
           {!examplesLoading && examples.length === 0 && (
             <span className="text-xs text-dim">no examples available</span>
           )}
           {examplesNote && <span className="text-[11px] text-dim">{examplesNote}</span>}
         </div>
+        {examples.length > 0 && (
+          <div className="mb-3 grid gap-2 lg:grid-cols-3">
+            {examples.map((ex) => {
+              const meta = EXAMPLE_META[ex.id] ?? deriveMeta(ex.text);
+              const horizon = deriveHorizon(ex.text);
+              const active = briefId === ex.id;
+              return (
+                <button
+                  key={ex.id}
+                  type="button"
+                  onClick={() => onUseExample(plainExample(ex))}
+                  disabled={disabled || structuring}
+                  aria-pressed={active}
+                  title={active ? `${ex.id} is in the textarea` : `Put the ${ex.id} brief in the textarea`}
+                  className={cx(
+                    "flex min-w-0 flex-col items-start gap-1 rounded-md border px-3 py-2.5 text-left transition-colors",
+                    "disabled:cursor-not-allowed disabled:opacity-50",
+                    active
+                      ? "border-white/40 bg-white/[0.07]"
+                      : "border-white/10 bg-white/[0.02] hover:border-white/25 hover:bg-white/[0.04]",
+                  )}
+                >
+                  <span className="flex w-full items-center justify-between gap-2">
+                    <span className="truncate text-[13px] font-medium text-fg">{ex.title}</span>
+                    {active && <Badge tone="neutral">loaded</Badge>}
+                  </span>
+                  <span className="font-mono text-[11px] text-dim">
+                    {meta.fleet} · {meta.structures}
+                    {horizon ? ` · ${horizon}` : ""}
+                  </span>
+                  {meta.demonstrates && (
+                    <span className="text-[11.5px] leading-snug text-muted">{meta.demonstrates}</span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        )}
 
         <textarea
           id="brief-text"
@@ -89,25 +278,31 @@ export function BriefForm({
           onChange={(e) => onBriefChange(e.target.value)}
           onKeyDown={onKeyDown}
           disabled={disabled}
-          rows={10}
+          rows={9}
           spellCheck={false}
           placeholder={PLACEHOLDER}
-          className="min-h-[220px] w-full resize-y rounded-md border border-white/10 bg-surface p-3 text-[13.5px] leading-relaxed text-fg placeholder:text-dim/80 focus:border-accent/60 focus:outline-none focus:ring-2 focus:ring-accent/20 disabled:opacity-60"
+          className="min-h-[200px] w-full resize-y rounded-md border border-white/10 bg-surface p-3 text-[14px] leading-relaxed text-fg placeholder:text-dim focus:border-accent/60 focus:outline-none focus:ring-2 focus:ring-accent/20 disabled:opacity-60"
         />
 
         <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
-          <div className="flex flex-wrap items-center gap-2 text-xs text-dim">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-dim">
             <span className="font-mono tabular-nums">{words} words</span>
-            {briefId && (
-              <Badge
-                tone="accent"
-                mono
-                title="Sent as brief_id with every request. Offline fixtures replay this example even if you edit the text; clear the textarea to detach."
+            {offline && briefId && (
+              <span
+                className="font-mono text-[11px]"
+                title="Offline mode: the backend replays the recorded Nemotron answers for this example even if you edit the text; clear the textarea to detach."
               >
-                brief_id: {briefId}
-              </Badge>
+                replays recorded answers for {briefId}
+              </span>
             )}
-            <span className="hidden md:inline">Cmd/Ctrl + Enter to structure</span>
+            <span className="hidden items-center gap-1 md:inline-flex">
+              <kbd className="mw-kbd">⌘</kbd>
+              <span>/</span>
+              <kbd className="mw-kbd">Ctrl</kbd>
+              <span>+</span>
+              <kbd className="mw-kbd">Enter</kbd>
+              <span>to structure</span>
+            </span>
           </div>
           <Button variant="primary" onClick={onStructure} disabled={!canStructure} loading={structuring}>
             {structuring ? "Structuring…" : "Structure brief"}
