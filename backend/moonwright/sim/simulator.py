@@ -5,20 +5,23 @@ Contract (implemented by the simulation agent):
     layout = zone_positions(req, graph)      # zone id -> (x, y); deterministic grid layout
                                              # for zones missing from req.site.zones
     sim = Simulator(req, graph, schedule, dt_h=0.25, injections=[FailureInjection("EX2", 30)],
-                    seed=0, battery_reserve_frac=0.10)
+                    seed=0)
     result = sim.run(stop_on_event=True)     # SimResult with frames + events (+ completed flag)
     frame = sim.state()                      # current SimFrame (robots, done, active, progress)
 
 Behaviour:
   * robots start at the depot, travel in straight lines at speed_cells_per_h to the task zone,
     then work for duration_h; battery drops by energy_wh * (dt / duration_h) while working and by
-    a small travel cost (0.5 Wh per cell). A task starts at max(scheduled start, arrival).
+    a small travel cost (``moonwright.geometry.TRAVEL_WH_PER_CELL``, 0.5 Wh per cell). A task
+    starts at max(scheduled start, arrival).
   * events: robot_failure when an injection time is reached (robot status -> failed, its current
     task progress is kept in frame.progress) and when a robot's battery cannot cover its next
     step of work or travel (detail "ran out of battery"; it stops for good the same way, so a
-    plan that overdraws a battery can never be reported complete), battery_low when battery <
-    reserve fraction, task_overrun when a task's work takes > 2 h longer than its schedule
-    entry allots (see "Lateness" below).
+    plan that overdraws a battery can never be reported complete), battery_low when a robot's
+    battery can no longer cover what the plan in force still asks of it (the rest of its
+    current task, its queued tasks and the legs between them: a forecast that the robot will
+    run dry, see "Battery" below), task_overrun when a task's work takes > 2 h longer than its
+    schedule entry allots (see "Lateness" below).
   * stop_on_event=True returns as soon as the first *new* event fires, so the replanner can act;
     run() can be called again after `apply_new_plan(schedule, graph)` to continue from the
     current state. `completed` is True when every task of every graph applied so far is done
@@ -29,26 +32,48 @@ Implementation notes
 --------------------
 * A step covers [t, t + dt). Robots are advanced in ``req.robots`` order. A robot follows its
   schedule entries strictly in schedule order: it leaves for the next entry's zone as soon as it
-  is free (travel is not in the solver's model, so travelling during slack keeps the plan on
-  time) and starts working once ``start_h <= t``, every ``after`` task was done before the step
-  began and nobody else works in the zone. Arriving ends the robot's step; work begins next step.
+  is free and starts working once ``start_h <= t``, every ``after`` task was done before the
+  step began and nobody else works in the zone. Arriving ends the robot's step; work begins
+  next step.
+* Travel and the planner: the solver reserves a per-task transit allowance (an upper bound over
+  the site, see ``moonwright.pipeline.schedule``), not terrain; the simulator pays the actual
+  straight-line distance, which is never longer. Geometry is shared through
+  ``moonwright.geometry`` (:func:`depot_position`, :func:`zone_positions`), so planner and
+  simulator place every zone in the same cell. A robot that leaves as soon as it is free
+  therefore arrives on or before the scheduled start of a solver schedule, and a
+  disturbance-free replay of a verified plan starts every task on time and raises no event
+  (with a ``dt_h`` that divides an hour; a coarser step would delay starts to its grain).
 * Zone safety: two robots never have status "working" in the same zone during the same step; a
   robot that is ready while its zone is busy waits at the zone with status "idle".
+* Battery: the verifier budgets each robot's work plus a transit allowance against its whole
+  battery, so a verified plan may legitimately drain a robot to a few percent; an alarm at a
+  fixed reserve would therefore fire on plans the solver proved sound. ``battery_low`` is
+  instead the simulator's own forecast under the plan in force: it fires when the battery
+  left is below what the robot's remaining entries still need (the rest of the current task
+  pro rata, every queued task in full, and the straight-line legs from where the robot is at
+  0.5 Wh per cell). On a verified plan that never happens without a disturbance; with longer
+  tasks (Monte Carlo jitter) or a replan solved from stale numbers it warns before the robot
+  actually runs dry (``robot_failure``, "ran out of battery").
 * Events are evaluated after the clock advances: completions (and task_overrun), then failure
   injections whose time has been reached, then battery_low. battery_low fires at most once per
-  robot, task_overrun at most once per task, every injection at most once. Injections and
-  battery checks are also evaluated once before the initial frame is recorded, so an injection
-  at t = 0 fires at t = 0 (and the first ``run`` with ``stop_on_event`` returns right away).
+  robot per plan in force (``apply_new_plan`` re-arms it), task_overrun at most once per task,
+  every injection at most once. Injections and battery checks are also evaluated once before
+  the initial frame is recorded, so an injection at t = 0 fires at t = 0 (and the first
+  ``run`` with ``stop_on_event`` returns right away).
+* Frames report batteries rounded *down* to 0.01 Wh: a replan budgets a robot with the frame's
+  figure, and a budget that exceeded reality by half a milli-Wh could strand the robot on the
+  last step of a task the verifier had just accepted.
 * Progress of a task is ``base + (1 - base) * worked_h / duration_h``; ``base`` is non-zero only
   for a task that continued on the same robot across :meth:`Simulator.apply_new_plan` (the
   replanned graph carries its *remaining* duration and energy, see ``moonwright.sim.replan``).
-* Lateness: travel, zone waits and the step grain are not in the solver's model, so every
-  chain of a verified plan starts a little later than scheduled and that lag compounds. A
-  ``task_overrun`` therefore measures the task itself, not the upstream drift: the time from
-  the step the task first worked to its completion, against the length of its schedule entry
-  (``end_h - start_h``). A nominal replay never overruns; a task whose real duration is longer
-  than planned (Monte Carlo jitter) does. After ``apply_new_plan`` a continuing task is measured
-  from its first step under the new plan against its remaining entry.
+* Lateness: a hand-written schedule, a replan solved from stale robot positions or a plan
+  whose tasks run longer than planned can still start work late, and that lag compounds down
+  a chain. A ``task_overrun`` therefore measures the task itself, not the upstream drift: the
+  time from the step the task first worked to its completion, against the length of its
+  schedule entry (``end_h - start_h``). A nominal replay never overruns; a task whose real
+  duration is longer than planned (Monte Carlo jitter) does, which makes the event a genuine
+  anomaly signal. After ``apply_new_plan`` a continuing task is measured from its first step
+  under the new plan against its remaining entry.
 * ``run`` stops when the graph is complete, when ``until_h`` (absolute hours) is reached, after
   the first new event with ``stop_on_event``, or when the simulation is stuck: nothing moved or
   worked during a step and no robot is waiting for a future ``start_h`` (typically every
@@ -64,6 +89,8 @@ import math
 from dataclasses import dataclass, field
 from typing import Literal
 
+from moonwright import geometry
+from moonwright.geometry import TRAVEL_WH_PER_CELL, depot_position, place_zones
 from moonwright.schemas import (
     Event,
     Requirements,
@@ -73,15 +100,15 @@ from moonwright.schemas import (
     ScheduleEntry,
     SimFrame,
     SimResult,
-    Site,
     Task,
     TaskGraph,
 )
 
+__all__ = ["FailureInjection", "Simulator", "depot_position", "zone_positions"]
+
 _EPS = 1e-9
+_BATTERY_EPS_WH = 1e-6              # forecast vs battery: float noise is not a shortfall
 _CLOCK_DECIMALS = 9                 # the clock is k * dt rounded here, so it never drifts
-_DEPOT_KEEP_OUT_CELLS = 4.0         # auto-placed zone centres stay this far from the depot
-_LAYOUT_SPACINGS = (8, 6, 4, 3, 2, 1)
 
 RobotStatus = Literal["idle", "moving", "working", "failed", "done"]
 
@@ -93,54 +120,20 @@ class FailureInjection:
 
 
 # --------------------------------------------------------------------------- layout
-def depot_position(site: Site) -> tuple[int, int]:
-    """Where robots start: ``site.depot`` or the bottom centre of the grid."""
-    if site.depot is not None:
-        return (int(site.depot[0]), int(site.depot[1]))
-    return (site.grid[0] // 2, 1)
-
-
 def zone_positions(req: Requirements, graph: TaskGraph) -> dict[str, tuple[int, int]]:
-    """Zone id -> centre cell, for every site zone and every zone the graph references.
-
-    Zones declared in ``req.site.zones`` keep their centre. Zones the graph uses without a
-    declaration are laid out deterministically: sorted by id, placed row-major from the far
-    side of the grid towards the depot on the widest spacing that fits them all, skipping
-    cells already taken and a keep-out circle around the depot.
-    """
-    layout = {z.id: (int(z.center[0]), int(z.center[1])) for z in req.site.zones}
-    missing = sorted({t.zone for t in graph.tasks} - layout.keys())
-    layout.update(_place_zones(req.site, missing, set(layout.values())))
-    return layout
-
-
-def _candidate_cells(grid: tuple[int, int], spacing: int) -> list[tuple[int, int]]:
-    """Lattice of cells with the given spacing: far side of the grid first, left to right."""
-    gx, gy = grid
-    margin = max(1, spacing // 2)
-    xs = range(margin, max(margin, gx - margin) + 1, spacing)
-    ys = range(max(margin, gy - margin), margin - 1, -spacing)
-    return [(x, y) for y in ys for x in xs if 0 <= x < gx and 0 <= y < gy]
-
-
-def _place_zones(site: Site, zone_ids: list[str],
-                 taken: set[tuple[int, int]]) -> dict[str, tuple[int, int]]:
-    """Deterministic centres for ``zone_ids`` that avoid ``taken`` cells and the depot."""
-    if not zone_ids:
-        return {}
-    depot = depot_position(site)
-    for spacing in _LAYOUT_SPACINGS:
-        cells = [c for c in _candidate_cells(site.grid, spacing)
-                 if c not in taken and math.dist(c, depot) >= _DEPOT_KEEP_OUT_CELLS]
-        if len(cells) >= len(zone_ids):
-            return dict(zip(zone_ids, cells))
-    # Grid too small for that many zones: use any free cell and share cells if we must.
-    cells = [c for c in _candidate_cells(site.grid, 1) if c not in taken] or [depot]
-    return {z: cells[i % len(cells)] for i, z in enumerate(zone_ids)}
+    """Zone id -> centre cell, for every site zone and every zone the graph references
+    (:func:`moonwright.geometry.zone_positions` over the graph's zones: the planner lays the
+    site out the same way)."""
+    return geometry.zone_positions(req.site, (t.zone for t in graph.tasks))
 
 
 def _at(pos: tuple[float, float], cell: tuple[int, int]) -> bool:
     return abs(pos[0] - cell[0]) < _EPS and abs(pos[1] - cell[1]) < _EPS
+
+
+def _floor_wh(wh: float) -> float:
+    """``wh`` rounded down to 0.01 Wh (a frame figure never exceeds the battery it reports)."""
+    return math.floor(wh * 100 + _EPS) / 100
 
 
 # --------------------------------------------------------------------------- simulator
@@ -171,15 +164,12 @@ class Simulator:
     def __init__(self, req: Requirements, graph: TaskGraph, schedule: Schedule, *,
                  dt_h: float = 0.25,
                  injections: list[FailureInjection] | tuple[FailureInjection, ...] = (),
-                 seed: int = 0, battery_reserve_frac: float = 0.10,
-                 overrun_tolerance_h: float = 2.0, travel_wh_per_cell: float = 0.5):
+                 seed: int = 0, overrun_tolerance_h: float = 2.0,
+                 travel_wh_per_cell: float = TRAVEL_WH_PER_CELL):
         if dt_h <= 0:
             raise ValueError("dt_h must be positive")
-        if not 0.0 <= battery_reserve_frac <= 1.0:
-            raise ValueError("battery_reserve_frac must be within [0, 1]")
         self.dt_h = float(dt_h)
         self.seed = seed
-        self.battery_reserve_frac = battery_reserve_frac
         self.overrun_tolerance_h = overrun_tolerance_h
         self.travel_wh_per_cell = travel_wh_per_cell
 
@@ -190,7 +180,6 @@ class Simulator:
         self._robots: dict[str, _RobotRT] = {
             r.id: _RobotRT(spec=r, pos=start, battery_wh=r.battery_wh) for r in req.robots
         }
-        self._initial_battery = {r.id: r.battery_wh for r in req.robots}
         for inj in injections:
             if not math.isfinite(inj.t_h):
                 raise ValueError(
@@ -280,7 +269,7 @@ class Simulator:
         """Snapshot of the world at the current clock."""
         robots = [
             RobotState(id=r.spec.id, pos=(round(r.pos[0], 3), round(r.pos[1], 3)),
-                       battery_wh=round(r.battery_wh, 2), status=r.status,
+                       battery_wh=_floor_wh(r.battery_wh), status=r.status,
                        current_task=r.current_task)
             for r in self._robots.values()
         ]
@@ -309,7 +298,7 @@ class Simulator:
         queues = self._queues(schedule, tasks)
         self._required.update(tasks)
         new_zones = sorted({t.zone for t in graph.tasks} - self._layout.keys())
-        self._layout.update(_place_zones(self._req.site, new_zones, set(self._layout.values())))
+        self._layout.update(place_zones(self._req.site, new_zones, set(self._layout.values())))
 
         base: dict[str, float] = {}
         busy: dict[str, str] = {}
@@ -317,6 +306,7 @@ class Simulator:
             tid = r.current_task
             queue = [] if r.status == "failed" else queues.get(r.id, [])
             r.queue = queue
+            r.battery_low_fired = False   # a new plan in force: forecast it afresh
             if (tid is not None and r.status == "working" and queue
                     and queue[0].task == tid):
                 base[tid] = self._progress_of(tid)  # old graph's duration: before the swap
@@ -480,18 +470,35 @@ class Simulator:
             self._emit(Event(t_h=self._t, kind="robot_failure", robot=r.id, task=task,
                              detail=f"{r.id} failed at {self._t:g} h {what}"))
 
+    def _remaining_need_wh(self, r: _RobotRT) -> float:
+        """What the plan in force still asks of ``r``: the rest of its current task pro rata,
+        every queued task in full and the legs from where it stands, zone to zone."""
+        need = 0.0
+        pos = r.pos
+        for entry in r.queue:
+            task = self._tasks[entry.task]
+            target = self._layout[task.zone]
+            need += self.travel_wh_per_cell * geometry.distance(pos, target)
+            pos = target
+            worked = self._worked_h.get(task.id, 0.0) if entry.task == r.current_task else 0.0
+            need += task.energy_wh * max(0.0, task.duration_h - worked) / task.duration_h
+        return need
+
     def _check_batteries(self) -> None:
         for r in self._robots.values():
             if r.status == "failed" or r.battery_low_fired or not r.has_work:
                 continue
-            initial = self._initial_battery[r.id]
-            reserve = self.battery_reserve_frac * initial
-            if r.battery_wh < reserve - _EPS:
+            need = self._remaining_need_wh(r)
+            if r.battery_wh < need - _BATTERY_EPS_WH:
                 r.battery_low_fired = True
+                tasks = [e.task for e in r.queue]
+                what = ", ".join(tasks[:3]) + (f" and {len(tasks) - 3} more" if len(tasks) > 3
+                                               else "")
                 self._emit(Event(
                     t_h=self._t, kind="battery_low", robot=r.id, task=r.current_task,
-                    detail=(f"{r.id} has {r.battery_wh:.0f} Wh left, below the {reserve:.0f} Wh "
-                            f"reserve ({self.battery_reserve_frac:.0%} of {initial:.0f} Wh)"),
+                    detail=(f"{r.id} has {r.battery_wh:.0f} Wh left but its remaining work "
+                            f"({what}, travel included) needs {need:.0f} Wh; it will run dry "
+                            "under the current plan"),
                 ))
 
     def _emit(self, event: Event) -> None:

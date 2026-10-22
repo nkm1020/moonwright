@@ -3,23 +3,36 @@
 The plan under test is the offline landing_pad example (``Planner(FixtureClient())`` over
 ``examples/briefs/landing_pad.md`` with the canned answers in ``fixtures/landing_pad/``), the
 same PlanResult the frontend ships as ``public/samples/landing_pad.plan.json``: 7 robots, 14
-tasks, 77 h makespan, 336 h horizon. Its plain replay finishes at 79.25 h (travel is not in the
-solver's model) without any event. CP1, PR1 and SV1 are the only robot of their type, so
-their failure leaves work nobody can do; the two excavators share a tight energy budget.
+tasks, 336 h horizon. Its plain replay finishes a little after the makespan without any event.
+CP1, PR1 and SV1 are the only robot of their type, so their failure leaves work nobody can do;
+the two excavators share a tight energy budget.
 """
 
 from __future__ import annotations
 
 import random
 import time
+from collections import Counter
 from itertools import pairwise
 from pathlib import Path
 
 import pytest
 
+import moonwright.sim.montecarlo as mc
 from moonwright.llm.base import FixtureClient, FixtureMissing, LLMError
 from moonwright.pipeline.loop import Planner
-from moonwright.schemas import PlanResult, SimResult, TaskGraph
+from moonwright.schemas import (
+    PlanResult,
+    Requirements,
+    Robot,
+    Schedule,
+    ScheduleEntry,
+    SimResult,
+    Site,
+    Task,
+    TaskGraph,
+    Zone,
+)
 from moonwright.sim.montecarlo import (
     HISTOGRAM_BINS,
     MONTE_CARLO_KEY,
@@ -30,6 +43,8 @@ from moonwright.sim.montecarlo import (
     MonteCarloSample,
     MonteCarloStats,
     SolverOnlyClient,
+    classify_outcome,
+    count_outcomes,
     draw_failures,
     finish_stats,
     format_monte_carlo,
@@ -38,7 +53,9 @@ from moonwright.sim.montecarlo import (
     percentile,
     run_monte_carlo,
     simulate_sample,
+    single_points_of_failure,
     solver_only_planner,
+    wilson_interval,
 )
 from moonwright.sim.replan import run_with_replanning
 from moonwright.sim.simulator import FailureInjection, Simulator
@@ -46,6 +63,7 @@ from moonwright.sim.simulator import FailureInjection, Simulator
 BRIEF = Path(__file__).resolve().parents[1] / "examples" / "briefs" / "landing_pad.md"
 HORIZON_H = 336
 RATE = 0.002
+SINGLE_ROBOT_TYPES = ["compactor", "printer", "surveyor"]
 
 
 @pytest.fixture(scope="module")
@@ -75,14 +93,32 @@ class CountingPlanner(MonteCarloPlanner):
         return super().plan_from_requirements(req, **kw)
 
 
+class CountingClient(SolverOnlyClient):
+    """The solver-only client, counting how often anyone asks it anything."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def complete_json(self, **kwargs):
+        self.calls += 1
+        return super().complete_json(**kwargs)
+
+
+def replay(plan: PlanResult, injections: list[FailureInjection], max_replans: int = 2) -> SimResult:
+    return run_with_replanning(solver_only_planner(), plan, injections, key=MONTE_CARLO_KEY,
+                               max_replans=max_replans)
+
+
 # --------------------------------------------------------------------------- contract
 def test_models_mirror_the_typescript_contract():
     assert list(MonteCarloResult.model_fields) == [
-        "runs", "completed", "completion_rate", "within_horizon_rate", "horizon_h", "finish_h",
-        "replans_mean", "failures_mean", "histogram", "samples", "elapsed_s",
+        "runs", "completed", "completion_rate", "within_horizon_rate", "within_horizon_ci",
+        "horizon_h", "finish_h", "replans_mean", "failures_mean", "outcomes",
+        "single_points_of_failure", "histogram", "samples", "elapsed_s",
     ]
     assert list(MonteCarloSample.model_fields) == [
-        "seed", "completed", "within_horizon", "finished_at_h", "events", "replans", "failures",
+        "seed", "completed", "within_horizon", "outcome", "finished_at_h", "events", "replans",
+        "failures",
     ]
     assert list(MonteCarloStats.model_fields) == ["mean", "p50", "p90", "min", "max"]
     assert list(HistogramBin.model_fields) == ["start_h", "end_h", "count"]
@@ -105,18 +141,33 @@ def test_solver_only_client_never_answers():
 
 
 def test_solver_only_planner_replans_by_rescheduling_the_remaining_graph(plan):
-    res = run_with_replanning(solver_only_planner(), plan, [FailureInjection("HL2", 20.0)],
-                              key=MONTE_CARLO_KEY, max_replans=2)
+    res = replay(plan, [FailureInjection("HL2", 20.0)])
     assert res.completed and len(res.replans) == 1
     record = res.replans[0]
     after = record.after
     assert after.success and after.schedule is not None and after.task_graph is not None
-    assert [s.stage for s in after.steps] == ["taskgraph", "validate", "schedule"]
-    assert after.steps[0].message is not None
-    assert after.steps[0].message.startswith("offline: reused prior graph")
+    # solver-first: the remaining graph is verified as it is, no model round at all
+    assert [s.stage for s in after.steps] == ["validate", "schedule", "replan"]
+    assert record.escalated is False and after.repairs == 0
+    assert after.steps[-1].message is not None
+    assert after.steps[-1].message.startswith("CP-SAT rescheduled 12 tasks in ")
+    assert "Nemotron not needed" in after.steps[-1].message
     assert after.task_graph.ids() == record.remaining_tasks
     assert all(s.usage is None for s in after.steps)  # no model was called
     assert "HL2" not in {e.robot for e in after.schedule.entries}
+
+
+def test_monte_carlo_replans_never_ask_the_model(plan):
+    spy = CountingClient()
+    planner = MonteCarloPlanner(spy, max_repairs=0, explain=False)
+    res = run_monte_carlo(plan, runs=12, failure_rate_per_robot_h=0.05, duration_jitter=0.0,
+                          seed=2, planner=planner)
+    assert res.replans_mean > 0 and spy.calls == 0
+    # ... and neither does the default planner
+    sample, sim = simulate_sample(plan, 2, failure_rate_per_robot_h=0.05, duration_jitter=0.0)
+    assert sample.replans == len(sim.replans) > 0
+    assert all(s.usage is None for r in sim.replans for s in r.after.steps)
+    assert all(not r.escalated for r in sim.replans)
 
 
 # --------------------------------------------------------------------------- the model
@@ -125,20 +176,23 @@ def test_zero_rate_and_zero_jitter_reproduce_the_plain_replay(plan, plain):
 
     assert [s.seed for s in res.samples] == [5, 6, 7]
     for s in res.samples:
-        assert s.completed and s.within_horizon
+        assert s.completed and s.within_horizon and s.outcome == "completed"
         assert s.finished_at_h == plain.finished_at_h
         assert s.events == len(plain.events) and s.replans == 0 and s.failures == []
     assert res.runs == 3 and res.completed == 3
     assert res.completion_rate == 1.0 and res.within_horizon_rate == 1.0
+    assert res.within_horizon_ci == wilson_interval(3, 3) == (0.4385, 1.0)
     assert res.horizon_h == HORIZON_H
     f = plain.finished_at_h
     assert res.finish_h == MonteCarloStats(mean=f, p50=f, p90=f, min=f, max=f)
     assert res.replans_mean == 0.0 and res.failures_mean == 0.0
+    assert res.outcomes == {"completed": 3}
+    assert res.single_points_of_failure == SINGLE_ROBOT_TYPES
     assert sum(b.count for b in res.histogram) == 3
     assert res.elapsed_s >= 0
 
     # the same as a plain run_with_replanning of the plan
-    direct = run_with_replanning(solver_only_planner(), plan, [], key=MONTE_CARLO_KEY)
+    direct = replay(plan, [])
     assert (direct.completed, direct.finished_at_h) == (True, plain.finished_at_h)
 
 
@@ -149,6 +203,7 @@ def test_same_seed_gives_an_identical_result(plan):
     # the scenario exercised failures and replans, not just the plain replay
     assert any(s.failures for s in a.samples) and any(s.replans for s in a.samples)
     assert any(not s.completed for s in a.samples) and any(s.completed for s in a.samples)
+    assert len(a.outcomes) > 1
 
     # sample i is reproducible on its own from its seed ...
     k = next(i for i, s in enumerate(a.samples) if s.failures)
@@ -177,6 +232,8 @@ def test_high_failure_rate_lowers_the_within_horizon_rate(plan):
     assert harsh.completion_rate >= harsh.within_horizon_rate
     assert harsh.failures_mean > 0 and harsh.replans_mean > 0
     assert harsh.completed == sum(b.count for b in harsh.histogram)
+    assert harsh.within_horizon_ci[1] < calm.within_horizon_ci[1] == 1.0
+    assert all(key.startswith("lost_only:") for key in harsh.outcomes if key != "completed")
     for s in harsh.samples:
         assert len(s.failures) <= len(plan.requirements.robots)
         assert len({f.robot for f in s.failures}) == len(s.failures)  # a robot fails once
@@ -252,6 +309,7 @@ def test_jitter_scales_durations_and_energies_and_keeps_the_schedule(plan):
     assert sample.events == len(sim.events) and sample.replans == len(sim.replans)
     assert sample.completed == sim.completed
     assert sample.finished_at_h == (sim.finished_at_h if sim.completed else None)
+    assert sample.outcome == classify_outcome(sim, plan.requirements, HORIZON_H)
 
 
 def test_within_horizon_separates_late_completions(plan, plain):
@@ -262,7 +320,8 @@ def test_within_horizon_separates_late_completions(plan, plain):
                           seed=0)
     assert res.horizon_h == deadline
     assert res.completion_rate == 1.0 and res.within_horizon_rate == 0.0
-    assert all(s.completed and not s.within_horizon for s in res.samples)
+    assert all(s.completed and not s.within_horizon and s.outcome == "late" for s in res.samples)
+    assert res.outcomes == {"late": 2} and res.within_horizon_ci == (0.0, wilson_interval(0, 2)[1])
     assert res.finish_h.max == plain.finished_at_h
     late = [b for b in res.histogram if b.start_h >= deadline]
     assert len(res.histogram) == HISTOGRAM_BINS + 1 and len(late) == 1
@@ -274,6 +333,91 @@ def test_custom_planner_is_used_for_every_replan(plan):
     res = run_monte_carlo(plan, runs=6, failure_rate_per_robot_h=0.05, duration_jitter=0.0,
                           seed=2, planner=spy)
     assert spy.calls == sum(s.replans for s in res.samples) > 0
+
+
+# --------------------------------------------------------------------------- outcomes
+def test_outcomes_name_the_cause_of_a_miss(plan):
+    req = plan.requirements
+
+    # the only compactor fails with its work still ahead: nobody can do it, whatever else
+    lost = replay(plan, [FailureInjection("CP1", 20.0)])
+    assert not lost.completed and classify_outcome(lost, req, HORIZON_H) == "lost_only:compactor"
+    record = lost.replans[0]
+    assert not record.after.success and not record.escalated
+    assert record.after.failure is not None
+    assert all(c.startswith("capability:") for c in record.after.failure.conflicts)
+
+    # EX2 fails at 8 h: the remaining excavation no longer fits EX1's battery, and with the
+    # repair budget at zero the solver's verdict is the end of it
+    infeasible = replay(plan, [FailureInjection("EX2", 8.0)])
+    assert not infeasible.completed
+    assert classify_outcome(infeasible, req, HORIZON_H) == "replan_infeasible:energy"
+    assert infeasible.replans[0].after.failure is not None
+    assert infeasible.replans[0].after.failure.conflicts == ["energy:excavator"]
+    assert infeasible.replans[0].after.steps[-1].message is not None
+    assert infeasible.replans[0].after.steps[-1].message.startswith(
+        "infeasible (energy:excavator), Nemotron not asked (no repair budget)")
+
+    # a lost hauler with a spare, but no replan budget: its work is simply never done
+    stuck = replay(plan, [FailureInjection("HL2", 20.0)], max_replans=0)
+    assert not stuck.completed and stuck.replans == []
+    assert classify_outcome(stuck, req, HORIZON_H) == "stuck"
+
+    # the same failure with a replan: CP-SAT moves the work to HL1 and the mission finishes
+    fine = replay(plan, [FailureInjection("HL2", 20.0)])
+    assert fine.completed and fine.finished_at_h is not None
+    assert classify_outcome(fine, req, HORIZON_H) == "completed"
+    assert classify_outcome(fine, req, int(fine.finished_at_h) - 1) == "late"
+
+
+def test_outcomes_and_counts_are_consistent_with_the_samples(plan):
+    res = run_monte_carlo(plan, runs=40, seed=11)
+    for s in res.samples:
+        if s.within_horizon:
+            assert s.outcome == "completed"
+        elif s.completed:
+            assert s.outcome == "late"
+        else:
+            assert s.outcome == "stuck" or s.outcome.startswith(("lost_only:",
+                                                                 "replan_infeasible:"))
+    assert res.outcomes == dict(count_outcomes(res.samples))
+    assert sum(res.outcomes.values()) == res.runs
+    assert res.outcomes.get("completed", 0) == sum(s.within_horizon for s in res.samples)
+    counts = list(res.outcomes.values())
+    assert counts == sorted(counts, reverse=True)   # most frequent first
+    # every lost type is one the plan has a single robot of (two cannot fail in the same run
+    # ... unless both are single robots as well)
+    for key in res.outcomes:
+        if key.startswith("lost_only:"):
+            types = key.removeprefix("lost_only:").split(",")
+            assert types == sorted(types)
+            assert all(len(plan.requirements.robots_of_type(t)) >= 1 for t in types)
+    assert res.single_points_of_failure == SINGLE_ROBOT_TYPES
+    lo, hi = res.within_horizon_ci
+    assert 0.0 <= lo <= res.within_horizon_rate <= hi <= 1.0
+
+
+def test_count_outcomes_orders_by_frequency_then_name():
+    def sample(outcome: str) -> MonteCarloSample:
+        return MonteCarloSample(seed=0, completed=outcome in ("completed", "late"),
+                                within_horizon=outcome == "completed", outcome=outcome,
+                                events=0, replans=0)
+    counts = count_outcomes([sample("stuck"), sample("completed"), sample("lost_only:printer"),
+                             sample("completed"), sample("lost_only:printer"), sample("late")])
+    assert list(counts.items()) == [("completed", 2), ("lost_only:printer", 2), ("late", 1),
+                                    ("stuck", 1)]
+    assert count_outcomes([]) == {}
+
+
+def test_single_points_of_failure_are_the_types_with_one_robot(plan):
+    assert single_points_of_failure(plan.requirements) == SINGLE_ROBOT_TYPES
+    spares = Requirements(robots=[Robot(id="A1", type="a", battery_wh=1),
+                                  Robot(id="A2", type="a", battery_wh=1),
+                                  Robot(id="B1", type="b", battery_wh=1),
+                                  Robot(id="C1", type="c", battery_wh=1),
+                                  Robot(id="C2", type="c", battery_wh=1)], horizon_h=1)
+    assert single_points_of_failure(spares) == ["b"]
+    assert single_points_of_failure(spares.model_copy(update={"robots": spares.robots[:2]})) == []
 
 
 # --------------------------------------------------------------------------- statistics
@@ -288,6 +432,19 @@ def test_percentile_interpolates_linearly_like_numpy():
         percentile([], 0.5)
     with pytest.raises(ValueError):
         percentile(xs, 1.5)
+
+
+def test_wilson_interval_matches_known_values():
+    assert wilson_interval(0, 10) == (0.0, 0.2775)
+    assert wilson_interval(10, 10) == (0.7225, 1.0)
+    assert wilson_interval(118, 200) == pytest.approx((0.5208, 0.6558), abs=1e-4)
+    assert wilson_interval(100, 200) == pytest.approx((0.4314, 0.5686), abs=1e-4)
+    lo, hi = wilson_interval(59, 100)
+    assert lo < 0.59 < hi and hi - lo < wilson_interval(6, 10)[1] - wilson_interval(6, 10)[0]
+    with pytest.raises(ValueError):
+        wilson_interval(1, 0)
+    with pytest.raises(ValueError):
+        wilson_interval(11, 10)
 
 
 def test_finish_stats_over_a_known_list_and_without_data():
@@ -336,6 +493,7 @@ def test_fifty_runs_of_the_landing_pad_plan_finish_quickly(plan):
     assert 0 < res.within_horizon_rate <= res.completion_rate < 1
     assert res.finish_h.min <= res.finish_h.p50 <= res.finish_h.p90 <= res.finish_h.max
     assert res.finish_h.min <= res.finish_h.mean <= res.finish_h.max
+    assert sum(res.outcomes.values()) == 50 and Counter(s.outcome for s in res.samples) == res.outcomes
     assert MonteCarloResult.model_validate_json(res.model_dump_json()) == res
 
 
@@ -346,19 +504,29 @@ def test_format_monte_carlo_is_a_compact_table(plan):
     lines = text.splitlines()
     assert lines[0].startswith(f"Monte Carlo robustness: 8 runs, horizon {HORIZON_H} h")
     assert f"({res.completion_rate:.1%})" in lines[1]
-    assert f"({res.within_horizon_rate:.1%})" in lines[2]
+    lo, hi = res.within_horizon_ci
+    assert f"({res.within_horizon_rate:.1%})" in lines[2] and f"95% CI {lo:.1%}-{hi:.1%}" in lines[2]
     assert f"p50 {res.finish_h.p50:g} h" in lines[3] and f"p90 {res.finish_h.p90:g} h" in lines[3]
     assert f"replans {res.replans_mean:.2f}" in lines[4]
-    assert len(lines) == 6 + len(res.histogram)
-    assert any("#" in line for line in lines[6:])
+    assert lines[5] == "  outcomes:"
+    rows = lines[6:6 + len(res.outcomes)]
+    assert [row.split()[0] for row in rows] == list(res.outcomes)
+    assert [int(row.split()[1]) for row in rows] == list(res.outcomes.values())
+    assert lines[6 + len(res.outcomes)] == (
+        "  single points of failure: compactor, printer, surveyor (one robot each)")
+    assert len(lines) == 8 + len(res.outcomes) + len(res.histogram)
+    assert any("#" in line for line in lines[-len(res.histogram):])
     assert all(len(line) <= 100 for line in lines)
-    assert not any(line.endswith("late") for line in lines[6:])  # nothing finished late
+    assert not any(line.endswith("late") for line in lines[-len(res.histogram):])  # nothing late
 
     hopeless = run_monte_carlo(plan, runs=2, failure_rate_per_robot_h=5.0, duration_jitter=0.0,
                                seed=1)
     text = format_monte_carlo(hopeless)
     assert "no run completed" in text and "#" not in text
-    assert "(0.0%)" in text
+    assert "(0.0%)" in text and "lost_only:" in text
+
+    spares = hopeless.model_copy(update={"single_points_of_failure": []})
+    assert "single points of failure: none (every robot type has a spare)" in format_monte_carlo(spares)
 
 
 # --------------------------------------------------------------------------- inputs
@@ -372,3 +540,28 @@ def test_rejects_unverified_plans_and_nonsense_parameters(plan):
                 {"duration_jitter": -0.1}, {"max_replans": -1}, {"dt_h": 0.0}):
         with pytest.raises(ValueError):
             run_monte_carlo(plan, seed=0, **bad)
+
+
+def test_an_injection_for_a_robot_that_already_ran_dry_is_not_a_failure(monkeypatch):
+    """R1 (100 Wh) runs dry at 1.25 h on a 400 Wh task; an injected failure for R1 at 3 h never
+    fires (the simulator skips a failed robot), so the sample must not list it, while an
+    injection that does strike is listed at the time it was drawn for."""
+    req = Requirements(site=Site(grid=(40, 40), depot=(5, 5), zones=[Zone(id="Z1", center=(5, 5))]),
+                       robots=[Robot(id="R1", type="x", battery_wh=100, speed_cells_per_h=100),
+                               Robot(id="R2", type="x", battery_wh=1000, speed_cells_per_h=100)],
+                       horizon_h=20)
+    graph = TaskGraph(tasks=[Task(id="T1", name="a", robot_type="x", duration_h=4, energy_wh=400,
+                                  zone="Z1")])
+    schedule = Schedule(entries=[ScheduleEntry(task="T1", robot="R1", start_h=0, end_h=4)],
+                        makespan_h=4, status="optimal")
+    plan = PlanResult(requirements=req, task_graph=graph, schedule=schedule, success=True)
+    monkeypatch.setattr(mc, "draw_failures", lambda plan, rng, rate, window: [FailureInjection("R1", 3.0)])
+    sample, res = simulate_sample(plan, seed=1, duration_jitter=0.0)
+    assert [(e.kind, e.robot, e.t_h) for e in res.events] == \
+        [("battery_low", "R1", 0.0), ("robot_failure", "R1", 1.25)]
+    assert "ran out of battery" in (res.events[1].detail or "")
+    assert sample.failures == [] and sample.completed and sample.outcome == "completed"
+    assert sample.events == 2 and sample.replans == 1
+    monkeypatch.setattr(mc, "draw_failures", lambda plan, rng, rate, window: [FailureInjection("R1", 0.5)])
+    sample, res = simulate_sample(plan, seed=1, duration_jitter=0.0)
+    assert sample.failures == [FailureSpec(robot="R1", t_h=0.5)] and sample.completed

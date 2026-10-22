@@ -3,7 +3,10 @@
 Endpoints
 ---------
 ``GET /health``          ``{status, version, llm, examples}``
-``GET /examples``        ``ExampleBrief[]``; ``GET /examples/{id}`` one brief (404 when unknown)
+``GET /examples``        ``ExampleBrief[]``; ``GET /examples/{id}`` one brief (404 when unknown).
+                         ``text`` is the brief as plain prose (markdown emphasis, inline code
+                         and heading markers stripped, for the UI textarea); ``text_markdown``
+                         is the file as written
 ``POST /structure``      brief -> ``StructureResponse``: ``requirements`` is null when the model's
                          answer could not be structured and ``step`` says why; ``key`` is the
                          fixture / recording key of the brief
@@ -25,11 +28,18 @@ worker thread and forwards its steps through an asyncio queue. Input problems ar
 reason: 422 when the body fails validation, 400 when it is well-formed but unusable (both or
 neither of brief/requirements, a plan without a verified schedule or whose schedule fails
 re-verification, an unknown robot), 503 when the live client cannot be built; anything
-unexpected is a 500 with a JSON ``detail`` (raised inside the CORS middleware, so a browser
-sees the error rather than a CORS failure). CORS is open for localhost development; add other
-origins with the comma-separated ``MOONWRIGHT_CORS_ORIGINS`` variable (exact origins, scheme +
-host [+ port]; a trailing slash is tolerated) and/or a pattern in
-``MOONWRIGHT_CORS_ORIGIN_REGEX`` (e.g. ``https://.*[.]vercel[.]app`` for preview deployments).
+unexpected is a 500 with a JSON ``detail`` *with CORS headers*: the four pipeline endpoints
+turn their exceptions into an ``HTTPException`` (:func:`_reported`) and
+:class:`JsonServerErrors`, mounted inside the CORS middleware, catches whatever any other
+endpoint leaks. Starlette's own server-error handler (and an ``@app.exception_handler(Exception)``)
+sits *outside* the CORS middleware, so its 500 would reach a cross-origin UI as a bare
+"failed to fetch". 422 bodies keep FastAPI's shape, so a bad field inside ``requirements``
+is reported with its full path (``["body", "requirements", "robots", 0, "battery_wh"]``).
+CORS is open for localhost development; add other origins with the comma-separated
+``MOONWRIGHT_CORS_ORIGINS`` variable (exact origins, scheme + host [+ port]; whitespace and a
+trailing slash, the natural copy-paste of a deployment URL, are tolerated) and/or a pattern
+in ``MOONWRIGHT_CORS_ORIGIN_REGEX`` (e.g. ``https://.*[.]vercel[.]app`` for preview
+deployments).
 """
 
 from __future__ import annotations
@@ -39,8 +49,9 @@ import json
 import logging
 import math
 import os
+import re
 import threading
-from collections.abc import AsyncIterator, Callable, Iterator
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, MutableMapping
 from contextlib import contextmanager
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
@@ -134,23 +145,29 @@ class SimulateRequest(BaseModel):
     brief_id: str | None = Field(default=None, description="fixture key for offline replans")
     llm: str | None = None
     frame_stride: int = Field(default=4, ge=1, description="keep every n-th frame plus the last")
-    dt_h: float = Field(default=0.25, ge=0.05, le=24, description="simulation step in hours")
+    dt_h: float = Field(default=0.25, ge=0.05, le=24, allow_inf_nan=False,
+                        description="simulation step in hours")
 
 
 class MonteCarloRequest(BaseModel):
     """Bounds as in ``frontend/src/lib/types.ts``; ``brief_id`` is accepted for symmetry with
-    ``/simulate`` but has no effect (Monte Carlo replans never read fixtures)."""
+    ``/simulate`` but has no effect (Monte Carlo replans never read fixtures). The rates are
+    finite numbers in [0, 1] (NaN / inf are 422s, like every bound here)."""
 
     plan: PlanResult
     runs: int = Field(default=50, ge=1, le=200)
     failure_rate_per_robot_h: float = Field(
-        default=0.002, ge=0, le=1, description="per-robot failure probability per hour"
+        default=0.002, ge=0, le=1, allow_inf_nan=False,
+        description="per-robot failure probability per hour",
     )
     duration_jitter: float = Field(
-        default=0.15, ge=0, le=1, description="relative task-duration spread"
+        default=0.15, ge=0, le=1, allow_inf_nan=False, description="relative task-duration spread"
     )
     seed: int | None = None
     max_replans: int = Field(default=2, ge=0, le=5)
+    max_repairs: int = Field(
+        default=3, ge=0, le=10, description="repair rounds per replan (only with llm)"
+    )
     brief_id: str | None = None
     llm: str | None = Field(
         default=None,
@@ -159,9 +176,13 @@ class MonteCarloRequest(BaseModel):
 
 
 class ExampleBrief(BaseModel):
+    """An example brief: ``text`` as plain prose for a textarea (:func:`strip_markdown`),
+    ``text_markdown`` as the file is written (what the CLI plans from)."""
+
     id: str
     title: str
     text: str
+    text_markdown: str
 
 
 class HealthResponse(BaseModel):
@@ -172,6 +193,24 @@ class HealthResponse(BaseModel):
 
 
 # --------------------------------------------------------------------------- helpers
+_MD_HEADING = re.compile(r"^[ \t]{0,3}#{1,6}[ \t]+", re.MULTILINE)
+_MD_STRONG = re.compile(r"(\*\*|__)(?=\S)(.+?)(?<=\S)\1", re.DOTALL)
+_MD_EM_STAR = re.compile(r"(?<![*\w])\*(?=\S)([^*\n]+?)(?<=\S)\*(?![*\w])")
+_MD_EM_UNDERSCORE = re.compile(r"(?<![\w_])_(?=\S)([^_\n]+?)(?<=\S)_(?![\w_])")
+_MD_CODE = re.compile(r"`([^`\n]+)`")
+
+
+def strip_markdown(text: str) -> str:
+    """``text`` as plain prose for a textarea: ``**bold**`` / ``__bold__``, ``*italic*`` /
+    ``_italic_`` (word-bounded, so ``landing_pad`` or ``4_000`` survive), inline ``code`` and
+    ATX heading markers are removed; lists, numbering, line breaks and everything else stay."""
+    text = _MD_HEADING.sub("", text)
+    text = _MD_STRONG.sub(r"\2", text)
+    text = _MD_EM_STAR.sub(r"\1", text)
+    text = _MD_EM_UNDERSCORE.sub(r"\1", text)
+    return _MD_CODE.sub(r"\1", text)
+
+
 def brief_title(text: str, fallback: str) -> str:
     """First non-empty line, markdown heading markers removed, capped at 80 characters."""
     for line in text.splitlines():
@@ -189,7 +228,8 @@ def list_briefs(directory: Path = EXAMPLES_DIR) -> list[ExampleBrief]:
     for path in sorted(directory.iterdir()):
         if path.suffix in BRIEF_SUFFIXES and path.is_file():
             text = path.read_text(encoding="utf-8")
-            briefs.append(ExampleBrief(id=path.stem, title=brief_title(text, path.stem), text=text))
+            briefs.append(ExampleBrief(id=path.stem, title=brief_title(text, path.stem),
+                                       text=strip_markdown(text), text_markdown=text))
     return briefs
 
 
@@ -248,6 +288,46 @@ def _reported(what: str) -> Iterator[None]:
     except Exception as e:
         log.exception("%s failed", what)
         raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}") from e
+
+
+Scope = MutableMapping[str, Any]
+Receive = Callable[[], Awaitable[MutableMapping[str, Any]]]
+Send = Callable[[MutableMapping[str, Any]], Awaitable[None]]
+ASGIApp = Callable[[Scope, Receive, Send], Awaitable[None]]
+
+
+class JsonServerErrors:
+    """ASGI middleware mounted *inside* the CORS middleware: an exception an endpoint leaks
+    becomes a JSON 500 (``{"detail": "<Type>: <message>"}``) whose response still passes
+    through CORS, where Starlette's own server-error handler, which sits outside every user
+    middleware, would answer without the CORS headers and a browser would report a CORS
+    failure instead of the error. A response that has already started (a stream) cannot be
+    replaced, so the exception propagates as before."""
+
+    def __init__(self, app: ASGIApp):
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        started = False
+
+        async def guarded_send(message: MutableMapping[str, Any]) -> None:
+            nonlocal started
+            if message["type"] == "http.response.start":
+                started = True
+            await send(message)
+
+        try:
+            await self.app(scope, receive, guarded_send)
+        except Exception as e:
+            if started:
+                raise
+            log.exception("%s %s failed", scope.get("method", "?"), scope.get("path", "?"))
+            response = JSONResponse(status_code=500,
+                                    content={"detail": f"{type(e).__name__}: {e}"})
+            await response(scope, receive, send)
 
 
 def _check_plan_request(req: PlanRequest) -> None:
@@ -373,6 +453,7 @@ app = FastAPI(
     description="Natural-language lunar construction briefs -> solver-verified multi-robot "
     "schedules (Nemotron on Nebius Token Factory + OR-Tools CP-SAT).",
 )
+app.add_middleware(JsonServerErrors)   # added first = innermost: its 500s pass through CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins(),
@@ -484,7 +565,8 @@ def montecarlo(req: MonteCarloRequest) -> MonteCarloResult:
     plan_ = req.plan
     _verified_plan(plan_)
     planner = (solver_only_planner() if req.llm is None
-               else MonteCarloPlanner(_client(req.llm), explain=False))
+               else MonteCarloPlanner(_client(req.llm), max_repairs=req.max_repairs,
+                                      explain=False))
     with _reported("montecarlo"):
         try:
             return run_monte_carlo(

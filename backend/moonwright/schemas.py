@@ -18,6 +18,18 @@ Conventions
   ``->``, no ``:``, so every conflict id below can be split back into its parts.
 * Numbers are finite (NaN / inf never validate) and bounded (see the ``MAX_*`` limits), so a
   wildly wrong LLM answer becomes a ``schema`` Failure instead of a crash further down.
+* Physical grounding (phase 3a): the model proposes WHAT and HOW MUCH (``Task.quantity`` +
+  ``Task.unit`` + ``Task.basis``); the deterministic rate model
+  (``moonwright.pipeline.rates.apply_rates``) decides HOW LONG and HOW MUCH ENERGY for every
+  task that carries a quantity, keeping the model's own guess in ``estimated_duration_h`` /
+  ``estimated_energy_wh`` for the UI. Tasks without a quantity keep the model's numbers (the
+  hand-made fixtures have none). The rate model's warnings travel as advisory strings
+  ``estimate:<task_id>: model said ... (+170%)`` in ``LoopStep.payload["advisories"]`` of the
+  ``taskgraph`` / ``repair`` step, plus ``ungrounded: ...`` when an answer states no quantity
+  at all; they are never conflicts.
+* Site geometry is validated at the schema boundary (:class:`Site`): zone centres and the
+  depot inside the grid, ``1 <= radius <= min(grid) // 4``, unique zone ids. A violation is a
+  ``ValueError`` naming the zone, so the structure stage re-asks the model with it.
 * Conflict identifiers (``Failure.conflicts``) are machine-readable strings shared by the
   validator, the scheduler, the repair prompt and the UI. Formats:
 
@@ -27,6 +39,14 @@ Conventions
     robot:<robot_id>                per-robot no-overlap (robot double-booked / overloaded)
     horizon                         plan cannot finish within Requirements.horizon_h
     capability:<task_id>            no robot of the task's robot_type exists
+    quantity:<task_id>              a physical task of a rated robot type states no quantity,
+                                    a quantity of 0 or a unit the rate table does not price,
+                                    in a graph that states quantities (see
+                                    ``moonwright.pipeline.validate``)
+    scope:<structure_id>            a structure of a known type lacks a required phase, a
+                                    structure has no task at all, or a repair dropped every
+                                    task the structure had (heuristic documented in
+                                    ``moonwright.pipeline.validate``)
     reference:<task_id>.after=<id>  `after` points to an unknown task id
     duplicate:<id>                  duplicated task / robot / zone id
     cycle:<a>-><b>->...-><a>        precedence cycle
@@ -42,6 +62,15 @@ Conventions
     changed:<task_id>               a remaining task the new graph redefined (robot_type, zone,
                                     a dropped `after` edge, less than the remaining duration or
                                     energy)
+
+  A repair round of a replan (CP-SAT could not finish the remaining work, so Nemotron was
+  asked; ``moonwright.pipeline.loop.check_locked_tasks``) may re-type, re-zone or re-scope
+  work (the repair diff shows it) but is held to ``missing:<task_id>`` plus:
+
+    locked:<task_id>                a task underway at the event was redefined (robot_type,
+                                    zone, a dropped `after` edge, shorter duration or less
+                                    energy); its robot is on it, so the answer is refused and
+                                    the previous plan stays in force
 
   ``moonwright.pipeline.schedule.check_schedule`` (independent re-verification of a schedule)
   additionally reports defects a solver output never has but a hand-written schedule can:
@@ -72,7 +101,10 @@ MAX_ENERGY_WH = 1e7          # battery_wh and energy_wh
 MAX_DURATION_H = 10_000      # one task
 MAX_HORIZON_H = 100_000      # whole plan
 MAX_SPEED_CELLS_PER_H = 1e4
+MAX_QUANTITY = 1e5           # one task's quantity (m3 / m2 / m / ea)
 MWH_PER_WH = 1000
+
+Unit = Literal["m3", "m2", "m", "ea"]
 
 
 def to_mwh(wh: float) -> int:
@@ -112,10 +144,54 @@ class Zone(_Model):
 
 
 class Site(_Model):
+    """The site grid, its work zones and the depot.
+
+    Geometry rules (enforced here so a bad structure answer is re-asked, not simulated):
+    every zone centre inside the grid (``0 <= x < grid_x``, ``0 <= y < grid_y``),
+    ``1 <= radius <= max(1, min(grid) // 4)`` (a quarter of the shorter side: a zone is a work
+    area, not the whole site), unique zone ids, and the depot inside the grid when given.
+    Overlapping zones are allowed (the structure prompt discourages them).
+    """
+
     name: str = "LS-1"
     grid: tuple[int, int] = (40, 40)
     zones: list[Zone] = Field(default_factory=list)
     depot: tuple[int, int] | None = None  # where robots start; defaults to grid centre bottom
+
+    @staticmethod
+    def max_zone_radius(grid: tuple[int, int]) -> int:
+        return max(1, min(grid) // 4)
+
+    @model_validator(mode="after")
+    def _geometry(self) -> Site:
+        gx, gy = self.grid
+        problems: list[str] = []
+        if gx < 1 or gy < 1:
+            problems.append(f"grid {gx}x{gy} must be at least 1x1")
+        max_radius = self.max_zone_radius(self.grid)
+        seen: set[str] = set()
+        for z in self.zones:
+            if z.id in seen:
+                problems.append(f"zone {z.id}: id is used by more than one zone")
+            seen.add(z.id)
+            x, y = z.center
+            if not (0 <= x < gx and 0 <= y < gy):
+                problems.append(
+                    f"zone {z.id}: centre ({x}, {y}) is outside the {gx}x{gy} grid "
+                    f"(0 <= x < {gx}, 0 <= y < {gy})"
+                )
+            if not (1 <= z.radius <= max_radius):
+                problems.append(
+                    f"zone {z.id}: radius {z.radius} is outside 1..{max_radius} "
+                    f"(at most a quarter of the grid's shorter side)"
+                )
+        if self.depot is not None:
+            dx, dy = self.depot
+            if not (0 <= dx < gx and 0 <= dy < gy):
+                problems.append(f"depot ({dx}, {dy}) is outside the {gx}x{gy} grid")
+        if problems:
+            raise ValueError("; ".join(problems))
+        return self
 
 
 class Structure(_Model):
@@ -169,6 +245,15 @@ class Requirements(_Model):
 
 # --------------------------------------------------------------------------- F2 output
 class Task(_Model):
+    """One unit of robot work.
+
+    ``quantity`` / ``unit`` / ``basis`` are the model's scope statement; for a task that has
+    them, ``duration_h`` and ``energy_wh`` are computed by the rate model
+    (``moonwright.pipeline.rates``) and the model's own figures are kept in
+    ``estimated_duration_h`` / ``estimated_energy_wh``. A task without a quantity (a pure time
+    task, or a graph produced before the rate model) keeps the model's numbers.
+    """
+
     id: Id
     name: str
     robot_type: str
@@ -177,6 +262,28 @@ class Task(_Model):
     zone: Id
     after: list[Id] = Field(default_factory=list)
     structure: str | None = None
+    quantity: float | None = Field(
+        default=None, ge=0, le=MAX_QUANTITY,
+        description="How much work: m3 excavated or hauled, m2 stripped / graded / compacted / "
+                    "sintered / surveyed, m of linear work, ea for discrete items; null for a "
+                    "pure time task. Durations and energies are computed from it.",
+    )
+    unit: Unit | None = Field(default=None, description="Unit of quantity.")
+    basis: str | None = Field(
+        default=None,
+        description="How quantity was derived from the structure's dimensions, "
+                    "e.g. 'pi*(10 m)^2*0.4 m = 126 m3'.",
+    )
+    estimated_duration_h: float | None = Field(
+        default=None, ge=0, le=MAX_DURATION_H,
+        description="Filled by the rate model: the planner's own duration_h before it was "
+                    "recomputed. Leave null.",
+    )
+    estimated_energy_wh: float | None = Field(
+        default=None, ge=0, le=MAX_ENERGY_WH,
+        description="Filled by the rate model: the planner's own energy_wh before it was "
+                    "recomputed. Leave null.",
+    )
 
 
 class TaskGraph(_Model):
@@ -310,12 +417,18 @@ class SimFrame(_Model):
 
 
 class ReplanRecord(_Model):
+    """One replan of a simulation. ``after.schedule`` is in absolute simulator hours (shifted
+    by ``floor(t_h)``), while ``after.requirements`` is what the planner was given: the
+    surviving robots with their remaining batteries and ``horizon_h`` = the hours *left* at the
+    event (relative); the ok ``schedule`` step's receipt quotes the brief's deadline."""
+
     event: Event
     t_h: float
     remaining_tasks: list[str]
     before: Schedule
     after: PlanResult
     context: str
+    escalated: bool = False  # True when CP-SAT alone could not finish and Nemotron was asked
 
 
 class SimResult(_Model):

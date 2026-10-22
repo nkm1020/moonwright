@@ -5,8 +5,18 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from moonwright.llm.base import FIXTURES_DIR
-from moonwright.pipeline.validate import check_scope, task_changes, validate_graph
+from moonwright.llm.base import FIXTURES_DIR, SchemaMismatch, validate_into
+from moonwright.pipeline.validate import (
+    check_scope,
+    missing_phases,
+    needs_quantity,
+    structure_kind,
+    structure_tasks,
+    tag_names,
+    task_changes,
+    task_phases,
+    validate_graph,
+)
 from moonwright.schemas import (
     Event,
     Failure,
@@ -20,8 +30,8 @@ from moonwright.schemas import (
 )
 
 CHECK_ORDER = [
-    "duplicate", "reference", "cycle", "capability", "energy_task", "horizon_path",
-    "horizon", "energy",
+    "duplicate", "reference", "cycle", "capability", "quantity", "scope", "energy_task",
+    "horizon_path", "horizon", "energy",
 ]
 
 
@@ -38,9 +48,14 @@ def task(
     energy: float = 100.0,
     after: tuple[str, ...] = (),
     zone: str = "Z1",
+    name: str | None = None,
+    structure: str | None = None,
+    unit: str | None = None,
+    quantity: float | None = None,
 ) -> Task:
-    return Task(id=id_, name=id_, robot_type=type_, duration_h=dur, energy_wh=energy,
-                zone=zone, after=list(after))
+    return Task(id=id_, name=name or id_, robot_type=type_, duration_h=dur, energy_wh=energy,
+                zone=zone, after=list(after), structure=structure, unit=unit,
+                quantity=quantity)
 
 
 def req(*robots: Robot, horizon: int = 336, zones: tuple[str, ...] = ("Z1", "Z2")) -> Requirements:
@@ -65,8 +80,8 @@ def kinds(failure: Failure) -> list[str]:
     return out
 
 
-def must_fail(req_: Requirements, graph_: TaskGraph) -> Failure:
-    failure = validate_graph(req_, graph_)
+def must_fail(req_: Requirements, graph_: TaskGraph, **kwargs: object) -> Failure:
+    failure = validate_graph(req_, graph_, **kwargs)  # type: ignore[arg-type]
     assert failure is not None, "expected a validation failure"
     assert failure.kind == "validation"
     assert len(failure.details) == len(failure.conflicts)
@@ -158,7 +173,12 @@ def test_floating_point_noise_in_energy_sums_is_not_a_conflict() -> None:
 
 # ----------------------------------------------------------------------------- one kind each
 def test_duplicate_ids_in_every_namespace() -> None:
-    r = req(robot("EX1"), robot("EX1"), zones=("Z1", "Z1", "Z2"))
+    # Site refuses a duplicated zone id at the schema boundary (test_site_geometry_rules), so
+    # the validator's zone namespace is reached through an unvalidated Site
+    r = Requirements(robots=[robot("EX1"), robot("EX1")], horizon_h=336)
+    r.site = Site.model_construct(name="LS-1", grid=(40, 40), depot=None, zones=[
+        Zone(id="Z1", center=(0, 10)), Zone(id="Z1", center=(10, 10)), Zone(id="Z2", center=(20, 10)),
+    ])
     g = graph(task("T1"), task("T2", after=("T1",)), task("T2", after=("T1",)))
     failure = must_fail(r, g)
     assert failure.conflicts == ["duplicate:EX1", "duplicate:T2", "duplicate:Z1"]
@@ -289,8 +309,10 @@ def _messy() -> tuple[Requirements, TaskGraph]:
 
 def test_multiple_conflicts_are_all_collected_in_check_order() -> None:
     failure = must_fail(*_messy())
-    # every kind except horizon_path (critical path is skipped while the graph has a cycle)
-    assert kinds(failure) == [k for k in CHECK_ORDER if k != "horizon_path"]
+    # every kind except horizon_path (critical path is skipped while the graph has a cycle),
+    # quantity (no task states one) and scope (coverage is opt-in, no structures here)
+    assert kinds(failure) == [k for k in CHECK_ORDER
+                              if k not in ("horizon_path", "quantity", "scope")]
     assert failure.conflicts == [
         "duplicate:T2",
         "reference:T2.after=T9",
@@ -419,3 +441,366 @@ def test_fixtures_still_validate_under_the_hardened_schema() -> None:
         assert graphs, f"no task graph fixtures in {d}"
         for g in graphs:
             TaskGraph.model_validate_json(g.read_text())
+
+
+# ----------------------------------------------------------------------------- site geometry
+def test_site_geometry_accepts_the_bounds() -> None:
+    site = Site(grid=(40, 40), depot=(20, 0), zones=[
+        Zone(id="Z1", center=(0, 0), radius=1), Zone(id="Z2", center=(39, 39), radius=10),
+        Zone(id="Z3", center=(1, 1), radius=5),   # overlaps Z1: allowed, the prompt discourages it
+    ])
+    assert [z.id for z in site.zones] == ["Z1", "Z2", "Z3"]
+    assert Site.max_zone_radius((40, 40)) == 10
+    assert Site.max_zone_radius((8, 20)) == 2 and Site.max_zone_radius((3, 3)) == 1
+    assert Site(grid=(8, 20), zones=[Zone(id="Z1", center=(7, 19), radius=2)]).grid == (8, 20)
+    assert Site(grid=(3, 3), zones=[Zone(id="Z1", center=(2, 2), radius=1)]).zones[0].radius == 1
+    assert Site().depot is None and Site(depot=(0, 39)).depot == (0, 39)
+    for d in sorted(p for p in FIXTURES_DIR.iterdir() if p.is_dir()):
+        Requirements.model_validate_json((d / "structure.json").read_text())  # all inside
+
+
+@pytest.mark.parametrize(("kwargs", "message"), [
+    ({"zones": [Zone(id="Z1", center=(40, 40), radius=5)]},
+     "zone Z1: centre (40, 40) is outside the 40x40 grid (0 <= x < 40, 0 <= y < 40)"),
+    ({"zones": [Zone(id="Z1", center=(-1, 5))]}, "zone Z1: centre (-1, 5) is outside"),
+    ({"zones": [Zone(id="Z1", center=(5, 5), radius=11)]},
+     "zone Z1: radius 11 is outside 1..10 (at most a quarter of the grid's shorter side)"),
+    ({"grid": (8, 20), "zones": [Zone(id="Z1", center=(4, 4), radius=3)]},
+     "zone Z1: radius 3 is outside 1..2"),
+    ({"zones": [Zone(id="Z1", center=(5, 5)), Zone(id="Z1", center=(20, 20))]},
+     "zone Z1: id is used by more than one zone"),
+    ({"depot": (40, 0)}, "depot (40, 0) is outside the 40x40 grid"),
+    ({"depot": (0, -1)}, "depot (0, -1) is outside the 40x40 grid"),
+    ({"grid": (0, 40)}, "grid 0x40 must be at least 1x1"),
+])
+def test_site_geometry_rules_name_the_offender(kwargs: dict, message: str) -> None:
+    with pytest.raises(ValidationError) as info:
+        Site(**kwargs)
+    assert message in str(info.value)
+
+
+def test_site_geometry_reports_every_violation_at_once() -> None:
+    # the live structure stage shows zone (40, 40) with radius 40 and a depot off-grid: the
+    # re-ask must carry all of it, naming each zone
+    with pytest.raises(ValidationError) as info:
+        Site(zones=[Zone(id="Z1", center=(40, 40), radius=40), Zone(id="Z2", center=(10, 50))],
+             depot=(99, 99))
+    text = str(info.value)
+    for part in ("zone Z1: centre (40, 40)", "zone Z1: radius 40", "zone Z2: centre (10, 50)",
+                 "depot (99, 99)"):
+        assert part in text
+    with pytest.raises(ValidationError):
+        Zone(id="Z1", center=(5, 5), radius=0)  # Zone's own bound
+
+
+def test_structure_stage_reports_soft_geometry_warnings() -> None:
+    """What the schema allows but the prompt discourages is reported on the structure step's
+    payload for the UI, never as a failure (the simulator copes with all of it)."""
+    from moonwright.pipeline.structure import site_warnings
+
+    for d in sorted(p for p in FIXTURES_DIR.iterdir() if p.is_dir()):
+        assert site_warnings(Requirements.model_validate_json(
+            (d / "structure.json").read_text())) == []
+    messy = Requirements(
+        site=Site(zones=[Zone(id="Z1", center=(10, 10), radius=5),
+                         Zone(id="Z2", center=(16, 10), radius=4),      # 6 < 5 + 4: overlap
+                         Zone(id="Z3", center=(30, 30), radius=3)]),
+        structures=[Structure(id="S1", type="landing_pad", zone="Z1"),
+                    Structure(id="S2", type="blast_berm", zone="Z9"),
+                    Structure(id="S3", type="stockpile")],
+        robots=[robot("EX1")], horizon_h=100,
+    )
+    assert site_warnings(messy) == [
+        "zones Z1 and Z2 overlap (centres 6.0 cells apart, radii 5 + 4)",
+        "structure S2 names zone Z9, which the site does not declare",
+        "structure S3 has no zone",
+        "no depot given; robots start at the bottom centre of the grid",
+    ]
+
+
+def test_site_geometry_error_reaches_the_structure_re_ask() -> None:
+    """``validate_into`` is what every client re-asks with: the error line names the zone."""
+    data = {"site": {"zones": [{"id": "Z1", "center": [40, 40], "radius": 40}], "depot": None},
+            "robots": [{"id": "EX1", "type": "excavator", "battery_wh": 5000}], "horizon_h": 100}
+    with pytest.raises(SchemaMismatch) as info:
+        validate_into(Requirements, data)
+    assert len(info.value.errors) == 1
+    assert info.value.errors[0].startswith("site: Value error, zone Z1: centre (40, 40)")
+
+
+# ----------------------------------------------------------------------------- coverage
+def site_req(*robots: Robot, structures: tuple[tuple[str, str], ...] = (), horizon: int = 336,
+             ) -> Requirements:
+    """Requirements with zones Z1..Z5 and ``structures`` = ((id, type), ...) in zones Z1, Z2, ..."""
+    zones = [Zone(id=f"Z{i}", center=(6 * i, 10)) for i in range(1, 6)]
+    return Requirements(
+        site=Site(zones=zones),
+        structures=[Structure(id=sid, type=typ, zone=f"Z{i + 1}")
+                    for i, (sid, typ) in enumerate(structures)],
+        robots=list(robots), horizon_h=horizon,
+    )
+
+
+FLEET = (robot("EX1"), robot("HL1", "hauler", 3000), robot("CP1", "compactor", 3500),
+         robot("PR1", "printer", 4000), robot("SV1", "surveyor", 1500))
+
+
+def pad_tasks(*skip: str) -> list[Task]:
+    """The four phases of a landing pad S1, minus the phases in ``skip``."""
+    all_ = {
+        "survey": task("T1", type_="surveyor", name="Survey and stake pad", structure="S1"),
+        "excavate": task("T2", name="Excavate pad bowl", unit="m3", quantity=126,
+                         structure="S1", after=("T1",)),
+        "compact": task("T3", type_="compactor", name="Compact pad subgrade", unit="m2",
+                        quantity=314, structure="S1", after=("T2",)),
+        "sinter": task("T4", type_="printer", name="Sinter pad surface", unit="m2",
+                       quantity=314, structure="S1", after=("T3",)),
+    }
+    kept = [t for phase, t in all_.items() if phase not in skip]
+    present = {t.id for t in kept}
+    return [t.model_copy(update={"after": [a for a in t.after if a in present]}) for t in kept]
+
+
+def test_coverage_is_opt_in_and_landing_pad_needs_all_four_phases() -> None:
+    r = site_req(*FLEET, structures=(("S1", "landing_pad"),))
+    assert validate_graph(r, graph(*pad_tasks()), coverage=True) is None
+    for phase in ("survey", "excavate", "compact", "sinter"):
+        g = graph(*pad_tasks(phase))
+        assert validate_graph(r, g) is None, "coverage is off by default (replans)"
+        failure = must_fail(r, g, coverage=True)
+        assert failure.conflicts == ["scope:S1"]
+        assert failure.details == [f"S1 (landing_pad) lacks {phase} task"]
+        assert f"S1 (landing_pad) has no {phase} task" in failure.hint
+        assert "tagged with the structure id" in failure.hint
+    failure = must_fail(r, graph(*pad_tasks("compact", "sinter")), coverage=True)
+    assert failure.details == ["S1 (landing_pad) lacks compact and sinter tasks"]
+
+
+def test_phases_are_only_required_while_the_fleet_can_staff_them() -> None:
+    no_printer = site_req(*FLEET[:3], FLEET[4], structures=(("S1", "landing_pad"),))
+    assert validate_graph(no_printer, graph(*pad_tasks("sinter")), coverage=True) is None
+    no_surveyor = site_req(*FLEET[:4], structures=(("S1", "landing_pad"),))
+    assert validate_graph(no_surveyor, graph(*pad_tasks("survey")), coverage=True) is None
+    # ... but a phase the fleet can staff is still required
+    failure = must_fail(no_printer, graph(*pad_tasks("sinter", "compact")), coverage=True)
+    assert failure.details == ["S1 (landing_pad) lacks compact task"]
+
+
+def test_berm_road_and_foundation_phases() -> None:
+    r = site_req(*FLEET, structures=(("S1", "blast_berm"), ("S2", "access_road"),
+                                     ("S3", "habitat_foundation")))
+    berm_haul = task("B1", type_="hauler", name="Haul spoil to berm line", unit="m3",
+                     quantity=90, zone="Z1", structure="S1")
+    berm_dig = task("B2", name="Cut berm key trench", unit="m3", quantity=30, zone="Z1",
+                    structure="S1")
+    berm_compact = task("B3", type_="compactor", name="Shape and compact berm", unit="m2",
+                        quantity=240, zone="Z1", structure="S1")
+    road_grade = task("R1", name="Grade road bed", unit="m2", quantity=480, zone="Z2",
+                      structure="S2")
+    road_compact = task("R2", type_="compactor", name="Compact road base", unit="m2",
+                        quantity=480, zone="Z2", structure="S2")
+    pit = task("F1", name="Excavate foundation pit", unit="m3", quantity=32, zone="Z3",
+               structure="S3")
+    pit_compact = task("F2", type_="compactor", name="Compact foundation base", unit="m2",
+                       quantity=64, zone="Z3", structure="S3")
+    full = graph(berm_haul, berm_dig, berm_compact, road_grade, road_compact, pit, pit_compact)
+    assert validate_graph(r, full, coverage=True) is None
+    # berm: excavate OR haul satisfies the first phase
+    assert validate_graph(r, graph(berm_haul, berm_compact, road_grade, road_compact, pit,
+                                   pit_compact), coverage=True) is None
+    assert validate_graph(r, graph(berm_dig, berm_compact, road_grade, road_compact, pit,
+                                   pit_compact), coverage=True) is None
+    failure = must_fail(r, graph(berm_compact, road_grade, road_compact, pit, pit_compact),
+                        coverage=True)
+    assert failure.details == ["S1 (blast_berm) lacks excavate or haul task"]
+    # road: an excavator counted in m3 with no grading verb is excavation, not grading
+    cut = task("R1", name="Cut road bed", unit="m3", quantity=96, zone="Z2", structure="S2")
+    failure = must_fail(r, graph(berm_haul, berm_compact, cut, road_compact, pit, pit_compact),
+                        coverage=True)
+    assert failure.conflicts == ["scope:S2"]
+    assert failure.details == ["S2 (access_road) lacks grade task"]
+    # foundation: excavate and compact
+    failure = must_fail(r, graph(berm_haul, berm_compact, road_grade, road_compact, pit),
+                        coverage=True)
+    assert failure.details == ["S3 (habitat_foundation) lacks compact task"]
+    # several structures at once: sorted by structure id, details aligned
+    failure = must_fail(r, graph(berm_compact, road_compact, pit), coverage=True)
+    assert failure.conflicts == ["scope:S1", "scope:S2", "scope:S3"]
+    assert failure.details == ["S1 (blast_berm) lacks excavate or haul task",
+                               "S2 (access_road) lacks grade task",
+                               "S3 (habitat_foundation) lacks compact task"]
+
+
+def test_unknown_structure_types_need_at_least_one_task() -> None:
+    r = site_req(*FLEET, structures=(("S1", "landing_pad"), ("S2", "approach_apron")))
+    pad = pad_tasks()
+    failure = must_fail(r, graph(*pad), coverage=True)
+    assert failure.conflicts == ["scope:S2"]
+    assert failure.details == ["S2 (approach_apron) has no task"]
+    strip = task("A1", name="Strip approach apron", unit="m2", quantity=240, zone="Z2",
+                 structure="S2")
+    assert validate_graph(r, graph(*pad, strip), coverage=True) is None
+    # the type is matched by keyword, whatever the spelling around it
+    assert structure_kind("Landing-Pad") == "landing_pad"
+    assert structure_kind("protective_berm") == structure_kind("BLAST BERM") == "berm"
+    assert structure_kind("haul road") == "road"
+    assert structure_kind("habitat_foundation") == "foundation"
+    assert structure_kind("approach_apron") is None and structure_kind("stockpile") is None
+
+
+def test_untagged_tasks_in_the_structures_zone_count_for_it() -> None:
+    r = site_req(*FLEET, structures=(("S1", "landing_pad"),))
+    untagged = [t.model_copy(update={"structure": None}) for t in pad_tasks()]  # all in Z1
+    assert validate_graph(r, graph(*untagged), coverage=True) is None
+    assert [t.id for t in structure_tasks(r.structures[0], graph(*untagged))] == \
+        ["T1", "T2", "T3", "T4"]
+    elsewhere = [t.model_copy(update={"zone": "Z2"}) for t in untagged]
+    failure = must_fail(r, graph(*elsewhere), coverage=True)
+    assert failure.details == ["S1 (landing_pad) lacks survey, excavate, compact and sinter tasks"]
+
+
+def test_task_phases_combine_robot_type_unit_and_name() -> None:
+    assert task_phases(task("T", type_="surveyor", name="As-built survey")) == {"survey"}
+    assert task_phases(task("T", type_="hauler", name="Stage feedstock")) == {"haul"}
+    assert task_phases(task("T", type_="compactor", name="Roll berm lift")) == {"compact"}
+    assert task_phases(task("T", type_="printer", name="Pave the apron")) == {"sinter"}
+    assert task_phases(task("T", name="Excavate bowl", unit="m3")) == {"excavate"}
+    assert task_phases(task("T", name="Strip footprint", unit="m2")) == {"grade"}
+    assert task_phases(task("T", name="Dig cable trench", unit="m")) == {"excavate"}
+    # an excavator with nothing to go on is earthmoving of some kind
+    assert task_phases(task("T", name="Prepare pad")) == {"excavate", "grade"}
+    # name keywords add phases whatever the robot type (lenient union: a dropped phase is
+    # only reported when nothing in the graph suggests it)
+    assert task_phases(task("T", name="Compact berm lift")) == {"compact"}
+    assert task_phases(task("T", name="Compact berm with blade")) == {"compact", "grade"}
+    assert task_phases(task("T", type_="hauler", name="Haul and level fill")) == {"haul", "grade"}
+    # word-prefix matching, not substring: "execute" is not a cut
+    assert task_phases(task("T", type_="hauler", name="Execute delivery run")) == {"haul"}
+    assert task_phases(task("T", type_="surveyor", name="Execute scan")) == {"survey"}
+
+
+def test_repair_that_drops_a_structure_names_the_lost_tasks() -> None:
+    r = site_req(*FLEET, structures=(("S1", "landing_pad"), ("S2", "blast_berm")))
+    berm = [task("B1", type_="hauler", name="Haul spoil to berm", unit="m3", quantity=90,
+                 zone="Z2", structure="S2"),
+            task("B2", type_="compactor", name="Compact berm", unit="m2", quantity=240,
+                 zone="Z2", structure="S2")]
+    before = graph(*pad_tasks(), *berm)
+    assert validate_graph(r, before, coverage=True) is None
+    after = graph(*pad_tasks())
+    failure = must_fail(r, after, previous=before, coverage=True)
+    assert failure.conflicts == ["scope:S2"]
+    assert failure.details == ["S2 (blast_berm) had B1 and B2 before the repair and has no task now"]
+    assert "S2 (blast_berm) lost every task it had (B1, B2)" in failure.hint
+    # without the previous graph the same hole is reported by its missing phases
+    assert must_fail(r, after, coverage=True).details == \
+        ["S2 (blast_berm) lacks excavate or haul and compact tasks"]
+    # a repair that keeps one berm task but drops the other is a phase hole, not a lost structure
+    failure = must_fail(r, graph(*pad_tasks(), berm[0]), previous=before, coverage=True)
+    assert failure.details == ["S2 (blast_berm) lacks compact task"]
+    assert missing_phases(r, r.structures[1], [berm[0]]) == ["compact"]
+
+
+def test_scope_sits_between_capability_and_energy_task_in_check_order() -> None:
+    r = site_req(robot("EX1", battery=5000), structures=(("S1", "landing_pad"), ("S2", "berm")))
+    g = graph(
+        task("T1", type_="crane", name="Lift beacon", zone="Z1", structure="S1"),  # capability
+        task("T2", energy=6000, name="Haul spoil off the pad", unit="m2", quantity=50,
+             zone="Z1", structure="S1"),                                 # energy_task, no dig
+        task("T3", name="Cut berm key trench", unit="m3", quantity=30, zone="Z2",
+             structure="S2"),
+    )
+    failure = must_fail(r, g, coverage=True)
+    assert kinds(failure) == ["capability", "scope", "energy_task", "energy"]
+    # only excavate is required of the pad with this one-excavator fleet, and T2 is grading
+    # plus hauling by its unit and name, not excavation
+    assert failure.conflicts == ["capability:T1", "scope:S1", "energy_task:T2",
+                                 "energy:excavator"]
+    assert failure.details[1] == "S1 (landing_pad) lacks excavate task"
+    assert must_fail(r, g, coverage=True) == failure   # deterministic
+
+
+def test_fixture_graphs_pass_the_coverage_check() -> None:
+    for d in sorted(p for p in FIXTURES_DIR.iterdir() if p.is_dir()):
+        r = Requirements.model_validate_json((d / "structure.json").read_text())
+        for path in sorted(d.glob("taskgraph_*.json")):
+            g = TaskGraph.model_validate_json(path.read_text())
+            assert validate_graph(r, g, coverage=True) is None, path
+            for s in r.structures:
+                assert structure_tasks(s, g), f"{path}: {s.id} has no task"
+
+
+# ----------------------------------------------------------------------------- quantities
+def test_physical_tasks_need_a_priced_quantity_once_the_graph_states_any() -> None:
+    r = req(robot("EX1"), robot("HL1", "hauler", 3000), robot("SV1", "surveyor", 1500))
+    bowl = task("T1", name="Excavate full pad bowl (188 m3)", dur=6, energy=500)
+    survey = task("T2", type_="surveyor", name="Survey pad", unit="m2", quantity=314)
+    # no quantity anywhere: a pre-rate-model graph, judged on its own numbers
+    assert validate_graph(r, graph(bowl, task("T3", type_="surveyor", name="Survey pad"))) is None
+    # one task states a quantity: the bowl must too
+    failure = must_fail(r, graph(bowl, survey))
+    assert failure.conflicts == ["quantity:T1"]
+    assert failure.details == ["T1 (excavator: Excavate full pad bowl (188 m3)) has no quantity"]
+    assert "excavator in m3 or m2" in failure.hint and "rate table" in failure.hint
+    assert "inspection pass or a wait" in failure.hint
+    cases = {
+        "has a quantity of 0 m3": task("T1", name="Excavate bowl", unit="m3", quantity=0),
+        "has a quantity but no unit": task("T1", name="Excavate bowl", quantity=120),
+        "is counted in m2, which the rate table does not price for a hauler":
+            task("T1", type_="hauler", name="Haul spoil", unit="m2", quantity=500),
+    }
+    for why, bad in cases.items():
+        failure = must_fail(r, graph(bad, survey))
+        assert failure.conflicts == ["quantity:T1"] and failure.details[0].endswith(why), why
+    # exempt: surveyors, inspection passes and robot types the table does not know
+    fleet = req(robot("EX1"), robot("SV1", "surveyor", 1500), robot("CR1", "crane", 2000))
+    fine = graph(task("T1", name="Excavate bowl", unit="m3", quantity=126),
+                 task("T2", type_="surveyor", name="Level check of the pad"),
+                 task("T3", name="Inspect subgrade surface"),             # excavator, no digging
+                 task("T4", type_="crane", name="Lift beacon", quantity=1, unit="ea"))
+    assert validate_graph(fleet, fine, coverage=False) is None
+    assert needs_quantity(bowl) and needs_quantity(cases["has a quantity of 0 m3"])
+    assert not needs_quantity(fine.tasks[1]) and not needs_quantity(fine.tasks[2])
+    assert not needs_quantity(fine.tasks[3])
+    # the graph a repair answered keeps the rate model engaged even when the answer drops
+    # every quantity (the rate model gives them back; the validator sees the result)
+    quantified = graph(bowl.model_copy(update={"quantity": 188, "unit": "m3"}))
+    assert validate_graph(r, graph(bowl)) is None
+    assert must_fail(r, graph(bowl), previous=quantified).conflicts == ["quantity:T1"]
+    # several tasks: sorted ids, details aligned, between capability and scope in the order
+    messy = graph(task("T5", type_="crane", name="Lift beacon"),
+                  task("T6", name="Excavate bowl"),
+                  task("T7", type_="hauler", name="Haul spoil", unit="m2", quantity=10),
+                  survey)
+    failure = must_fail(r, messy)
+    assert kinds(failure) == ["capability", "quantity"]
+    assert failure.conflicts == ["capability:T5", "quantity:T6", "quantity:T7"]
+    assert [c.split(":")[0] for c in failure.conflicts] == \
+        sorted([c.split(":")[0] for c in failure.conflicts], key=CHECK_ORDER.index)
+
+
+def test_structure_tags_resolve_leniently() -> None:
+    r = site_req(*FLEET, structures=(("S1", "landing_pad"), ("S2", "blast_berm")))
+    berm = [task("B1", type_="hauler", name="Haul spoil to berm", unit="m3", quantity=90,
+                 zone="Z2", structure="S2"),
+            task("B2", type_="compactor", name="Compact berm", unit="m2", quantity=240,
+                 zone="Z2", structure="S2")]
+    for pad_tag, berm_tag in (("s1", "s2"), ("landing_pad", "blast_berm"),
+                              ("Landing pad S1", "Blast berm S2")):
+        tagged = ([t.model_copy(update={"structure": pad_tag}) for t in pad_tasks()]
+                  + [t.model_copy(update={"structure": berm_tag}) for t in berm])
+        assert validate_graph(r, graph(*tagged), coverage=True) is None, (pad_tag, berm_tag)
+        served = structure_tasks(r.structures[0], graph(*tagged), r.structures)
+        assert [t.id for t in served] == ["T1", "T2", "T3", "T4"]
+    # a tag that names no structure at all falls back to the zone, like no tag
+    stray = [t.model_copy(update={"structure": "pad-area"}) for t in pad_tasks()] + berm
+    assert validate_graph(r, graph(*stray), coverage=True) is None
+    # a tag that names the other structure does not count for this one's zone
+    swapped = [t.model_copy(update={"structure": "S2"}) for t in pad_tasks()] + berm
+    failure = must_fail(r, graph(*swapped), coverage=True)
+    assert failure.conflicts == ["scope:S1"]
+    assert failure.details == ["S1 (landing_pad) lacks survey, excavate, compact and sinter tasks"]
+    pad = r.structures[0]
+    assert tag_names("S1", pad) and tag_names("s1 ", pad) and tag_names("Landing_Pad", pad)
+    assert tag_names("Landing pad S1", pad) and not tag_names("S10", pad)
+    assert not tag_names("pad", pad) and not tag_names("S2", pad)

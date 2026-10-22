@@ -1,4 +1,5 @@
-"""Simulator (F7) and replanning (F8) tests with hand-written schedules and a fake planner.
+"""Simulator (F7) and replanning (F8) tests with hand-written schedules, a fake planner and the
+real solver-first planner.
 
 Geometry used throughout: 40x40 grid, depot (20, 1), Z1 = (10, 30), Z2 = (30, 30) and Z3
 auto-placed at (4, 36). Robots drive 60 cells/h, so every first leg takes three 0.25 h steps and
@@ -9,12 +10,13 @@ from __future__ import annotations
 
 import math
 from itertools import pairwise
+from typing import Any
 
 import pytest
 
-from moonwright.llm.base import FixtureClient
+from moonwright.llm.base import FixtureClient, FixtureMissing, Usage, validate_into
 from moonwright.pipeline.loop import Planner
-from moonwright.pipeline.schedule import check_schedule
+from moonwright.pipeline.schedule import SolveOptions, check_schedule, solve_schedule
 from moonwright.schemas import (
     Event,
     Failure,
@@ -30,12 +32,15 @@ from moonwright.schemas import (
     TaskGraph,
     Zone,
 )
+from moonwright.sim.montecarlo import solver_only_planner
 from moonwright.sim.replan import (
     build_replan_inputs,
+    declared_site,
     locked_entries,
     remaining_horizon_h,
     replan_after_event,
     replan_offset_h,
+    robot_positions,
     run_with_replanning,
     shift_schedule,
 )
@@ -94,6 +99,11 @@ def make_schedule() -> Schedule:
     ], makespan_h=7, status="optimal")
 
 
+def make_plan() -> PlanResult:
+    return PlanResult(requirements=make_req(), task_graph=make_graph(), schedule=make_schedule(),
+                      success=True)
+
+
 def robot(frame, robot_id):
     return next(r for r in frame.robots if r.id == robot_id)
 
@@ -133,12 +143,15 @@ class FakePlanner:
 
     def plan_from_requirements(self, req, *, key, prior_graph=None, context=None, variant=None,
                                start_offset_h=0, locked=None, max_repairs=None,
-                               required_tasks=None):
+                               required_tasks=None, start_with_prior=False,
+                               robot_positions=None):
         locked = list(locked or [])
         self.calls.append({"req": req, "key": key, "prior_graph": prior_graph,
                            "context": context, "variant": variant,
                            "start_offset_h": start_offset_h, "locked": locked,
-                           "required_tasks": list(required_tasks or [])})
+                           "required_tasks": list(required_tasks or []),
+                           "start_with_prior": start_with_prior,
+                           "robot_positions": robot_positions})
         if not self.succeed:
             return PlanResult(requirements=req, task_graph=prior_graph, success=False,
                               failure=Failure(kind="infeasible", conflicts=["horizon"]))
@@ -183,6 +196,31 @@ class ShrinkingPlanner(FakePlanner):
         tasks = [t.model_copy(update={"duration_h": 1, "energy_wh": 1}) if t.id == "T2" else t
                  for t in prior_graph.tasks]
         return super().plan_from_requirements(req, prior_graph=TaskGraph(tasks=tasks), **kw)
+
+
+class NoAnswers:
+    """An LLM client with nothing to say (every call is a FixtureMissing), so a real Planner
+    over it is the solver-first replanner with escalation that never gets an answer."""
+
+    name = "no-answers"
+
+    def complete_json(self, **kwargs):
+        raise FixtureMissing("no answers")
+
+
+class ScriptedClient:
+    """Answers per (role, attempt) with a payload dict; records every call."""
+
+    name = "scripted"
+
+    def __init__(self, script: dict[tuple[str, int], Any]):
+        self.script = script
+        self.calls: list[tuple[str, int, str | None]] = []
+
+    def complete_json(self, *, role, system, user, schema, key=None, attempt=1, variant=None,
+                      max_attempts=2):
+        self.calls.append((role, attempt, variant))
+        return validate_into(schema, self.script[(role, attempt)]), Usage(model="scripted")
 
 
 # --------------------------------------------------------------------------- layout
@@ -338,8 +376,7 @@ def test_injection_at_time_zero_fires_before_the_first_frame():
 
 
 def test_run_with_replanning_replans_a_failure_at_time_zero():
-    req, graph, schedule = make_req(), make_graph(), make_schedule()
-    plan = PlanResult(requirements=req, task_graph=graph, schedule=schedule, success=True)
+    plan = make_plan()
     planner = FakePlanner()
     res = run_with_replanning(planner, plan, [FailureInjection("EX2", 0.0)], key="k")
 
@@ -349,6 +386,7 @@ def test_run_with_replanning_replans_a_failure_at_time_zero():
     assert [r.id for r in call["req"].robots] == ["EX1", "HL1"]
     assert call["req"].horizon_h == 100 and call["locked"] == []  # nothing had started
     assert call["prior_graph"].task("T2").duration_h == 4         # T2 re-added in full
+    assert call["robot_positions"] == {"EX1": (20.0, 1.0), "HL1": (20.0, 1.0)}  # at the depot
     assert res.completed and res.schedule.entry("T2").robot == "EX1"
     times = [f.t_h for f in res.frames]
     assert times[0] == 0.0 and robot(res.frames[0], "EX2").status == "failed"
@@ -356,17 +394,35 @@ def test_run_with_replanning_replans_a_failure_at_time_zero():
     assert res.frames[-1].done_tasks == ["T1", "T2", "T3"]
 
 
-def test_battery_low_fires_once_while_work_remains():
-    # 830 Wh budget, 10 % reserve = 83 Wh: EX1 drops below it on its 15th work step (t = 4.5 h).
-    sim = Simulator(make_req(ex1_battery=830), make_graph(), make_schedule())
+def test_battery_low_is_a_shortfall_forecast_not_a_reserve_alarm():
+    """EX1 needs 800 Wh of work plus 15.34 Wh of travel for T1. With 830 Wh it ends at 1.8 %
+    and nothing fires: the verifier budgets the whole battery, so a plan it accepted must not
+    trip an alarm. With 810 Wh the forecast fails before the first frame (battery_low at
+    t = 0, naming the shortfall) and the robot then really runs dry on T1's last steps."""
+    res = Simulator(make_req(ex1_battery=830), make_graph(), make_schedule()).run(stop_on_event=False)
+    assert res.events == [] and res.completed
+    ex1 = robot(res.frames[-1], "EX1")
+    assert ex1.battery_wh == pytest.approx(830 - 800 - 0.5 * DIST_DEPOT_Z1, abs=0.01)
+
+    sim = Simulator(make_req(ex1_battery=810), make_graph(), make_schedule())
     res = sim.run(stop_on_event=True)
     assert [(e.kind, e.robot, e.task, e.t_h) for e in res.events] == \
-        [("battery_low", "EX1", "T1", 4.5)]
-    assert "T1" in sim.state().active_tasks
+        [("battery_low", "EX1", None, 0.0)]
+    assert res.events[0].detail == (
+        "EX1 has 810 Wh left but its remaining work (T1, travel included) needs 815 Wh; it "
+        "will run dry under the current plan")
     rest = sim.run(stop_on_event=False)
-    assert rest.completed and rest.events == []
-    ex1 = robot(rest.frames[-1], "EX1")
-    assert ex1.battery_wh == pytest.approx(830 - 800 - 0.5 * DIST_DEPOT_Z1, abs=0.05)
+    assert [(e.kind, e.robot, e.task, e.t_h) for e in rest.events] == \
+        [("robot_failure", "EX1", "T1", 4.75)]
+    assert "ran out of battery" in (rest.events[0].detail or "") and not rest.completed
+    assert [e.kind for e in sim.events].count("battery_low") == 1    # once per plan in force
+
+    # the Monte Carlo case: a task that turns out 10 % dearer than the plan budgeted for
+    dearer = TaskGraph(tasks=[t.model_copy(update={"energy_wh": 880}) if t.id == "T1" else t
+                              for t in make_graph().tasks])
+    res = Simulator(make_req(ex1_battery=830), dearer, make_schedule()).run(stop_on_event=False)
+    assert [(e.kind, e.robot, e.t_h) for e in res.events] == \
+        [("battery_low", "EX1", 0.0), ("robot_failure", "EX1", 4.5)]
 
 
 def test_task_overrun_fires_once_per_late_task():
@@ -389,7 +445,7 @@ def test_task_overrun_fires_once_per_late_task():
 def test_upstream_drift_is_not_an_overrun():
     # 6 cells/h: 5.25 h of travel, so T1 and T2 end at 9.25 h against a 4 h scheduled end and
     # T3 at 12.25 h against 7 h; every task still took exactly its scheduled hours, so a
-    # verified plan replayed as planned raises nothing (travel is not in the solver's model)
+    # hand-written schedule replayed as written raises nothing
     res = Simulator(make_req(speed=6.0), make_graph(), make_schedule()).run(stop_on_event=False)
     assert res.completed and res.finished_at_h == pytest.approx(12.25)
     assert res.events == []
@@ -421,6 +477,8 @@ def test_build_replan_inputs_drops_failed_robot_and_shrinks_the_work():
         [ScheduleEntry(task="T1", robot="EX1", start_h=0, end_h=3)]
     assert "EX2" in context and "T2" in context and "98 h remain" in context
     assert "T1 (underway on EX1, 3 h left" in context
+    # the surviving robots' positions go to the travel allowance; the failed one is left out
+    assert robot_positions(frame, event) == {"EX1": (10.0, 30.0), "HL1": (4.0, 36.0)}
 
 
 def test_build_replan_inputs_removes_done_tasks_and_their_edges():
@@ -463,6 +521,7 @@ def test_failed_robot_is_never_locked_even_when_the_frame_lags_the_event():
     assert graph2.task("T1").duration_h == 3
     assert locked_entries(graph2, frame, event) == \
         [ScheduleEntry(task="T1", robot="EX1", start_h=0, end_h=3)]
+    assert "EX2" not in robot_positions(frame, event)
     assert "EX2" in context and "must not be used again" in context
 
     record = replan_after_event(FakePlanner(), req, graph, schedule, frame, event, key="k")
@@ -471,7 +530,7 @@ def test_failed_robot_is_never_locked_even_when_the_frame_lags_the_event():
     assert record.after.schedule.entry("T1").robot == "EX1"
 
 
-def test_replan_after_event_shifts_the_schedule_to_absolute_time():
+def test_replan_after_event_is_solver_first_and_shifts_the_schedule_to_absolute_time():
     req, graph, schedule, _, frame, event = failed_mid_run()
     planner = FakePlanner()
     record = replan_after_event(planner, req, graph, schedule, frame, event, key="brief-1")
@@ -481,9 +540,12 @@ def test_replan_after_event_shifts_the_schedule_to_absolute_time():
     assert call["start_offset_h"] == 0 and call["required_tasks"] == ["T1", "T2", "T3"]
     assert call["locked"] == [ScheduleEntry(task="T1", robot="EX1", start_h=0, end_h=3)]
     assert call["prior_graph"].ids() == ["T1", "T2", "T3"]
+    assert call["start_with_prior"] is True                     # CP-SAT first, no model call
+    assert call["robot_positions"] == {"EX1": (10.0, 30.0), "HL1": (4.0, 36.0)}
     assert record.context == call["context"]
     assert record.before is schedule and record.remaining_tasks == ["T1", "T2", "T3"]
     assert record.t_h == 2.0 and record.event is event
+    assert record.escalated is False
     after = record.after.schedule
     assert replan_offset_h(frame.t_h) == 2
     assert (after.entry("T1").start_h, after.entry("T1").end_h) == (2, 5)
@@ -491,6 +553,14 @@ def test_replan_after_event_shifts_the_schedule_to_absolute_time():
     assert (t2.robot, t2.start_h, t2.end_h) == ("EX1", 5, 9)
     assert (after.entry("T3").start_h, after.entry("T3").end_h) == (9, 12)
     assert after.makespan_h == 12
+    # the trace closes with the outcome, in absolute hours
+    outcome = record.after.steps[-1]
+    assert outcome.stage == "replan" and outcome.ok and outcome.failure is None
+    assert outcome.message == ("CP-SAT rescheduled 3 tasks in under 0.01 s, Nemotron not needed; "
+                               "makespan 7 h -> 12 h (absolute)")
+    assert outcome.payload == {"escalated": False, "offset_h": 2, "time_base": "absolute",
+                               "remaining_tasks": 3, "before_makespan_h": 7,
+                               "after_makespan_h": 12, "solve_time_s": 0.0}
 
 
 def test_shift_schedule_and_offset_helpers():
@@ -530,8 +600,7 @@ def test_apply_new_plan_continues_the_running_task_and_restarts_the_lost_one():
 
 
 def test_run_with_replanning_recovers_from_a_robot_failure():
-    req, graph, schedule = make_req(), make_graph(), make_schedule()
-    plan = PlanResult(requirements=req, task_graph=graph, schedule=schedule, success=True)
+    plan = make_plan()
     planner = FakePlanner()
     res = run_with_replanning(planner, plan, [FailureInjection("EX2", 2.0)], key="k",
                               max_replans=2)
@@ -555,21 +624,24 @@ def test_run_with_replanning_recovers_from_a_robot_failure():
 
 
 def test_run_with_replanning_keeps_the_old_plan_when_the_replan_fails():
-    req, graph, schedule = make_req(), make_graph(), make_schedule()
-    plan = PlanResult(requirements=req, task_graph=graph, schedule=schedule, success=True)
+    plan = make_plan()
     res = run_with_replanning(FakePlanner(succeed=False), plan, [FailureInjection("EX2", 2.0)],
                               key="k")
     assert not res.completed and res.finished_at_h is None
     assert len(res.replans) == 1 and not res.replans[0].after.success
-    assert res.schedule is schedule and res.task_graph is graph
+    outcome = res.replans[0].after.steps[-1]
+    assert outcome.stage == "replan" and not outcome.ok
+    assert outcome.message == ("infeasible (infeasible), Nemotron not asked (no repair budget); "
+                               "no verified replan (infeasible: horizon); the previous plan "
+                               "stays in force")
+    assert res.schedule is plan.schedule and res.task_graph is plan.task_graph
     assert [e.kind for e in res.events] == ["robot_failure"]
     assert res.frames[-1].done_tasks == ["T1"]
     assert res.frames[-1].t_h == pytest.approx(5.0)            # stuck on T3 -> stops early
 
 
 def test_run_with_replanning_without_budget_runs_on_to_the_end():
-    req, graph, schedule = make_req(), make_graph(), make_schedule()
-    plan = PlanResult(requirements=req, task_graph=graph, schedule=schedule, success=True)
+    plan = make_plan()
     planner = FakePlanner()
     res = run_with_replanning(planner, plan, [FailureInjection("HL1", 6.0)], key="k",
                               max_replans=0)
@@ -580,8 +652,7 @@ def test_run_with_replanning_without_budget_runs_on_to_the_end():
 
 
 def test_run_with_replanning_honours_dt_h():
-    req, graph, schedule = make_req(), make_graph(), make_schedule()
-    plan = PlanResult(requirements=req, task_graph=graph, schedule=schedule, success=True)
+    plan = make_plan()
     res = run_with_replanning(FakePlanner(), plan, [], key="k", dt_h=0.5)
     assert res.completed and res.events == [] and res.replans == []
     times = [f.t_h for f in res.frames]
@@ -614,7 +685,7 @@ def test_build_replan_inputs_at_a_fractional_time_shrinks_the_horizon_by_the_cei
     assert req2.horizon_h == 97 and "97 h remain" in context
 
 
-def _deadline_scenario(horizon: int):
+def _deadline_plan(horizon: int) -> PlanResult:
     """R1 works T1 (4 h) then T2 (4 h) in a zone at the depot, so the baseline ends exactly at
     the horizon; R2, which still has T4 queued, fails at 2.5 h. Planned from floor(2.5) = 2 but
     resumed at 2.5, so the replan may only use horizon - ceil(2.5) hours."""
@@ -640,19 +711,44 @@ def _deadline_scenario(horizon: int):
         ScheduleEntry(task="T3", robot="R2", start_h=0, end_h=1),
         ScheduleEntry(task="T4", robot="R2", start_h=6, end_h=7),
     ], makespan_h=8, status="optimal")
-    plan = PlanResult(requirements=req, task_graph=graph, schedule=schedule, success=True)
-    planner = Planner(FixtureClient(), explain=False)  # offline: adapts the remaining graph as-is
-    return req, run_with_replanning(planner, plan, [FailureInjection("R2", 2.5)], key="nokey")
+    return PlanResult(requirements=req, task_graph=graph, schedule=schedule, success=True)
+
+
+def _deadline_scenario(horizon: int):
+    plan = _deadline_plan(horizon)
+    planner = Planner(FixtureClient(), explain=False)  # offline: no recorded repair answer
+    return plan.requirements, run_with_replanning(planner, plan, [FailureInjection("R2", 2.5)],
+                                                  key="nokey")
+
+
+# the remaining work at 2.5 h, re-scoped so that it fits the 5 h left: T2 takes 3 h, not 4
+RESCOPED_REMAINING = {"tasks": [
+    {"id": "T1", "name": "a", "robot_type": "x", "duration_h": 2, "energy_wh": 3.75,
+     "zone": "Z1", "after": []},
+    {"id": "T2", "name": "b", "robot_type": "x", "duration_h": 3, "energy_wh": 10,
+     "zone": "Z1", "after": ["T1"]},
+    {"id": "T4", "name": "d", "robot_type": "y", "duration_h": 1, "energy_wh": 10,
+     "zone": "Z2", "after": []},
+]}
 
 
 def test_verified_replan_never_overshoots_the_deadline_in_simulator_time():
     # 8 h horizon: 2 + 4 h of remaining work do not fit the 5 h left, so the replan is refused
-    # by the validator and the old plan, which still ends on time, stays in force.
+    # by the validator, the escalation gets no answer offline, and the old plan, which still
+    # ends on time, stays in force.
     req, res = _deadline_scenario(horizon=8)
     record = res.replans[0]
     assert not record.after.success and record.after.requirements.horizon_h == 5
     assert record.after.failure is not None
     assert record.after.failure.conflicts == ["horizon_path:T1->T2", "horizon"]
+    assert record.escalated is True
+    assert [s.stage for s in record.after.steps] == ["validate", "repair", "replan"]
+    outcome = record.after.steps[-1]
+    assert not outcome.ok and outcome.message is not None
+    assert outcome.message.startswith(
+        "infeasible (horizon_path:T1->T2, horizon) -> escalated to Nemotron "
+        "(no answer: offline, no recorded repair); no verified replan")
+    assert outcome.message.endswith("the previous plan stays in force")
     # the old plan stays in force: R1's chain still ends on the deadline, R2's T4 is lost
     assert not res.completed and "T4" not in res.frames[-1].done_tasks
     t2_done = next(f.t_h for f in res.frames if "T2" in f.done_tasks)
@@ -663,12 +759,103 @@ def test_verified_replan_never_overshoots_the_deadline_in_simulator_time():
     record = res.replans[0]
     after = record.after
     assert after.success and after.requirements.horizon_h == 6 and after.schedule is not None
+    assert record.escalated is False and [s.stage for s in after.steps] == ["validate", "schedule", "replan"]
     relative = shift_schedule(after.schedule, -replan_offset_h(record.t_h))
     assert check_schedule(after.requirements, after.task_graph, relative) == []
     assert relative.makespan_h == 6
     assert after.task_graph.task("T1").duration_h == 2                 # 1.5 h truly left
     assert res.completed and res.finished_at_h == pytest.approx(8.5)
     assert res.finished_at_h <= req.horizon_h
+    # the shifted receipt quotes the brief's deadline, not the relative budget plus floor(t)
+    scheduled = next(s for s in after.steps if s.stage == "schedule" and s.ok)
+    receipt = scheduled.payload["verification"]
+    assert (receipt["horizon_h"], receipt["horizon_used_h"]) == (9, after.schedule.makespan_h)
+
+
+def test_replan_escalates_to_the_model_only_when_the_solver_cannot_finish():
+    """The 8 h case again, with a model that answers the escalation by re-scoping T2 to 3 h:
+    the verdict goes to the repair prompt, the re-scoped graph is accepted (the diff shows
+    the change), CP-SAT verifies it, and the mission finishes on time after all."""
+    plan = _deadline_plan(horizon=8)
+    client = ScriptedClient({("repair", 2): RESCOPED_REMAINING})
+    res = run_with_replanning(Planner(client, max_repairs=2, explain=False), plan,
+                              [FailureInjection("R2", 2.5)], key="k")
+
+    assert client.calls == [("repair", 2, "replan")]       # no call for the first graph
+    record = res.replans[0]
+    after = record.after
+    assert record.escalated is True and after.success and after.repairs == 1
+    assert [s.stage for s in after.steps] == ["validate", "repair", "validate", "schedule", "replan"]
+    assert [s.attempt for s in after.steps[:4]] == [1, 2, 2, 2]
+    assert after.steps[0].failure is not None
+    assert after.steps[0].failure.conflicts == ["horizon_path:T1->T2", "horizon"]
+    diff = after.steps[1].payload["diff"]
+    assert diff["changed"] == [{"task": "T2", "field": "duration_h", "before": 4, "after": 3}]
+    assert diff["added"] == [] and diff["removed"] == [] and diff["scope_drift_pct"] == 0.0
+    assert after.schedule is not None and after.schedule.makespan_h == 7   # absolute: 5 + 2
+    outcome = after.steps[-1]
+    assert outcome.ok and outcome.message == (
+        "infeasible (horizon_path:T1->T2, horizon) -> escalated to Nemotron; "
+        "makespan 8 h -> 7 h (absolute), verified after 1 repair(s)")
+    assert outcome.payload["escalated"] is True and outcome.payload["after_makespan_h"] == 7
+    assert res.completed and res.finished_at_h is not None
+    assert res.finished_at_h <= plan.requirements.horizon_h
+
+
+def test_retyping_a_locked_task_on_the_repair_path_is_refused_not_a_crash():
+    """A repair that moves the running task T1 to another robot type (and would make the lock
+    on R1 unschedulable) is refused as ``locked:T1`` by the planner, round after round, and
+    the simulation carries on with the old plan instead of raising."""
+    plan = _deadline_plan(horizon=8)
+    retyped = {"tasks": [dict(t, robot_type="y") if t["id"] == "T1" else dict(t)
+                         for t in RESCOPED_REMAINING["tasks"]]}
+    client = ScriptedClient({("repair", 2): retyped, ("repair", 3): retyped})
+    res = run_with_replanning(Planner(client, max_repairs=2, explain=False), plan,
+                              [FailureInjection("R2", 2.5)], key="k")
+
+    assert [c[:2] for c in client.calls] == [("repair", 2), ("repair", 3)]
+    record = res.replans[0]
+    after = record.after
+    assert record.escalated is True and not after.success and after.repairs == 2
+    assert after.failure is not None and after.failure.conflicts == ["locked:T1"]
+    assert after.failure.details == ["T1 is underway on R1 and changed: robot_type y (was x)"]
+    assert [s.stage for s in after.steps] == ["validate", "repair", "validate", "repair",
+                                              "validate", "replan"]
+    assert after.steps[1].payload["diff"]["changed"][0] == {
+        "task": "T1", "field": "robot_type", "before": "x", "after": "y"}
+    assert "locked:T1" in (after.steps[-1].message or "")
+    assert res.schedule is plan.schedule and not res.completed
+
+
+def test_solver_first_replan_with_the_real_planner_needs_no_model():
+    plan = make_plan()
+    res = run_with_replanning(Planner(NoAnswers(), explain=False), plan,
+                              [FailureInjection("EX2", 2.0)], key="k")
+    record = res.replans[0]
+    after = record.after
+    assert record.escalated is False and after.success and after.schedule is not None
+    assert [s.stage for s in after.steps] == ["validate", "schedule", "replan"]
+    assert all(s.usage is None for s in after.steps)
+    # every step says which clock it speaks; the ok schedule step is already absolute
+    validate, schedule, outcome = after.steps
+    assert validate.payload == {"offset_h": 2, "time_base": "relative"}
+    assert schedule.payload["time_base"] == "absolute" and schedule.payload["offset_h"] == 2
+    assert schedule.payload["makespan_h"] == after.schedule.makespan_h
+    assert schedule.message == f"makespan {after.schedule.makespan_h}h ({after.schedule.status})"
+    receipt = schedule.payload["verification"]
+    assert receipt["horizon_h"] == 100 and receipt["horizon_used_h"] == after.schedule.makespan_h
+    assert receipt["robot_rows"] == 2 and [b["robot"] for b in receipt["battery"]] == ["EX1", "HL1"]
+    assert outcome.message is not None
+    assert outcome.message.startswith("CP-SAT rescheduled 3 tasks in ")
+    assert ", Nemotron not needed; makespan 7 h -> " in outcome.message
+    assert outcome.message.endswith(f"{after.schedule.makespan_h} h (absolute)")
+    assert outcome.payload["escalated"] is False and outcome.payload["offset_h"] == 2
+    # the replan is sound in planner time and the mission completes on the new plan
+    relative = shift_schedule(after.schedule, -2)
+    assert check_schedule(after.requirements, after.task_graph, relative) == []
+    assert after.schedule.entry("T1").start_h == 2 and after.schedule.entry("T2").robot == "EX1"
+    assert res.completed and res.finished_at_h is not None
+    assert res.finished_at_h <= after.schedule.makespan_h + 0.5
 
 
 def test_remaining_work_is_derived_from_the_original_task_across_replans():
@@ -701,8 +888,7 @@ def test_remaining_work_is_derived_from_the_original_task_across_replans():
 def test_lost_task_is_re_added_with_its_original_definition_after_an_earlier_replan():
     """EX2 fails at 2 h (T2 lost), then EX1 fails at 2.5 h while continuing the shortened T1:
     T1 must come back in full (4 h, 800 Wh), not as the 3 h copy of the first replan."""
-    req, graph, schedule = make_req(), make_graph(), make_schedule()
-    plan = PlanResult(requirements=req, task_graph=graph, schedule=schedule, success=True)
+    plan = make_plan()
     planner = FakePlanner()
     res = run_with_replanning(planner, plan, [FailureInjection("EX2", 2.0),
                                               FailureInjection("EX1", 2.5)], key="k")
@@ -715,8 +901,7 @@ def test_lost_task_is_re_added_with_its_original_definition_after_an_earlier_rep
 
 
 def test_replan_that_drops_a_remaining_task_is_refused_and_the_old_plan_stays():
-    req, graph, schedule = make_req(), make_graph(), make_schedule()
-    plan = PlanResult(requirements=req, task_graph=graph, schedule=schedule, success=True)
+    plan = make_plan()
     planner = DroppingPlanner("T2")                 # EX2's lost task vanishes from the answer
     res = run_with_replanning(planner, plan, [FailureInjection("EX2", 2.0)], key="k")
 
@@ -726,35 +911,45 @@ def test_replan_that_drops_a_remaining_task_is_refused_and_the_old_plan_stays():
     failure = record.after.failure
     assert failure is not None and failure.kind == "validation"
     assert failure.conflicts == ["missing:T2"] and "dropped T2" in failure.hint
-    assert record.after.steps[-1].stage == "replan" and not record.after.steps[-1].ok
+    outcome = record.after.steps[-1]
+    assert outcome.stage == "replan" and not outcome.ok and outcome.failure == failure
+    assert outcome.message is not None and "Replan refused: it dropped T2" in outcome.message
+    assert record.escalated is False
     assert record.remaining_tasks == ["T1", "T2", "T3"]
-    assert res.schedule is schedule and res.task_graph is graph
+    assert res.schedule is plan.schedule and res.task_graph is plan.task_graph
     assert not res.completed and "T2" not in res.frames[-1].done_tasks
 
 
 def test_replan_that_redefines_a_remaining_task_is_refused():
-    req, graph, schedule = make_req(), make_graph(), make_schedule()
-    plan = PlanResult(requirements=req, task_graph=graph, schedule=schedule, success=True)
+    plan = make_plan()
     res = run_with_replanning(ShrinkingPlanner(), plan, [FailureInjection("EX2", 2.0)], key="k")
     after = res.replans[0].after
     assert not after.success and after.schedule is None and after.failure is not None
     assert after.failure.kind == "validation" and after.failure.conflicts == ["changed:T2"]
     assert "redefined the remaining task(s) T2" in after.failure.hint
     assert after.failure.details == ["T2 changed: duration_h 1 (needs 4); energy_wh 1 (needs 800)"]
-    assert res.schedule is schedule and not res.completed
+    assert res.schedule is plan.schedule and not res.completed
 
 
 def test_failure_of_a_robot_without_work_does_not_replan():
     """EX2 finishes T2 at 4.75 h; its failure at 6 h takes no work away, so the event is
     recorded and the run continues on the plan in force instead of spending a replan."""
-    req, graph, schedule = make_req(), make_graph(), make_schedule()
-    plan = PlanResult(requirements=req, task_graph=graph, schedule=schedule, success=True)
+    plan = make_plan()
     planner = FakePlanner()
     res = run_with_replanning(planner, plan, [FailureInjection("EX2", 6.0)], key="k")
     assert planner.calls == [] and res.replans == []
     assert [(e.kind, e.robot, e.task) for e in res.events] == [("robot_failure", "EX2", None)]
     assert res.completed and res.finished_at_h == pytest.approx(7.75)
     assert all(robot(f, "EX2").status == "failed" for f in res.frames if f.t_h >= 6.0)
+
+    # a robot that was never scheduled at all changes nothing either
+    spare = PlanResult(requirements=make_req(extra_hauler=True), task_graph=make_graph(),
+                       schedule=make_schedule(), success=True)
+    planner = FakePlanner()
+    res = run_with_replanning(planner, spare, [FailureInjection("HL2", 1.0)], key="k")
+    assert planner.calls == [] and res.replans == []
+    assert [(e.kind, e.robot, e.task) for e in res.events] == [("robot_failure", "HL2", None)]
+    assert res.completed and res.finished_at_h == pytest.approx(7.75)
 
     # a robot that is waiting at its zone for a task it still owns does trigger one
     planner = FakePlanner()
@@ -764,13 +959,12 @@ def test_failure_of_a_robot_without_work_does_not_replan():
 
 
 def test_replan_that_moves_a_running_task_is_refused():
-    req, graph, schedule = make_req(), make_graph(), make_schedule()
-    plan = PlanResult(requirements=req, task_graph=graph, schedule=schedule, success=True)
+    plan = make_plan()
     res = run_with_replanning(MovingPlanner(), plan, [FailureInjection("EX2", 2.0)], key="k")
     after = res.replans[0].after
     assert not after.success and after.failure is not None
     assert after.failure.conflicts == [] and "moved the running task(s) T1" in after.failure.hint
-    assert res.schedule is schedule
+    assert res.schedule is plan.schedule
 
 
 def test_simulator_completion_covers_every_task_ever_planned():
@@ -833,8 +1027,10 @@ def test_robot_that_runs_out_of_battery_fails_instead_of_working_on_at_zero():
     schedule = Schedule(entries=[ScheduleEntry(task="T1", robot="R1", start_h=0, end_h=4),
                                  ScheduleEntry(task="T2", robot="R1", start_h=4, end_h=8)],
                         makespan_h=8, status="optimal")
-    # 200 Wh of work in a 200 Wh budget passes verification; the 77 cells of travel do not fit.
-    assert check_schedule(req, graph, schedule) == []
+    # 200 Wh of work in a 200 Wh budget, but the 77 cells of travel do not fit: the
+    # travel-aware re-verification refuses the hand-written schedule, and a simulator handed
+    # it anyway stops the robot honestly instead of letting it work on at zero
+    assert "energy:R1" in check_schedule(req, graph, schedule)
     res = Simulator(req, graph, schedule).run(stop_on_event=False)
 
     assert not res.completed and res.finished_at_h is None
@@ -846,3 +1042,252 @@ def test_robot_that_runs_out_of_battery_fails_instead_of_working_on_at_zero():
     assert last.status == "failed" and last.battery_wh == pytest.approx(5.18, abs=0.05)
     assert all(robot(f, "R1").battery_wh >= 0 for f in res.frames)
     assert res.frames[-1].progress["T2"] == pytest.approx(0.5625)  # 9 of 16 work steps done
+
+
+# --------------------------------------------------------------------------- phase 3a fixes
+CHEAT_ANSWER = {"tasks": [
+    {"id": "T1", "name": "Excavate bowl", "robot_type": "excavator", "duration_h": 19,
+     "energy_wh": 2105.6, "zone": "Z1", "structure": "S1", "quantity": 188, "unit": "m3"},
+    {"id": "T2", "name": "Excavate bowl", "robot_type": "excavator", "duration_h": 1,
+     "energy_wh": 1.0, "zone": "Z1", "structure": "S1", "quantity": 188, "unit": "m3",
+     "after": ["T1"]},
+]}
+
+
+class CheatClient:
+    """Answers the escalation with the remaining graph, the lost task cut to 1 h / 1 Wh while
+    keeping its 188 m3; has nothing for any other role."""
+
+    name = "cheat"
+
+    def __init__(self):
+        self.calls: list[str] = []
+
+    def complete_json(self, *, role, system, user, schema, key=None, attempt=1, variant=None,
+                      max_attempts=2):
+        self.calls.append(role)
+        if role != "repair":
+            raise FixtureMissing("no answer")
+        return validate_into(schema, CHEAT_ANSWER), Usage(model="cheat")
+
+
+def test_escalated_repair_cannot_cut_a_task_by_editing_its_numbers():
+    """EX2 fails at 10 h while EX1 is 30 % into T1 (188 m3: 27 h / 3008 Wh). EX1's 3800 Wh
+    cannot carry T1's remaining 2105.6 Wh plus T2's 3008 Wh, so the replan escalates; the
+    model hands T2 back at 1 h / 1 Wh with the same 188 m3. The rate model grounds T2 again
+    (the advisory names the attempt), the energy verdict stands and the replan is refused:
+    the pipeline never certifies 188 m3 of excavation in one hour."""
+    req = Requirements(site=Site(zones=[Zone(id="Z1", center=(20, 20))], depot=(20, 2)),
+                       robots=[Robot(id="EX1", type="excavator", battery_wh=5000),
+                               Robot(id="EX2", type="excavator", battery_wh=5000)],
+                       horizon_h=200)
+    bowl = {"name": "Excavate bowl", "robot_type": "excavator", "duration_h": 27,
+            "energy_wh": 3008.0, "zone": "Z1", "structure": "S1", "quantity": 188, "unit": "m3"}
+    graph = TaskGraph(tasks=[Task(id="T1", **bowl), Task(id="T2", after=["T1"], **bowl)])
+    schedule = Schedule(entries=[ScheduleEntry(task="T1", robot="EX1", start_h=2, end_h=29),
+                                 ScheduleEntry(task="T2", robot="EX2", start_h=29, end_h=56)],
+                        makespan_h=56, status="optimal")
+    frame = SimFrame(t_h=10.0, robots=[
+        RobotState(id="EX1", pos=(20.0, 20.0), battery_wh=3800.0, status="working",
+                   current_task="T1"),
+        RobotState(id="EX2", pos=(20.0, 2.0), battery_wh=5000.0, status="failed"),
+    ], done_tasks=[], active_tasks=["T1"], progress={"T1": 0.3})
+    event = Event(t_h=10.0, kind="robot_failure", robot="EX2")
+    client = CheatClient()
+    record = replan_after_event(Planner(client, max_repairs=1, explain=False), req, graph,
+                                schedule, frame, event, key="cheat")
+    assert client.calls == ["repair"] and record.escalated is True
+    after = record.after
+    assert not after.success and after.schedule is None
+    assert [s.stage for s in after.steps] == ["validate", "repair", "validate", "replan"]
+    assert after.steps[0].failure is not None
+    assert after.steps[0].failure.conflicts == ["energy:excavator"]
+    repair = after.steps[1]
+    assert repair.payload["advisories"] == [
+        "estimate:T2: model said 1 h / 1 Wh, rate model gives 27 h / 3008 Wh (+300700%)"]
+    assert repair.payload["grounded"] == 1 and repair.payload["diff"]["changed"] == []
+    assert after.task_graph is not None
+    t1, t2 = after.task_graph.task("T1"), after.task_graph.task("T2")
+    assert (t1.duration_h, t1.energy_wh) == (19, 2105.6)      # locked: as handed over
+    assert (t2.duration_h, t2.energy_wh) == (27, 3008.0)      # not locked: 188 m3 is 27 h
+    assert after.failure is not None and after.failure.conflicts == ["energy:excavator"]
+    outcome = after.steps[-1]
+    assert not outcome.ok and outcome.message is not None
+    assert outcome.message.startswith("infeasible (energy:excavator) -> escalated to Nemotron;")
+    assert outcome.message.endswith("the previous plan stays in force")
+
+
+def _undeclared_site() -> Requirements:
+    return Requirements(site=Site(grid=(40, 40), zones=[], depot=(20, 2)), horizon_h=1000,
+                        robots=[Robot(id="EX1", type="excavator", battery_wh=10 ** 5,
+                                      speed_cells_per_h=6.0),
+                                Robot(id="EX2", type="excavator", battery_wh=10 ** 5,
+                                      speed_cells_per_h=6.0)])
+
+
+def _assert_replan_started_on_time(res, record) -> None:
+    """Every entry of the replan first works at its scheduled hour (a locked task continues
+    at the step after the event) and the run ends exactly at the replanned makespan."""
+    after = record.after
+    assert after.success and after.schedule is not None and after.task_graph is not None
+    relative = shift_schedule(after.schedule, -replan_offset_h(record.t_h))
+    assert check_schedule(after.requirements, after.task_graph, relative) == []
+    assert res.completed and res.finished_at_h == pytest.approx(after.schedule.makespan_h)
+    at_event = next(f for f in res.frames if f.t_h == record.t_h)
+    running = {e.task for e in locked_entries(after.task_graph, at_event, record.event)}
+    for entry in after.schedule.entries:
+        first = next(f.t_h for f in res.frames if f.t_h > record.t_h
+                     and entry.task in f.active_tasks)
+        expected = record.t_h + 0.25 if entry.task in running else entry.start_h + 0.25
+        assert first == pytest.approx(expected), entry
+
+
+def test_undeclared_zones_keep_the_simulators_layout_through_a_replan():
+    """Zones the site does not declare are laid out once by the simulator (A, B, C along the
+    far edge) and kept. After T1 (zone A) is done and a robot fails, the remaining graph only
+    names B and C; laid out on their own they would take A's and B's cells, the transit
+    allowance would be unsound and the robots would start late. The replan inputs now declare
+    every placed zone where the simulator put it."""
+    req = _undeclared_site()
+    graph = TaskGraph(tasks=[
+        Task(id="T1", name="dig A", robot_type="excavator", duration_h=2, energy_wh=10, zone="A"),
+        Task(id="T2", name="dig B", robot_type="excavator", duration_h=4, energy_wh=10, zone="B",
+             after=["T1"]),
+        Task(id="T3", name="dig C", robot_type="excavator", duration_h=4, energy_wh=10, zone="C",
+             after=["T1"]),
+        Task(id="T4", name="dig B again", robot_type="excavator", duration_h=4, energy_wh=10,
+             zone="B", after=["T2", "T3"]),
+    ])
+    first = solve_schedule(req, graph, SolveOptions(time_limit_s=5, num_workers=1))
+    assert isinstance(first, Schedule)
+    layout = Simulator(req, graph, first).layout
+    assert layout == {"A": (4, 36), "B": (12, 36), "C": (20, 36)}
+    assert zone_positions(req, TaskGraph(tasks=graph.tasks[1:])) == {"B": (4, 36), "C": (12, 36)}
+    plan = PlanResult(requirements=req, task_graph=graph, schedule=first, success=True)
+    victim = "EX2" if first.entry("T1").robot == "EX1" else "EX1"
+    res = run_with_replanning(solver_only_planner(), plan,
+                              [FailureInjection(victim, float(first.entry("T1").end_h))],
+                              key="drift", max_replans=1)
+    record = res.replans[0]
+    assert record.event.robot == victim and "T1" in record.after.requirements.model_dump_json() \
+        or "T1" not in record.remaining_tasks
+    site = record.after.requirements.site
+    assert {z.id: z.center for z in site.zones} == layout and {z.radius for z in site.zones} == {3}
+    assert record.after.requirements.site.depot == (20, 2)
+    assert declared_site(req.site, layout) == site
+    assert declared_site(site, layout) is site                   # nothing new: unchanged
+    _assert_replan_started_on_time(res, record)
+
+
+def test_a_locked_robot_in_an_undeclared_zone_no_longer_trips_the_re_verification():
+    """EX1 is working T4 in zone C when EX2 fails after T1 (zone A) is done. Laid out from the
+    remaining graph alone, C would move to B's old cell while EX1 stands in the real one; the
+    planner then saw a first leg before a locked task and raised RuntimeError from its own
+    re-check (an HTTP 500 for /simulate). With the simulator's layout declared, the locked task
+    continues where it is and the replan is sound."""
+    req = _undeclared_site()
+    graph = TaskGraph(tasks=[
+        Task(id="T1", name="dig A", robot_type="excavator", duration_h=2, energy_wh=10, zone="A"),
+        Task(id="T2", name="dig D", robot_type="excavator", duration_h=12, energy_wh=10, zone="D"),
+        Task(id="T3", name="dig B", robot_type="excavator", duration_h=4, energy_wh=10, zone="B",
+             after=["T1"]),
+        Task(id="T4", name="dig C", robot_type="excavator", duration_h=4, energy_wh=10, zone="C",
+             after=["T1"]),
+    ])
+    first = solve_schedule(req, graph, SolveOptions(time_limit_s=5, num_workers=1))
+    assert isinstance(first, Schedule)
+    assert Simulator(req, graph, first).layout == {"A": (4, 36), "B": (12, 36), "C": (20, 36),
+                                                   "D": (28, 36)}
+    victim = first.entry("T1").robot
+    t_fail = float(first.entry("T1").end_h) + 0.5
+    plan = PlanResult(requirements=req, task_graph=graph, schedule=first, success=True)
+    res = run_with_replanning(solver_only_planner(), plan, [FailureInjection(victim, t_fail)],
+                              key="drift", max_replans=1)
+    record = res.replans[0]
+    assert record.t_h == t_fail and record.after.success and not record.escalated
+    frame = next(f for f in res.frames if f.t_h == t_fail)
+    locked = locked_entries(record.after.task_graph, frame, record.event)
+    assert locked, "the scenario needs a task underway on the surviving robot"
+    assert "T1" in frame.done_tasks
+    _assert_replan_started_on_time(res, record)
+
+
+RESCOPED_BOWL = {"tasks": [
+    {"id": "T1", "name": "a", "robot_type": "x", "duration_h": 2, "energy_wh": 37.5,
+     "zone": "Z1"},
+    {"id": "T2", "name": "b (smaller bowl, re-scoped)", "robot_type": "x", "duration_h": 4,
+     "energy_wh": 450, "zone": "Z2"},
+], "notes": "re-scoped T2: a smaller bowl that fits a 460 Wh battery"}
+
+
+def test_a_rescoped_task_is_the_original_from_then_on():
+    """R2 fails at 2.5 h with T2 (8 h / 800 Wh) lost; no surviving battery (650, 460 Wh)
+    carries 800 Wh, so the replan escalates and the model re-scopes T2 to 4 h / 450 Wh, which
+    lands on R5. When R5 fails at 5 h with the smaller bowl half done, the second replan must
+    size T2 from the re-scoped definition (4 h / 450 Wh fits R1's 550 Wh), not from the
+    original 800 Wh a stale ``originals`` used to keep: solver-first, no model call."""
+    req = Requirements(
+        site=Site(grid=(40, 40), depot=(5, 5), zones=[Zone(id="Z1", center=(5, 5)),
+                                                      Zone(id="Z2", center=(6, 5))]),
+        robots=[Robot(id="R1", type="x", battery_wh=650, speed_cells_per_h=100),
+                Robot(id="R2", type="x", battery_wh=1000, speed_cells_per_h=100),
+                Robot(id="R5", type="x", battery_wh=460, speed_cells_per_h=100)],
+        horizon_h=30,
+    )
+    graph = TaskGraph(tasks=[
+        Task(id="T1", name="a", robot_type="x", duration_h=4, energy_wh=100, zone="Z1"),
+        Task(id="T2", name="b (full bowl)", robot_type="x", duration_h=8, energy_wh=800,
+             zone="Z2"),
+    ])
+    schedule = Schedule(entries=[ScheduleEntry(task="T1", robot="R1", start_h=0, end_h=4),
+                                 ScheduleEntry(task="T2", robot="R2", start_h=0, end_h=8)],
+                        makespan_h=8, status="optimal")
+    plan = PlanResult(requirements=req, task_graph=graph, schedule=schedule, success=True)
+    client = ScriptedClient({("repair", 2): RESCOPED_BOWL})
+    res = run_with_replanning(Planner(client, max_repairs=2, explain=False), plan,
+                              [FailureInjection("R2", 2.5), FailureInjection("R5", 5.0)], key="k")
+    first, second = res.replans
+    assert first.escalated and first.after.success and first.after.schedule is not None
+    t2 = first.after.schedule.entry("T2")
+    assert (t2.robot, t2.start_h, t2.end_h) == ("R5", 3, 7)
+    assert client.calls == [("repair", 2, "replan")]          # the second replan needed no model
+    assert not second.escalated and second.after.success and second.after.task_graph is not None
+    bowl = second.after.task_graph.task("T2")
+    assert (bowl.duration_h, bowl.energy_wh, bowl.name) == (4, 450.0, "b (smaller bowl, re-scoped)")
+    assert second.after.schedule is not None and second.after.schedule.entry("T2").robot == "R1"
+    assert res.completed and res.finished_at_h == pytest.approx(10.0)
+
+
+def test_frame_batteries_round_down_so_a_replan_never_overdraws_a_robot():
+    """R1 ends T1 with 182.3651 Wh. A frame that said 182.37 let a replan hand T2 (182.37 Wh)
+    to R1: the verifier accepted it to the milli-Wh and the simulator refused the last step.
+    The frame now rounds down, so T2 goes to R3 and nobody is stranded."""
+    req = Requirements(site=Site(zones=[Zone(id="Z1", center=(20, 1))], depot=(20, 1)),
+                       robots=[Robot(id="R1", type="excavator", battery_wh=1000.0),
+                               Robot(id="R2", type="excavator", battery_wh=1000.0),
+                               Robot(id="R3", type="excavator", battery_wh=1100.0)],
+                       horizon_h=100)
+    graph = TaskGraph(tasks=[
+        Task(id="T1", name="a", robot_type="excavator", duration_h=4, energy_wh=817.6349,
+             zone="Z1"),
+        Task(id="T2", name="b", robot_type="excavator", duration_h=2, energy_wh=182.37, zone="Z1",
+             after=["T1"]),
+        Task(id="T3", name="c", robot_type="excavator", duration_h=2, energy_wh=900.0, zone="Z1",
+             after=["T1"]),
+    ])
+    schedule = Schedule(entries=[ScheduleEntry(task="T1", robot="R1", start_h=0, end_h=4),
+                                 ScheduleEntry(task="T2", robot="R2", start_h=4, end_h=6),
+                                 ScheduleEntry(task="T3", robot="R3", start_h=6, end_h=8)],
+                        makespan_h=8, status="optimal")
+    assert check_schedule(req, graph, schedule, SolveOptions()) == []
+    plan = PlanResult(requirements=req, task_graph=graph, schedule=schedule, success=True)
+    res = run_with_replanning(solver_only_planner(), plan, [FailureInjection("R2", 4.0)],
+                              key="rnd", max_replans=1)
+    frame = next(f for f in res.frames if f.t_h == 4.0)
+    assert robot(frame, "R1").battery_wh == 182.36                     # not 182.37
+    record = res.replans[0]
+    assert record.after.success and record.after.schedule is not None
+    assert record.after.requirements.robot("R1").battery_wh == 182.36
+    assert record.after.schedule.entry("T2").robot == "R3"
+    assert [e.kind for e in res.events] == ["robot_failure"] and res.completed
+    assert res.finished_at_h == pytest.approx(8.0)

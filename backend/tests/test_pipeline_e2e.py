@@ -24,7 +24,9 @@ landing_pad   horizon 336 h; EX1 EX2 5000, HL1 HL2 3000, CP1 3500, PR1 4000, SV1
   printer    T11 22h/2700 + T12 6h/700                            = 28 h; 3400 / 4000 Wh
   surveyor   T1 4h/300 + T13 3h/200 + T14 4h/300                  = 11 h;  800 / 1500 Wh
   critical path T1>T2>T3>T7>T10>T12>T13 = 4+12+18+16+14+6+3 = 73 h. PR1 must finish the pad
-  surface (46-68) before the berm crest (68-74), so the optimum makespan is 77 h (T13 at 74-77).
+  surface before the berm crest, so the work-only optimum is 77 h (T13 at 74-77); with the
+  phase-3 transit allowance (whole hours per zone change, 1-2 h per leg on this site) CP-SAT
+  proves 80 h (T13 at 77-80).
   same-zone serial load: Z1 72 h, Z2 53 h, Z3 10 h, Z4 12 h; every zone chain is already
   serial through precedence, so one-robot-per-zone costs nothing extra.
 
@@ -35,8 +37,9 @@ access_road   horizon 240 h; EX1 5000, HL1 3000, CP1 CP2 3500, SV1 1500 Wh
              energy 4400 / 7000 Wh; {1400,1400,800} = 3600 does not fit, so one compactor
              carries at most 1400+800+800 = 3000 Wh
   surveyor   T1 5h/350 + T11 4h/300 + T12 4h/300                  = 13 h;  950 / 1500 Wh
-  critical path T1>T2>T3>T4>T6>T10>T12 = 5+10+10+12+10+8+4 = 59 h = optimum makespan.
-  T7 (23-35) and T8 (25-37) overlap, which is what the second compactor is for.
+  critical path T1>T2>T3>T4>T6>T10>T12 = 5+10+10+12+10+8+4 = 59 h = work-only optimum; the
+  transit allowance makes it 64 h (EX1 moves zone twice, SV1 three times).
+  T7 (25-37) and T8 (28-40) overlap, which is what the second compactor is for.
   same-zone serial load: Z1 39 h, Z2 22 h, Z3 24 h, Z4 18 h.
 
 tight_battery horizon 168 h; EX1 EX2 5000, HL1 3000, CP1 3500, SV1 1500 Wh
@@ -55,32 +58,39 @@ tight_battery horizon 168 h; EX1 EX2 5000, HL1 3000, CP1 3500, SV1 1500 Wh
              energy 8200 / 10000 Wh; every 3-task subset is >= 6100 > 5000, so the only split
              is {2100,2100} = 4200 and {2100,1900} = 4000 Wh, both inside 5000 (84 % / 80 %)
   hauler, compactor, surveyor unchanged (2000/3000, 3000/3500, 800/1500 Wh)
-  critical path T1>T2>T3>T6>T9>T10 = 4+14+14+16+14+3 = 65 h = optimum makespan.
+  critical path T1>T2>T3>T6>T9>T10 = 4+14+14+16+14+3 = 65 h = work-only optimum; the transit
+  allowance makes it 68 h.
   same-zone serial load: Z1 50 h, Z2 47 h, Z3 8 h, Z4 12 h.
   No replan fixture is shipped: an offline replan keeps the exact remaining graph that
   build_replan_inputs derives from the live simulator state (a canned graph cannot know which
   tasks are done when the failure happens).
 
 Wherever the solver has a choice, no feasible split loads a robot above 90 % of its battery, so
-the simulator's 10 % reserve does not fire spurious battery_low events during the demo.
+every demo robot ends its replay with a tenth of its battery in hand (battery_low itself is a
+forecast that a robot will run dry under the plan in force, which a verified plan never trips).
 """
 
 from __future__ import annotations
 
 import itertools
+import json
 from pathlib import Path
 
 import pytest
 
-from moonwright.llm.base import FIXTURES_DIR, ExplainText, FixtureClient
+from moonwright.llm.base import FIXTURES_DIR, ExplainText, FixtureClient, Usage, validate_into
 from moonwright.pipeline.loop import Planner, brief_key
+from moonwright.pipeline.rates import UNGROUNDED_ADVISORY, apply_rates
 from moonwright.pipeline.schedule import SolveOptions, check_schedule, solve_schedule
+from moonwright.pipeline.taskgraph import generate_task_graph
 from moonwright.pipeline.validate import validate_graph
 from moonwright.schemas import Failure, PlanResult, Requirements, TaskGraph
 
 BRIEFS_DIR = Path(__file__).resolve().parents[1] / "examples" / "briefs"
 BRIEF_IDS = ["landing_pad", "access_road", "tight_battery"]
 HORIZONS_H = {"landing_pad": 14 * 24, "access_road": 10 * 24, "tight_battery": 7 * 24}
+MAKESPANS_H = {"landing_pad": 77, "access_road": 59, "tight_battery": 65}  # work only, no transit
+TRAVEL_MAKESPANS_H = {"landing_pad": 80, "access_road": 64, "tight_battery": 68}  # phase 3
 # (brief id, task-graph fixture, whether a budget-respecting robot assignment exists)
 GRAPH_FIXTURES = [
     ("landing_pad", "taskgraph_1.json", True),
@@ -267,3 +277,117 @@ def test_tight_battery_demonstrates_the_repair_loop() -> None:
     loads = {robot: sum(plan.task_graph.task(e.task).energy_wh for e in entries)
              for robot, entries in plan.schedule.by_robot().items()}
     assert sorted(loads.get(r, 0.0) for r in ("EX1", "EX2")) == [4000.0, 4200.0]
+
+
+# --------------------------------------------------------------------------- rate model (phase 3a)
+@pytest.mark.parametrize("brief_id", BRIEF_IDS)
+def test_fixture_plans_keep_their_makespans_under_the_rate_model(brief_id: str) -> None:
+    """The fixture graphs carry no quantity, so the rate model leaves them untouched (and the
+    task-graph step says so with the ungrounded advisory): the planned graph is the recorded
+    one, field for field, and the makespan is exactly what CP-SAT gives the raw fixture graph
+    (77 / 59 / 65 h with the phase-2 scheduler; the travel allowance of phase 3 shifts the
+    figures, not this equality)."""
+    plan = _plan(brief_id)
+    assert plan.success and plan.schedule is not None and plan.task_graph is not None
+    final = "taskgraph_2.json" if brief_id == "tight_battery" else "taskgraph_1.json"
+    assert plan.task_graph == _graph(brief_id, final)
+    raw = solve_schedule(_requirements(brief_id), _graph(brief_id, final),
+                         SolveOptions(time_limit_s=10.0))
+    assert not isinstance(raw, Failure)
+    assert plan.schedule.makespan_h == raw.makespan_h == TRAVEL_MAKESPANS_H[brief_id]
+    assert plan.schedule.makespan_h >= MAKESPANS_H[brief_id]  # phase-2 optimum, no travel
+    assert all(t.quantity is None and t.estimated_duration_h is None
+               and t.estimated_energy_wh is None for t in plan.task_graph.tasks)
+    for step in plan.steps:
+        if step.stage in ("taskgraph", "repair"):
+            payload = step.payload or {}   # the loop may add its own keys (e.g. a repair diff)
+            assert (payload["advisories"], payload["rate_model"], payload["grounded"]) == \
+                ([UNGROUNDED_ADVISORY], True, 0)
+            assert step.message is not None and step.message.endswith(" tasks")
+
+
+@pytest.mark.parametrize(("brief_id", "filename", "_packable"), GRAPH_FIXTURES)
+def test_fixture_graphs_pass_validation_with_coverage(brief_id: str, filename: str,
+                                                      _packable: bool) -> None:
+    req = _requirements(brief_id)
+    graph = _graph(brief_id, filename)
+    assert validate_graph(req, graph, coverage=True) is None
+    grounded, advisories = apply_rates(graph)
+    assert grounded is graph and advisories == []
+
+
+class _Answer:
+    """LLM stub that answers every task-graph request with one canned graph."""
+
+    name = "stub"
+
+    def __init__(self, payload: dict):
+        self.payload = payload
+        self.prompts: list[str] = []
+
+    def complete_json(self, *, role, system, user, schema, key=None, attempt=1, variant=None,
+                      max_attempts=2):
+        self.prompts.append(user)
+        return validate_into(schema, self.payload), Usage(model="stub")
+
+
+# quantity + unit per physical task of the landing_pad fixture graph, sized so that the rate
+# table lands near the hand-made figures (T3, the bowl, is deliberately under-estimated below)
+LANDING_PAD_SCOPE = {
+    "T2": (300, "m2"), "T3": (190, "m3"), "T4": (98, "m3"), "T5": (150, "m2"), "T6": (120, "m3"),
+    "T7": (188, "m3"), "T8": (70, "m3"), "T9": (314, "m2"), "T10": (350, "m2"),
+    "T11": (314, "m2"), "T12": (80, "m2"),
+}
+
+
+def test_quantities_ground_the_graph_before_it_is_scheduled() -> None:
+    """A live-style answer that under-sizes the pad bowl (10 h / 1000 Wh for 190 m3, what the
+    live model does) is re-sized by the rate table on its way out of the task-graph stage,
+    the advisory names the gap, and CP-SAT schedules the computed hours. An answer that states
+    quantities for some physical tasks but not for others is rejected by the validator."""
+    req = _requirements("landing_pad")
+    data = json.loads((FIXTURES_DIR / "landing_pad" / "taskgraph_1.json").read_text())
+    for t in data["tasks"]:
+        if t["id"] == "T3":   # excavate pad bowl: the model's guess is far too small
+            t.update(basis="pi*(10 m)^2*0.6 m = 188 m3 (+1%)", duration_h=10, energy_wh=1000)
+        if t["id"] in LANDING_PAD_SCOPE:
+            t["quantity"], t["unit"] = LANDING_PAD_SCOPE[t["id"]]
+    # the bowl and the sinter sized, everything else hand-written: not accepted any more
+    partial = TaskGraph.model_validate({"tasks": [
+        t if t["id"] in ("T3", "T11") else dict(t, quantity=None, unit=None)
+        for t in data["tasks"]]})
+    rejected = validate_graph(req, apply_rates(partial)[0], coverage=True)
+    assert rejected is not None
+    assert rejected.conflicts == sorted(f"quantity:{i}" for i in LANDING_PAD_SCOPE
+                                        if i not in ("T3", "T11"))
+    assert all(d.endswith("has no quantity") for d in rejected.details)
+    client = _Answer(data)
+
+    graph, step = generate_task_graph(client, req, key="k")
+    assert graph is not None and step.ok and step.stage == "taskgraph"
+    bowl, sinter = graph.task("T3"), graph.task("T11")
+    assert (bowl.duration_h, bowl.energy_wh) == (28, 3040.0)
+    assert (bowl.estimated_duration_h, bowl.estimated_energy_wh) == (10.0, 1000.0)
+    assert (sinter.duration_h, sinter.energy_wh) == (23, 2700.4)
+    assert step.payload == {
+        "advisories": [("estimate:T3: model said 10 h / 1000 Wh, rate model gives 28 h / "
+                        "3040 Wh (+204%)")],
+        "rate_model": True, "grounded": len(LANDING_PAD_SCOPE),
+    }
+    # pure-time tasks of an engaged graph (the surveys) are charged at least their base power
+    assert graph.task("T13").energy_wh == 225.0 and graph.task("T13").estimated_energy_wh == 200.0
+    assert graph.task("T1") == TaskGraph.model_validate(data).task("T1")   # 4 h x 75 W == 300
+    assert validate_graph(req, graph, coverage=True) is None
+
+    plan = Planner(client, explain=False).plan_from_requirements(req, key="k")
+    assert plan.success and plan.schedule is not None and plan.task_graph is not None
+    assert plan.task_graph.task("T3").duration_h == 28
+    entry = plan.schedule.entry("T3")
+    assert entry.end_h - entry.start_h == 28
+    raw = solve_schedule(req, _graph("landing_pad", "taskgraph_1.json"),
+                         SolveOptions(time_limit_s=10.0))
+    assert not isinstance(raw, Failure)
+    assert plan.schedule.makespan_h > raw.makespan_h  # the bowl really takes longer
+    assert check_schedule(plan.requirements, plan.task_graph, plan.schedule) == []
+    assert plan.steps[0].payload is not None
+    assert plan.steps[0].payload["advisories"][0].startswith("estimate:T3:")

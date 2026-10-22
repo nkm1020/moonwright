@@ -27,6 +27,19 @@ What the defaults encode (checked against the Token Factory docs and model catal
   answer directly (fast demos), ``on`` makes every role think.
 * Rate limiting is HTTP 429 with ``Retry-After``; the SDK's retries honour it.
 
+Call log
+--------
+Every request the client sends (each rung of the fallback ladder, each re-ask, failures
+included) appends one JSON line to ``MOONWRIGHT_LLM_LOG`` (default ``backend/out/llm_log.jsonl``;
+``off`` disables it): timestamp, role, model, endpoint, json level, thinking flag, whether the
+thinking switch was sent, ``max_tokens``, HTTP status, ``x-request-id`` (read through
+``chat.completions.with_raw_response``; the plain ``create`` path is kept when the SDK object
+has no raw-response accessor), ``finish_reason``, prompt / completion tokens, latency, the
+error type for a failed request, plus the fixture hints (``key``, ``attempt``, ``variant``) and
+the ask number. The prompt and the answer text are never written (privacy, size). A log file
+that cannot be written disables the log with one warning; it never fails a model call. The
+log is the evidence behind the measured feedback report and the per-step model badges.
+
 Environment (``moonwright.llm.factory`` loads ``.env`` first)::
 
     NEBIUS_API_KEY                   required for the live client
@@ -40,6 +53,7 @@ Environment (``moonwright.llm.factory`` loads ``.env`` first)::
     MOONWRIGHT_MAX_TOKENS            answer budget for thinking-off calls (default 4096)
     MOONWRIGHT_THINKING_MAX_TOKENS   reasoning + answer budget for thinking-on calls (16384)
     MOONWRIGHT_LLM_TIMEOUT_S         per-request timeout for every role (default 120 / 300)
+    MOONWRIGHT_LLM_LOG               JSONL call log path (default DEFAULT_LOG_PATH; "off" = none)
 
 An answer cut off by ``max_tokens`` is reported as such and re-asked. That includes the empty
 answer a reasoning parser returns when the whole budget went into reasoning (``content`` null,
@@ -50,11 +64,15 @@ so the evaluation still counts it.
 
 from __future__ import annotations
 
+import json
+import logging
 import os
 import re
+import threading
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Final
 
@@ -119,6 +137,14 @@ MAX_TOKENS_ENV_VAR: Final = "MOONWRIGHT_MAX_TOKENS"
 THINKING_MAX_TOKENS_ENV_VAR: Final = "MOONWRIGHT_THINKING_MAX_TOKENS"
 PREVIOUS_ANSWER_CHARS: Final = 6000
 
+LOG_ENV_VAR: Final = "MOONWRIGHT_LLM_LOG"
+LOG_OFF: Final = "off"
+DEFAULT_LOG_PATH: Final = Path(__file__).resolve().parents[2] / "out" / "llm_log.jsonl"
+LOG_ERROR_CHARS: Final = 200   # of a failed request's error message (never prompt or answer)
+REQUEST_ID_HEADER: Final = "x-request-id"
+
+log = logging.getLogger(__name__)
+
 RETRY_SUFFIX: Final = (
     "\n\nYour previous answer failed validation:\n{errors}\n\n"
     "Previous answer (truncated):\n{previous}\n\n"
@@ -163,6 +189,98 @@ def _env_number(name: str) -> float | None:
         return float(raw)
     except ValueError as e:
         raise LLMError(f"{name} must be a number, got {raw!r}") from e
+
+
+def log_path_from_env(given: str | Path | None = None) -> Path | None:
+    """Where the call log goes: ``given`` > ``MOONWRIGHT_LLM_LOG`` > :data:`DEFAULT_LOG_PATH`;
+    the value ``off`` (any case) means no log at all and returns None."""
+    raw = os.environ.get(LOG_ENV_VAR, "") if given is None else str(given)
+    raw = raw.strip()
+    if raw.lower() == LOG_OFF:
+        return None
+    return Path(raw) if raw else DEFAULT_LOG_PATH
+
+
+class CallLog:
+    """Append-only JSONL log of model requests (module docstring, "Call log").
+
+    ``path=None`` disables it. Writes are serialised with a lock (the eval runs planners in
+    threads) and the first ``OSError`` switches the log off with one warning, so a read-only
+    directory never breaks a live call. ``records`` counts the lines written.
+    """
+
+    def __init__(self, path: Path | None):
+        self.path = path
+        self.records = 0
+        self._lock = threading.Lock()
+        self._failed = False
+
+    @property
+    def enabled(self) -> bool:
+        return self.path is not None and not self._failed
+
+    def write(self, record: Mapping[str, Any]) -> bool:
+        """Append ``record`` as one line; False when the log is off or could not be written."""
+        if self.path is None or self._failed:
+            return False
+        line = json.dumps(record, separators=(",", ":"), default=str)
+        with self._lock:
+            try:
+                self.path.parent.mkdir(parents=True, exist_ok=True)
+                with self.path.open("a", encoding="utf-8") as fh:
+                    fh.write(line + "\n")
+            except OSError as e:
+                self._failed = True
+                log.warning("LLM call log disabled: cannot write %s (%s)", self.path, e)
+                return False
+            self.records += 1
+        return True
+
+
+def call_record(
+    *,
+    role: str,
+    model: str,
+    endpoint: str,
+    mode: RequestMode,
+    thinking: bool,
+    thinking_switch: bool,
+    max_tokens: int,
+    latency_s: float,
+    response: ChatCompletion | None,
+    status: int | None,
+    request_id: str | None,
+    error: BaseException | None,
+    tag: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """One call-log line for a request that answered (``response``) or failed (``error``).
+
+    Carries identifiers and figures only: no message content, no answer text. ``tag`` adds the
+    caller's fixture hints (``key``, ``attempt``, ``variant``) and the ask number.
+    """
+    choice = response.choices[0] if response is not None and response.choices else None
+    usage = response.usage if response is not None else None
+    record: dict[str, Any] = {
+        "ts": datetime.now(UTC).isoformat(timespec="milliseconds"),
+        "role": role,
+        "model": model,
+        "endpoint": endpoint,
+        "regional": mode.regional,
+        "json_format": mode.json_format,
+        "thinking": thinking,
+        "thinking_switch": thinking_switch,
+        "max_tokens": max_tokens,
+        "status": status,
+        "request_id": request_id,
+        "finish_reason": choice.finish_reason if choice is not None else None,
+        "prompt_tokens": usage.prompt_tokens if usage is not None else None,
+        "completion_tokens": usage.completion_tokens if usage is not None else None,
+        "latency_s": round(latency_s, 3),
+        "error": type(error).__name__ if error is not None else None,
+        "error_message": str(error)[:LOG_ERROR_CHARS] if error is not None else None,
+    }
+    record.update(tag or {})
+    return record
 
 
 @dataclass(frozen=True)
@@ -221,7 +339,8 @@ class TokenFactoryClient:
     inject an ``httpx.Client`` with a mock transport. ``transport_retries`` is handed to the SDK,
     which retries connection errors, timeouts and 408/409/429/5xx responses with exponential
     backoff (honouring ``Retry-After``); ``timeout_s`` / ``thinking_timeout_s`` apply per
-    request depending on whether the role thinks.
+    request depending on whether the role thinks. ``log_path`` is the JSONL call log
+    (:func:`log_path_from_env`: None reads ``MOONWRIGHT_LLM_LOG``, ``"off"`` disables it).
     """
 
     name = "nebius"
@@ -240,6 +359,7 @@ class TokenFactoryClient:
         max_tokens: int | None = None,
         thinking_max_tokens: int | None = None,
         http_client: httpx.Client | None = None,
+        log_path: str | Path | None = None,
     ):
         key = api_key or os.environ.get("NEBIUS_API_KEY")
         if not key:
@@ -273,6 +393,7 @@ class TokenFactoryClient:
         self._http = http_client
         self._sdks: dict[str, openai.OpenAI] = {}
         self._modes: dict[str, RequestMode] = {}
+        self.log = CallLog(log_path_from_env(log_path))
 
     # ------------------------------------------------------------------ LLMClient
     def complete_json(
@@ -299,8 +420,9 @@ class TokenFactoryClient:
         reply = _Reply(text="", usage=total, finish_reason=None, max_tokens=self.max_tokens)
         errors: list[str] = []
         empty = 0
-        for _ in range(asks):
-            reply = self._chat(role, model, messages, schema)
+        for ask in range(1, asks + 1):
+            tag = {"key": key, "attempt": attempt, "variant": variant, "ask": ask}
+            reply = self._chat(role, model, messages, schema, tag=tag)
             total.input_tokens += reply.usage.input_tokens
             total.output_tokens += reply.usage.output_tokens
             total.latency_s += reply.usage.latency_s
@@ -377,8 +499,57 @@ class TokenFactoryClient:
             params["extra_body"] = THINKING_OFF_BODY
         return params, sent_switch
 
+    def _create(
+        self, endpoint: str, params: dict[str, Any]
+    ) -> tuple[ChatCompletion, int | None, str | None]:
+        """One SDK call: the completion plus the HTTP status and ``x-request-id`` when the SDK
+        exposes the raw response (``with_raw_response``); the plain ``create`` path, without
+        them, when it does not (a stub SDK in tests)."""
+        completions = self._sdk(endpoint).chat.completions
+        raw_api = getattr(completions, "with_raw_response", None)
+        if raw_api is None:
+            return completions.create(**params), None, None
+        raw = raw_api.create(**params)
+        return raw.parse(), raw.status_code, raw.headers.get(REQUEST_ID_HEADER)
+
+    def _request(
+        self,
+        role: Role,
+        model: str,
+        endpoint: str,
+        params: dict[str, Any],
+        mode: RequestMode,
+        sent_switch: bool,
+        tag: Mapping[str, Any] | None,
+    ) -> tuple[ChatCompletion | None, openai.APIError | None]:
+        """One request, logged whatever happens: ``(completion, None)`` or ``(None, error)``."""
+        t0 = time.perf_counter()
+        response: ChatCompletion | None = None
+        error: openai.APIError | None = None
+        status: int | None = None
+        request_id: str | None = None
+        try:
+            response, status, request_id = self._create(endpoint, params)
+        except openai.APIError as e:
+            error = e
+            status = getattr(e, "status_code", None)
+            request_id = getattr(e, "request_id", None)
+        self.log.write(call_record(
+            role=role, model=model, endpoint=endpoint, mode=mode, thinking=self.thinking[role],
+            thinking_switch=sent_switch, max_tokens=params["max_tokens"],
+            latency_s=time.perf_counter() - t0, response=response, status=status,
+            request_id=request_id, error=error, tag=tag,
+        ))
+        return response, error
+
     def _chat(
-        self, role: Role, model: str, messages: list[dict[str, str]], schema: type
+        self,
+        role: Role,
+        model: str,
+        messages: list[dict[str, str]],
+        schema: type,
+        *,
+        tag: Mapping[str, Any] | None = None,
     ) -> _Reply:
         mode = self._modes.get(model, RequestMode())
         t0 = time.perf_counter()
@@ -386,25 +557,25 @@ class TokenFactoryClient:
         for _ in range(len(JSON_LEVELS) + 3):  # bounded: json rungs + thinking switch + region
             params, sent_switch = self._params(role, model, messages, schema, mode)
             endpoint = self.regional_base_url if mode.regional else self.base_url
-            try:
-                response = self._sdk(endpoint).chat.completions.create(**params)
-            except openai.NotFoundError as e:
-                if mode.regional or self.regional_base_url is None:
-                    raise LLMError(f"{role} ({model}): {type(e).__name__}: {e}") from e
-                mode = replace(mode, regional=True)
-            except (openai.BadRequestError, openai.UnprocessableEntityError) as e:
-                message = f"{e.message} {e.body}"
-                nxt = None
-                if isinstance(e, openai.UnprocessableEntityError) or _FEATURE_WORDS.search(message):
-                    nxt = mode.downgraded(message, sent_thinking_switch=sent_switch)
-                if nxt is None:
-                    raise LLMError(f"{role} ({model}): {type(e).__name__}: {e}") from e
-                mode = nxt
-            except openai.APIError as e:
-                raise LLMError(f"{role} ({model}): {type(e).__name__}: {e}") from e
-            else:
+            response, error = self._request(role, model, endpoint, params, mode, sent_switch, tag)
+            if error is None:
                 self._modes[model] = mode
                 break
+            if isinstance(error, openai.NotFoundError):
+                if mode.regional or self.regional_base_url is None:
+                    raise LLMError(f"{role} ({model}): {type(error).__name__}: {error}") from error
+                mode = replace(mode, regional=True)
+            elif isinstance(error, (openai.BadRequestError, openai.UnprocessableEntityError)):
+                message = f"{error.message} {error.body}"
+                nxt = None
+                if (isinstance(error, openai.UnprocessableEntityError)
+                        or _FEATURE_WORDS.search(message)):
+                    nxt = mode.downgraded(message, sent_thinking_switch=sent_switch)
+                if nxt is None:
+                    raise LLMError(f"{role} ({model}): {type(error).__name__}: {error}") from error
+                mode = nxt
+            else:
+                raise LLMError(f"{role} ({model}): {type(error).__name__}: {error}") from error
             self._modes[model] = mode
         if response is None:
             raise LLMError(f"{role} ({model}): request rejected on every fallback")
@@ -448,6 +619,18 @@ class RecordingClient:
     File names follow :func:`moonwright.llm.base.fixture_filename`, so a recorded run is read
     back verbatim by :class:`~moonwright.llm.base.FixtureClient`. Calls without a ``key`` are
     passed through unrecorded.
+
+    Numbering: the planner's ``attempt`` is the running count of graph answers asked for,
+    re-asks included, while the offline client replays a run without re-asks (a recorded
+    answer always validates), asking for attempts 1, 2, 3, ... round by round. Task-graph files
+    are therefore numbered by *round*: every ask of a run that fails (an exception from the
+    live client, which the planner answers with a re-ask of the same round) shifts the numbers
+    of that run's later answers down by one, so a first graph that validated only on the
+    planner's re-ask lands in ``taskgraph_1.json`` and the repair after it in
+    ``taskgraph_2.json``; a solver-first replan whose first call is already a repair keeps its
+    ``taskgraph_replan_2.json``. A run is the sequence of calls for one ``(key, variant)``; it
+    restarts when the attempt number does. Recording the same key from several threads at once
+    is not supported (the files would overwrite each other anyway).
     """
 
     name = "record"
@@ -456,6 +639,23 @@ class RecordingClient:
         self.inner = inner
         self.fixtures_dir = Path(fixtures_dir) if fixtures_dir else FIXTURES_DIR
         self.written: list[Path] = []
+        self._runs: dict[tuple[str, str | None], tuple[int, int]] = {}  # (last attempt, failed asks)
+        self._lock = threading.Lock()
+
+    def _round(self, key: str, variant: str | None, attempt: int) -> int:
+        """The round ``attempt`` belongs to in this run of ``(key, variant)``: the attempt
+        number minus the asks of the run that failed before it (each was re-asked)."""
+        with self._lock:
+            last, failed = self._runs.get((key, variant), (0, 0))
+            if attempt <= last:
+                failed = 0   # the planner's count restarted: a new run of this brief
+            self._runs[(key, variant)] = (attempt, failed)
+            return max(1, attempt - failed)
+
+    def _failed(self, key: str, variant: str | None) -> None:
+        with self._lock:
+            last, failed = self._runs.get((key, variant), (0, 0))
+            self._runs[(key, variant)] = (last, failed + 1)
 
     def complete_json(
         self,
@@ -469,12 +669,19 @@ class RecordingClient:
         variant: str | None = None,
         max_attempts: int = 2,
     ) -> tuple[T, Usage]:
-        obj, usage = self.inner.complete_json(
-            role=role, system=system, user=user, schema=schema,
-            key=key, attempt=attempt, variant=variant, max_attempts=max_attempts,
-        )
+        numbered = bool(key) and role in ("taskgraph", "repair")
+        number = self._round(key, variant, attempt) if numbered else attempt
+        try:
+            obj, usage = self.inner.complete_json(
+                role=role, system=system, user=user, schema=schema,
+                key=key, attempt=attempt, variant=variant, max_attempts=max_attempts,
+            )
+        except LLMError:
+            if numbered:
+                self._failed(key, variant)   # the planner re-asks this round
+            raise
         if key:
-            path = self.fixtures_dir / key / fixture_filename(role, attempt, variant)
+            path = self.fixtures_dir / key / fixture_filename(role, number, variant)
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(obj.model_dump_json(indent=1) + "\n", encoding="utf-8")
             self.written.append(path)

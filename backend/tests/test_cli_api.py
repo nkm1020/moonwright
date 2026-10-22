@@ -8,6 +8,8 @@ and the example fixtures from the other builders and skips until they land.
 from __future__ import annotations
 
 import argparse
+import csv
+import importlib.util
 import inspect
 import io
 import json
@@ -17,7 +19,7 @@ import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import httpx
 import openai
@@ -32,6 +34,7 @@ from moonwright.api import (
     brief_title,
     clean_brief_id,
     list_briefs,
+    strip_markdown,
     thin_frames,
 )
 from moonwright.cli import (
@@ -39,14 +42,20 @@ from moonwright.cli import (
     EXIT_NO_PLAN,
     EXIT_OK,
     EvalRow,
+    GraphCapture,
     build_parser,
+    eval_row,
     format_gantt,
+    format_replan,
     format_step,
+    format_summary,
     main,
     parse_failure,
     plan_stem,
+    planner_options,
     positive_float,
     summarise,
+    wilson_interval,
 )
 from moonwright.llm import factory
 from moonwright.llm.base import (
@@ -70,6 +79,7 @@ from moonwright.llm.tokenfactory import (
     TokenFactoryClient,
 )
 from moonwright.pipeline.loop import Planner
+from moonwright.pipeline.schedule import check_schedule
 from moonwright.schemas import (
     Event,
     Failure,
@@ -83,13 +93,23 @@ from moonwright.schemas import (
     ScheduleEntry,
     SimFrame,
     SimResult,
+    Site,
     Task,
     TaskGraph,
+    Zone,
 )
 from moonwright.sim.montecarlo import MonteCarloPlanner, MonteCarloResult, SolverOnlyClient
 from moonwright.sim.simulator import FailureInjection
 
 Reply = str | Callable[[httpx.Request], httpx.Response]
+SCHEDULE_CHECK_SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "llm_schedule_check.py"
+
+
+@pytest.fixture(autouse=True)
+def llm_log_in_tmp(tmp_path, monkeypatch):
+    """Every live client built by these tests logs into the test's tmp dir, never into
+    ``backend/out/llm_log.jsonl``."""
+    monkeypatch.setenv("MOONWRIGHT_LLM_LOG", str(tmp_path / "llm_log.jsonl"))
 
 
 # --------------------------------------------------------------------------- fake Token Factory
@@ -353,6 +373,90 @@ class TestRecordingClient:
         rec.complete_json(role="explain", system="s", user="u", schema=ExplainText)
         assert list(tmp_path.iterdir()) == [] and rec.written == []
 
+    def test_rounds_are_numbered_per_run_and_variant(self, tmp_path):
+        """A solver-first replan's first model call is already a repair (attempt 2) and keeps
+        its number; a failed ask shifts only the later numbers of that run; a new run (the
+        attempt back at 1) and another variant start afresh."""
+        class Flaky:
+            name = "flaky"
+
+            def __init__(self, answers):
+                self.answers = list(answers)
+
+            def complete_json(self, *, role, system, user, schema, key=None, attempt=1,
+                              variant=None, max_attempts=2):
+                answer = self.answers.pop(0)
+                if isinstance(answer, Exception):
+                    raise answer
+                return validate_into(schema, answer), Usage(model="flaky")
+
+        rec = RecordingClient(Flaky([GRAPH, LLMError("timeout"), GRAPH, GRAPH, GRAPH]), tmp_path)
+        calls = [("repair", 2, "replan"), ("repair", 3, "replan"), ("repair", 4, "replan"),
+                 ("taskgraph", 1, None), ("taskgraph", 1, "replan")]
+        for role, attempt, variant in calls:
+            try:
+                rec.complete_json(role=role, system="s", user="u", schema=TaskGraph, key="demo",
+                                  attempt=attempt, variant=variant)
+            except LLMError:
+                assert (role, attempt) == ("repair", 3)
+        names = sorted(p.name for p in (tmp_path / "demo").iterdir())
+        assert names == ["taskgraph_1.json", "taskgraph_replan.json", "taskgraph_replan_2.json",
+                         "taskgraph_replan_3.json"]
+        assert len(rec.written) == 4
+
+    def test_a_run_with_re_asks_records_a_replayable_fixture_set(self, tmp_path):
+        """The first task-graph answer fails validation (what the live client raises after its
+        own asks) and the planner's re-ask succeeds: it is recorded as round 1, so the fixture
+        client replays the run as it went; a repair that validated after a re-ask lands in
+        round 2 and replays without a wasted round."""
+        class Flaky:
+            name = "flaky"
+
+            def __init__(self, answers):
+                self.answers = answers
+
+            def complete_json(self, *, role, system, user, schema, key=None, attempt=1,
+                              variant=None, max_attempts=2):
+                answer = self.answers[(role, attempt)]
+                if isinstance(answer, Exception):
+                    raise answer
+                return validate_into(schema, answer), Usage(model="flaky")
+
+        mismatch = SchemaMismatch("answer failed validation after 2 attempt(s)", "{",
+                                  ["tasks: Field required"])
+        pad = FIXTURES_DIR / "landing_pad"
+        req = Requirements.model_validate_json((pad / "structure.json").read_text())
+        good = json.loads((pad / "taskgraph_1.json").read_text())
+        rec = RecordingClient(Flaky({("taskgraph", 1): mismatch, ("taskgraph", 2): good,
+                                     ("explain", 1): {"text": "fine"}}), tmp_path)
+        live = Planner(rec, max_repairs=3).plan_from_requirements(req, key="lp")
+        assert live.success and [(s.stage, s.attempt, s.ok) for s in live.steps[:2]] == \
+            [("taskgraph", 1, False), ("taskgraph", 2, True)]
+        assert sorted(p.name for p in (tmp_path / "lp").iterdir()) == ["explain.json",
+                                                                        "taskgraph_1.json"]
+        replay = Planner(FixtureClient(tmp_path), max_repairs=3).plan_from_requirements(req, key="lp")
+        assert replay.success and replay.task_graph == live.task_graph
+        assert [(s.stage, s.attempt, s.ok) for s in replay.steps] == [
+            ("taskgraph", 1, True), ("validate", 1, True), ("schedule", 1, True),
+            ("explain", 1, True)]
+
+        tight = FIXTURES_DIR / "tight_battery"
+        req = Requirements.model_validate_json((tight / "structure.json").read_text())
+        rec = RecordingClient(Flaky({
+            ("taskgraph", 1): json.loads((tight / "taskgraph_1.json").read_text()),
+            ("repair", 2): mismatch,
+            ("repair", 3): json.loads((tight / "taskgraph_2.json").read_text()),
+        }), tmp_path)
+        live = Planner(rec, max_repairs=3, explain=False).plan_from_requirements(req, key="tb")
+        assert live.success and live.repairs == 1
+        assert sorted(p.name for p in (tmp_path / "tb").iterdir()) == ["taskgraph_1.json",
+                                                                        "taskgraph_2.json"]
+        replay = Planner(FixtureClient(tmp_path), max_repairs=3,
+                         explain=False).plan_from_requirements(req, key="tb")
+        assert replay.success and replay.repairs == 1 and replay.task_graph == live.task_graph
+        asked = [(s.stage, s.attempt) for s in replay.steps if s.stage in ("taskgraph", "repair")]
+        assert asked == [("taskgraph", 1), ("repair", 2)]
+
     def test_replan_repairs_and_later_replans_get_their_own_files(self, tmp_path):
         rec = RecordingClient(StubClient(GRAPH), tmp_path)
         for role, attempt, variant in (("taskgraph", 1, "replan"), ("repair", 2, "replan"),
@@ -540,6 +644,32 @@ def fake_sim_result(requirements: Requirements, graph: TaskGraph, before: Schedu
                      schedule=after_schedule, task_graph=graph)
 
 
+def test_format_replan_says_how_the_work_was_rescheduled():
+    """The CLI line carries the closing replan step's verdict: solver-only, or escalated."""
+    base = fake_sim_result(REQ, GRAPH2, SCHEDULE).replans[0]
+    assert format_replan(1, base) == (
+        "#1 at t=3.00h after robot_failure EX1: 2 tasks remaining; makespan 18h -> 22h "
+        "(optimal, 1 repair(s)); solver-only, Nemotron not asked")
+    closing = LoopStep(stage="replan", ok=True, message=(
+        "CP-SAT rescheduled 2 tasks in 0.01 s, Nemotron not needed; makespan 18 h -> 22 h "
+        "(absolute)"))
+    solved = base.model_copy(update={"after": base.after.model_copy(update={"steps": [closing]})})
+    assert format_replan(1, solved).endswith(
+        "(optimal, 1 repair(s)); CP-SAT rescheduled 2 tasks in 0.01 s, Nemotron not needed")
+    closing = LoopStep(stage="replan", ok=True, message=(
+        "infeasible (energy:EX1) -> escalated to Nemotron; makespan 18 h -> 22 h (absolute), "
+        "verified after 1 repair(s)"))
+    escalated = base.model_copy(update={"escalated": True, "after": base.after.model_copy(
+        update={"steps": [closing]})})
+    assert format_replan(2, escalated).endswith(
+        "; infeasible (energy:EX1) -> escalated to Nemotron")
+    refused = base.model_copy(update={"escalated": True, "after": base.after.model_copy(
+        update={"success": False, "schedule": None,
+                "failure": Failure(kind="infeasible", conflicts=["energy:EX1"])})})
+    assert format_replan(3, refused).endswith(
+        "no feasible replan (infeasible: energy:EX1); escalated to Nemotron")
+
+
 def make_fake_run(calls: dict[str, Any]):
     """Stand-in for run_with_replanning that records its arguments."""
 
@@ -562,6 +692,9 @@ GRAPH2 = TaskGraph(tasks=[Task(id="T1", name="Dig", robot_type="excavator", dura
                           Task(id="T2", name="Grade", robot_type="excavator", duration_h=12,
                                energy_wh=900, zone="Z1", after=["T1"])])
 VERIFIED = PlanResult(requirements=REQ, task_graph=GRAPH2, schedule=SCHEDULE, success=True)
+# the same plan with Z1 declared on the depot, so its schedule needs no travel at all
+AT_DEPOT = VERIFIED.model_copy(update={"requirements": REQ.model_copy(update={
+    "site": Site(zones=[Zone(id="Z1", center=(20, 1))])})})
 LANDING_PAD_BRIEF = EXAMPLES_DIR / "landing_pad.md"
 
 
@@ -734,14 +867,70 @@ class TestApi:
         assert r.status_code == 500 and "re-verification" in r.json()["detail"]
         assert r.headers.get("access-control-allow-origin") == "http://localhost:3000"
 
+        monkeypatch.setattr(api_module, "run_monte_carlo", crash)
+        r = api.post("/montecarlo", json={"plan": VERIFIED.model_dump(mode="json"), "runs": 2},
+                     headers=origin)
+        assert r.status_code == 500 and r.json()["detail"].startswith("RuntimeError: ")
+        assert r.headers.get("access-control-allow-origin") == "http://localhost:3000"
+
+    def test_exceptions_leaked_by_any_endpoint_are_json_500s_with_cors_headers(
+            self, api, monkeypatch):
+        """The inner middleware catches what no endpoint wrapper did (here /examples)."""
+        def crash():
+            raise OSError("examples directory unreadable")
+
+        monkeypatch.setattr(api_module, "list_briefs", crash)
+        r = api.get("/examples", headers={"Origin": "http://localhost:5173"})
+        assert r.status_code == 500
+        assert r.json() == {"detail": "OSError: examples directory unreadable"}
+        assert r.headers.get("access-control-allow-origin") == "http://localhost:5173"
+        assert r.headers["content-type"].startswith("application/json")
+
+    def test_validation_errors_keep_the_field_path(self, api):
+        requirements = REQ.model_dump(mode="json")
+        requirements["robots"][0]["battery_wh"] = -1
+        r = api.post("/plan", json={"requirements": requirements, "llm": "fixture"})
+        assert r.status_code == 422
+        errors = r.json()["detail"]
+        assert [e["loc"] for e in errors] == [["body", "requirements", "robots", 0, "battery_wh"]]
+        assert errors[0]["input"] == -1 and "greater than 0" in errors[0]["msg"]
+        requirements["robots"][0]["battery_wh"] = 5000
+        requirements["horizon_h"] = 0
+        r = api.post("/plan/stream", json={"requirements": requirements})
+        assert r.status_code == 422
+        assert r.json()["detail"][0]["loc"] == ["body", "requirements", "horizon_h"]
+        # a plan nested in a /simulate body keeps the full path too
+        plan = VERIFIED.model_dump(mode="json")
+        plan["task_graph"]["tasks"][1]["duration_h"] = 0
+        r = api.post("/simulate", json={"plan": plan})
+        assert r.status_code == 422
+        assert r.json()["detail"][0]["loc"] == ["body", "plan", "task_graph", "tasks", 1,
+                                                "duration_h"]
+
     def test_examples(self, api):
         r = api.get("/examples")
         assert r.status_code == 200
         items = r.json()
         assert items == [b.model_dump() for b in list_briefs()]
-        assert all(set(i) == {"id", "title", "text"} for i in items)
+        assert all(set(i) == {"id", "title", "text", "text_markdown"} for i in items)
         if (EXAMPLES_DIR / "landing_pad.md").exists():
-            assert "landing_pad" in [i["id"] for i in items]
+            pad = next(i for i in items if i["id"] == "landing_pad")
+            assert pad["text_markdown"] == (EXAMPLES_DIR / "landing_pad.md").read_text()
+            assert "**" in pad["text_markdown"] and "**" not in pad["text"]
+            assert pad["text"].startswith("LS-1 Landing Pad") and "Site. LS-1" in pad["text"]
+            assert pad["text"].count("\n") == pad["text_markdown"].count("\n")
+            assert api.get("/examples/landing_pad").json() == pad
+
+    def test_strip_markdown(self):
+        assert strip_markdown("# Title\n\n**Site.** Loose _regolith_ to *40 cm*; `EX1`.") == \
+            "Title\n\nSite. Loose regolith to 40 cm; EX1."
+        assert strip_markdown("__bold__ and ***both***") == "bold and both"
+        # identifiers, numbers, list bullets and arithmetic are not emphasis
+        assert strip_markdown("brief_id landing_pad 4_000 a*b*c 2 * 3 * 4\n- item\n* item") == \
+            "brief_id landing_pad 4_000 a*b*c 2 * 3 * 4\n- item\n* item"
+        assert strip_markdown("no markdown\n\n1. kept\n") == "no markdown\n\n1. kept\n"
+        assert strip_markdown("#notatag and ## heading\n### Deep") == "#notatag and ## heading\nDeep"
+        assert strip_markdown("") == ""
 
     def test_plan_without_fixtures_reports_failure_not_500(self, api):
         r = api.post("/plan", json={"brief": "Build a 20 m landing pad.",
@@ -779,7 +968,10 @@ class TestApi:
                                     "explain": False})
         assert r.status_code == 200, r.text
         body = r.json()
-        assert body["success"] is True and body["schedule"]["makespan_h"] == 77
+        from_brief = api.post("/plan", json={"brief": brief, "brief_id": "landing_pad",
+                                             "llm": "fixture", "explain": False}).json()
+        assert body["success"] is True and body["schedule"]["makespan_h"] > 0
+        assert body["schedule"]["makespan_h"] == from_brief["schedule"]["makespan_h"]
         assert [s["stage"] for s in body["steps"]] == ["structure", "taskgraph", "validate",
                                                         "schedule"]
         first = body["steps"][0]
@@ -975,9 +1167,31 @@ class TestApi:
                                           "duration_jitter": 0, "failure_rate_per_robot_h": 0.5})
         assert r.status_code == 200, r.text
         assert isinstance(calls["planner"].client, FixtureClient)
-        assert calls["planner"].explain is False
+        assert calls["planner"].explain is False and calls["planner"].max_repairs == 3
         assert (calls["runs"], calls["seed"], calls["max_replans"]) == (3, 9, 1)
         assert (calls["duration_jitter"], calls["failure_rate_per_robot_h"]) == (0, 0.5)
+        r = api.post("/montecarlo", json={"plan": VERIFIED.model_dump(), "llm": "fixture",
+                                          "runs": 1, "max_repairs": 1})
+        assert r.status_code == 200, r.text
+        assert calls["planner"].max_repairs == 1
+
+    def test_montecarlo_passes_every_result_field_through(self, api):
+        """The response is the pydantic model itself, so fields the Monte Carlo module adds
+        (outcomes, single points of failure, a CI) reach the UI without an API change."""
+        r = api.post("/montecarlo", json={"plan": VERIFIED.model_dump(), "runs": 3, "seed": 2})
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert set(body) == set(MonteCarloResult.model_fields)
+        for field in ("outcomes", "single_points_of_failure", "within_horizon_ci"):
+            if field in MonteCarloResult.model_fields:
+                assert field in body
+        sim = api.post("/simulate", json={"plan": VERIFIED.model_dump(), "llm": "fixture",
+                                          "failures": [{"robot": "EX1", "t_h": 3}],
+                                          "brief_id": "zz_no_fixture"})
+        assert sim.status_code == 200, sim.text
+        assert set(sim.json()) == set(SimResult.model_fields)
+        if sim.json()["replans"] and "escalated" in ReplanRecord.model_fields:
+            assert "escalated" in sim.json()["replans"][0]
 
     def test_montecarlo_with_a_fixture_client_runs_solver_only_replans(self, api):
         r = api.post("/montecarlo", json={"plan": VERIFIED.model_dump(), "llm": "fixture",
@@ -1000,9 +1214,17 @@ class TestApi:
         plan = VERIFIED.model_dump()
         for extra in ({"runs": 0}, {"runs": 201}, {"runs": 2.5}, {"failure_rate_per_robot_h": 1.5},
                       {"failure_rate_per_robot_h": -0.1}, {"duration_jitter": 2},
-                      {"max_replans": 6}, {"max_replans": -1}, {"seed": "lucky"}):
+                      {"max_replans": 6}, {"max_replans": -1}, {"seed": "lucky"},
+                      {"max_repairs": 11}, {"max_repairs": -1}):
             r = api.post("/montecarlo", json={"plan": plan, **extra})
             assert r.status_code == 422, extra
+        # NaN / inf rates are 422s with a serialisable body that names the field
+        for field in ("failure_rate_per_robot_h", "duration_jitter"):
+            for bad in (float("nan"), float("inf"), -float("inf")):
+                r = post_raw_json(api, "/montecarlo", json.dumps({"plan": plan, field: bad}))
+                assert r.status_code == 422, (field, bad, r.text)
+                error = r.json()["detail"][0]
+                assert error["loc"] == ["body", field] and isinstance(error["input"], str)
         assert api.post("/montecarlo", json={}).status_code == 422
         r = api.post("/montecarlo", json={"plan": plan, "llm": "openai"})
         assert r.status_code == 400 and "unknown LLM client kind" in r.json()["detail"]
@@ -1018,7 +1240,7 @@ class TestPlanStream:
         assert [s["stage"] for s in steps] == ["structure", "taskgraph", "validate", "schedule"]
         assert all(s["ok"] for s in steps)
         result = events[-1][1]
-        assert result["success"] is True and result["schedule"]["makespan_h"] == 77
+        assert result["success"] is True and result["schedule"]["makespan_h"] > 0
         assert [s["stage"] for s in result["steps"]] == [s["stage"] for s in steps]
         # the same plan as the plain endpoint (solver wall time and step durations aside)
         plain = api.post("/plan", json=body).json()
@@ -1115,12 +1337,14 @@ def test_brief_title():
 
 
 def test_list_briefs(tmp_path):
-    (tmp_path / "b_second.md").write_text("# Second\nbody")
+    (tmp_path / "b_second.md").write_text("# Second\n**Site.** body")
     (tmp_path / "a_first.txt").write_text("first body")
     (tmp_path / "ignored.json").write_text("{}")
     briefs = list_briefs(tmp_path)
     assert [b.id for b in briefs] == ["a_first", "b_second"]
-    assert briefs[1].title == "Second" and briefs[1].text == "# Second\nbody"
+    assert briefs[1].title == "Second" and briefs[1].text_markdown == "# Second\n**Site.** body"
+    assert briefs[1].text == "Second\nSite. body"
+    assert briefs[0].text == briefs[0].text_markdown == "first body"
     assert list_briefs(tmp_path / "missing") == []
 
 
@@ -1164,6 +1388,12 @@ class TestCliParsing:
     def test_eval_and_serve_args(self):
         args = build_parser().parse_args(["eval", "--briefs", "examples/briefs", "--loop", "on"])
         assert args.loop == "on" and args.repeat == 1 and args.out == Path("eval.json")
+        assert (args.workers, args.feedback, args.max_answer_retries) == (1, "core", None)
+        args = build_parser().parse_args(
+            ["eval", "--briefs", "b", "--workers", "4", "--feedback", "verdict",
+             "--max-answer-retries", "0", "--max-repairs", "10"])
+        assert (args.workers, args.feedback, args.max_answer_retries) == (4, "verdict", 0)
+        assert args.max_repairs == 10
         args = build_parser().parse_args(["serve", "--port", "9000"])
         assert (args.host, args.port) == ("127.0.0.1", 9000)
 
@@ -1200,7 +1430,16 @@ class TestCliParsing:
                      ["simulate", "p.json", "--max-replans", "99"],
                      ["simulate", "p.json", "--max-repairs", "-2"],
                      ["plan", "b.md", "--max-repairs", "-1"],
+                     ["plan", "b.md", "--max-repairs", "11"],
+                     ["simulate", "p.json", "--max-repairs", "11"],
+                     ["montecarlo", "p.json", "--max-repairs", "11"],
+                     ["eval", "--briefs", "b", "--max-repairs", "11"],
                      ["eval", "--briefs", "b", "--repeat", "0"],
+                     ["eval", "--briefs", "b", "--workers", "0"],
+                     ["eval", "--briefs", "b", "--workers", "two"],
+                     ["eval", "--briefs", "b", "--feedback", "hints"],
+                     ["eval", "--briefs", "b", "--max-answer-retries", "-1"],
+                     ["eval", "--briefs", "b", "--max-answer-retries", "6"],
                      ["montecarlo"],
                      ["eval"]):
             with pytest.raises(SystemExit) as info:
@@ -1281,6 +1520,494 @@ class TestCliFormatting:
         assert (on.runs, on.feasible, on.feasible_rate) == (2, 2, 1.0)
         assert (on.mean_repairs, on.mean_makespan_h, on.mean_latency_s) == (0.5, 30.0, 3.0)
         assert (on.mean_input_tokens, on.mean_output_tokens) == (200.0, 30.0)
+        # Wilson 95% interval of the feasible rate: 0/1 and 2/2 never collapse to a point
+        assert (off.feasible_ci_low, off.feasible_ci_high) == (0.0, pytest.approx(0.7935, abs=1e-3))
+        assert (on.feasible_ci_low, on.feasible_ci_high) == (pytest.approx(0.3424, abs=1e-3), 1.0)
+        # the new per-row columns default to "unknown" and aggregate to zero / None
+        assert (on.first_try_feasible, on.first_try_rate, on.answer_valid_rate) == (0, 0.0, 0.0)
+        assert on.mean_scope_drift_pct is None
+        table = format_summary([off, on])
+        assert table.splitlines()[0].split() == [
+            "condition", "runs", "feasible", "95%", "CI", "1st-try", "repairs", "makespan",
+            "drift", "latency", "tok", "in/out"]
+        assert "0%-79%" in table.splitlines()[1] and "34%-100%" in table.splitlines()[2]
+
+    def test_wilson_interval(self):
+        assert wilson_interval(0, 0) == (0.0, 1.0)
+        assert wilson_interval(0, 1) == (0.0, pytest.approx(0.7935, abs=1e-3))
+        assert wilson_interval(2, 2) == (pytest.approx(0.3424, abs=1e-3), 1.0)
+        assert wilson_interval(50, 100) == (pytest.approx(0.4038, abs=1e-3),
+                                            pytest.approx(0.5962, abs=1e-3))
+        assert wilson_interval(3, 3) == (pytest.approx(0.4385, abs=1e-3), 1.0)
+        for k, n in ((0, 5), (1, 3), (7, 9), (20, 20)):
+            low, high = wilson_interval(k, n)
+            assert 0.0 <= low <= k / n <= high <= 1.0
+        narrow = wilson_interval(60, 600)
+        wide = wilson_interval(6, 60)
+        assert narrow[1] - narrow[0] < wide[1] - wide[0]   # more runs, tighter interval
+
+
+FIRST_GRAPH = TaskGraph(tasks=[
+    Task(id="T1", name="Dig", robot_type="excavator", duration_h=10, energy_wh=4000, zone="Z1"),
+    Task(id="T2", name="Trench", robot_type="excavator", duration_h=10, energy_wh=4000,
+         zone="Z2"),
+])
+FINAL_GRAPH = FIRST_GRAPH.model_copy(update={"tasks": [
+    FIRST_GRAPH.tasks[0],
+    FIRST_GRAPH.tasks[1].model_copy(update={"duration_h": 6, "energy_wh": 2100}),
+]})
+
+
+def usage_step(stage: str, model: str, *, attempt: int = 1, ok: bool = True,
+               failure: Failure | None = None) -> LoopStep:
+    return LoopStep(stage=stage, attempt=attempt, ok=ok, failure=failure,
+                    usage=Usage(model=model, input_tokens=100, output_tokens=10, latency_s=1.0))
+
+
+class TestEvalRow:
+    def test_repaired_run_columns(self, monkeypatch):
+        verdict = Failure(kind="infeasible", conflicts=["energy:EX1"])
+        steps = [
+            usage_step("structure", "nvidia/lightning"),
+            usage_step("taskgraph", "nvidia/ultra"),
+            LoopStep(stage="validate", ok=True),
+            LoopStep(stage="schedule", ok=False, failure=verdict),
+            usage_step("repair", "nvidia/super", attempt=2),
+            LoopStep(stage="validate", attempt=2, ok=True),
+            LoopStep(stage="schedule", attempt=2, ok=True),
+        ]
+        result = PlanResult(requirements=REQ, task_graph=FINAL_GRAPH, schedule=SCHEDULE,
+                            success=True, repairs=1, steps=steps)
+        row = eval_row("demo", "loop_on", 2, result, 4.5, first_graph=FIRST_GRAPH,
+                       thinking="off")
+        assert (row.brief, row.condition, row.repeat, row.success, row.repairs) == (
+            "demo", "loop_on", 2, True, 1)
+        assert row.makespan_h == 18 and row.latency_s == 4.5 and row.llm_latency_s == 3.0
+        assert (row.input_tokens, row.output_tokens) == (300, 30)
+        assert row.models == "nvidia/ultra,nvidia/super"   # structure / explain are not listed
+        assert row.answer_valid is True and row.first_try_feasible is False
+        assert (row.first_duration_h, row.first_energy_wh) == (20, 8000.0)
+        assert (row.final_duration_h, row.final_energy_wh) == (16, 6100.0)
+        assert row.scope_drift_pct == pytest.approx(-23.75)   # the repair re-scoped the trench
+        assert row.thinking == "off" and row.failure_kind is None and row.conflicts == []
+        # the CSV record spells the list and keeps every column
+        record = cli_module.csv_record(row)
+        assert list(record) == list(cli_module.CSV_FIELDS) and record["conflicts"] == ""
+
+    def test_schema_reask_is_not_a_repair(self):
+        steps = [
+            usage_step("structure", "nvidia/lightning"),
+            usage_step("taskgraph", "nvidia/ultra", ok=False,
+                       failure=Failure(kind="schema", conflicts=["schema:tasks"])),
+            usage_step("taskgraph", "nvidia/ultra", attempt=2),
+            LoopStep(stage="validate", attempt=2, ok=True),
+            LoopStep(stage="schedule", attempt=2, ok=True),
+        ]
+        result = PlanResult(requirements=REQ, task_graph=FIRST_GRAPH, schedule=SCHEDULE,
+                            success=True, repairs=0, steps=steps)
+        row = eval_row("demo", "loop_off", 1, result, 1.0, first_graph=FIRST_GRAPH)
+        assert row.answer_valid is False      # the first answer failed the schema
+        assert row.first_try_feasible is True  # but no verdict round was needed
+        assert row.models == "nvidia/ultra" and row.scope_drift_pct == 0.0
+        assert row.thinking == "auto"
+
+    def test_failed_runs(self):
+        failed_structure = PlanResult(
+            requirements=REQ, success=False, failure=Failure(kind="llm_error", hint="x"),
+            steps=[LoopStep(stage="structure", ok=False,
+                            failure=Failure(kind="llm_error", hint="x"))])
+        row = eval_row("demo", "loop_off", 1, failed_structure, 0.5)
+        assert row.answer_valid is False and row.first_try_feasible is False
+        assert row.models == "" and row.failure_kind == "llm_error"
+        assert (row.first_duration_h, row.final_energy_wh, row.scope_drift_pct) == (None, None,
+                                                                                     None)
+        verdict = Failure(kind="infeasible", conflicts=["energy:EX1", "energy:EX2"], hint="h")
+        rejected = PlanResult(
+            requirements=REQ, task_graph=FIRST_GRAPH, success=False, failure=verdict, repairs=0,
+            steps=[usage_step("structure", "l"), usage_step("taskgraph", "u"),
+                   LoopStep(stage="validate", ok=True),
+                   LoopStep(stage="schedule", ok=False, failure=verdict)])
+        row = eval_row("demo", "loop_off", 1, rejected, 0.5, first_graph=FIRST_GRAPH)
+        assert row.success is False and row.first_try_feasible is False
+        assert row.answer_valid is True and row.conflicts == ["energy:EX1", "energy:EX2"]
+        assert row.failure_kind == "infeasible" and row.scope_drift_pct == 0.0
+        assert (row.first_energy_wh, row.final_energy_wh) == (8000.0, 8000.0)
+
+    def test_rate_model_recomputation_is_not_scope_drift(self):
+        """A live-style first answer states quantities with optimistic hours and Wh; the rate
+        model re-sizes it on its way into the planner. The captured first graph is grounded the
+        same way, so a run without a repair round reports zero drift."""
+        pad = FIXTURES_DIR / "landing_pad"
+        req = Requirements.model_validate_json((pad / "structure.json").read_text())
+        data = json.loads((pad / "taskgraph_1.json").read_text())
+        scope = {"T2": (300, "m2"), "T3": (126, "m3"), "T4": (98, "m3"), "T5": (150, "m2"),
+                 "T6": (120, "m3"), "T7": (188, "m3"), "T8": (70, "m3"), "T9": (314, "m2"),
+                 "T10": (350, "m2"), "T11": (314, "m2"), "T12": (80, "m2")}
+        for t in data["tasks"]:
+            if t["id"] in scope:
+                t["quantity"], t["unit"] = scope[t["id"]]
+            if t["id"] == "T3":                       # 126 m3: the table says 18 h / 2016 Wh
+                t.update(duration_h=10, energy_wh=1000)
+
+        class Scripted:
+            name = "scripted"
+
+            def complete_json(self, *, role, system, user, schema, key=None, attempt=1,
+                              variant=None, max_attempts=2):
+                return validate_into(schema, data), Usage(model="nvidia/ultra")
+
+        capture = GraphCapture(Scripted())
+        result = Planner(capture, max_repairs=0, explain=False).plan_from_requirements(req, key="lp")
+        assert result.success and result.repairs == 0 and result.task_graph is not None
+        assert result.task_graph.task("T3").duration_h == 18
+        assert capture.graphs[0].task("T3").estimated_duration_h == 10.0   # grounded capture
+        row = eval_row("landing_pad", "loop_off", 1, result, 1.0, first_graph=capture.graphs[0])
+        assert row.first_try_feasible and row.scope_drift_pct == 0.0
+        assert row.first_energy_wh == row.final_energy_wh == pytest.approx(
+            sum(t.energy_wh for t in result.task_graph.tasks))
+
+    def test_thinking_setting_reads_the_environment(self, monkeypatch):
+        monkeypatch.delenv("MOONWRIGHT_THINKING", raising=False)
+        assert cli_module.thinking_setting() == "auto"
+        monkeypatch.setenv("MOONWRIGHT_THINKING", " OFF ")
+        assert cli_module.thinking_setting() == "off"
+        monkeypatch.setenv("MOONWRIGHT_THINKING", "")
+        assert cli_module.thinking_setting() == "auto"
+
+
+# --------------------------------------------------------------------------- eval planner stand-ins
+FAILED_RESULT = PlanResult(
+    requirements=REQ, success=False, failure=Failure(kind="llm_error", hint="scripted"),
+    steps=[LoopStep(stage="structure", ok=False, failure=Failure(kind="llm_error", hint="s"))],
+)
+
+
+class RecordingPlanner:
+    """A Planner that accepts the phase-3 repair-loop options and records what it was built
+    with; ``plan`` answers with a scripted failure (or raises ``trip`` on the n-th call)."""
+
+    created: ClassVar[list[dict[str, Any]]] = []
+    calls: ClassVar[int] = 0
+    trip: ClassVar[tuple[int, Exception] | None] = None
+
+    def __init__(self, client, *, max_repairs=3, solver_time_limit_s=10.0, explain=True,
+                 feedback_mode="core", max_answer_retries=2, on_step=None):
+        type(self).created.append({
+            "max_repairs": max_repairs, "solver_time_limit_s": solver_time_limit_s,
+            "explain": explain, "feedback_mode": feedback_mode,
+            "max_answer_retries": max_answer_retries})
+        self.client = client
+
+    def plan(self, brief, *, brief_id=None):
+        cls = type(self)
+        cls.calls += 1
+        if cls.trip is not None and cls.calls == cls.trip[0]:
+            raise cls.trip[1]
+        return FAILED_RESULT
+
+
+class LegacyPlanner(RecordingPlanner):
+    """A Planner without the phase-3 options (what loop.py looked like before them)."""
+
+    def __init__(self, client, *, max_repairs=3, solver_time_limit_s=10.0, explain=True,
+                 on_step=None):
+        super().__init__(client, max_repairs=max_repairs, solver_time_limit_s=solver_time_limit_s,
+                         explain=explain)
+
+
+@pytest.fixture
+def planner_stub(monkeypatch):
+    def install(cls: type) -> type:
+        cls.created = []
+        cls.calls = 0
+        cls.trip = None
+        monkeypatch.setattr(cli_module, "Planner", cls)
+        return cls
+
+    return install
+
+
+def briefs_dir(tmp_path: Path, n: int = 2) -> Path:
+    directory = tmp_path / "briefs"
+    directory.mkdir()
+    for i in range(n):
+        (directory / f"zz_brief_{i}.md").write_text(f"# Brief {i}\n**Site.** Build pad {i}.")
+    return directory
+
+
+class TestEvalCommand:
+    def test_feedback_and_answer_retries_reach_the_planner(self, tmp_path, capsys, planner_stub):
+        stub = planner_stub(RecordingPlanner)
+        code = main(["eval", "--briefs", str(briefs_dir(tmp_path)), "--llm", "fixture",
+                     "--loop", "both", "--feedback", "verdict", "--max-answer-retries", "1",
+                     "--max-repairs", "2", "--time-limit", "3",
+                     "--out", str(tmp_path / "e.json"), "--csv", str(tmp_path / "e.csv")])
+        assert code == EXIT_OK
+        assert len(stub.created) == 4
+        assert all(c["feedback_mode"] == "verdict" and c["max_answer_retries"] == 1
+                   for c in stub.created)
+        assert all(c["solver_time_limit_s"] == 3.0 and c["explain"] is False
+                   for c in stub.created)
+        assert sorted(c["max_repairs"] for c in stub.created) == [0, 0, 2, 2]
+        report = json.loads((tmp_path / "e.json").read_text())
+        assert (report["feedback"], report["max_answer_retries"]) == ("verdict", 1)
+        assert (report["workers"], report["max_repairs"], report["thinking"]) == (1, 2, "auto")
+        assert all(r["thinking"] == "auto" for r in report["rows"])
+        assert "feedback=verdict" in capsys.readouterr().err
+
+    def test_default_feedback_is_passed_when_the_planner_knows_it(self, tmp_path, capsys,
+                                                                  planner_stub):
+        stub = planner_stub(RecordingPlanner)
+        assert main(["eval", "--briefs", str(briefs_dir(tmp_path, 1)), "--llm", "fixture",
+                     "--loop", "off", "--out", str(tmp_path / "e.json"),
+                     "--csv", str(tmp_path / "e.csv")]) == EXIT_OK
+        assert stub.created == [{"max_repairs": 0, "solver_time_limit_s": 10.0, "explain": False,
+                                 "feedback_mode": "core", "max_answer_retries": 2}]
+
+    def test_legacy_planner_refuses_the_ablation_arm_but_runs_the_default(
+            self, tmp_path, capsys, planner_stub):
+        stub = planner_stub(LegacyPlanner)
+        briefs = briefs_dir(tmp_path, 1)
+        code = main(["eval", "--briefs", str(briefs), "--llm", "fixture", "--feedback", "verdict",
+                     "--out", str(tmp_path / "e.json"), "--csv", str(tmp_path / "e.csv")])
+        assert code == EXIT_ERROR and stub.created == []
+        assert "feedback verdict is not supported" in capsys.readouterr().err
+        code = main(["eval", "--briefs", str(briefs), "--llm", "fixture",
+                     "--max-answer-retries", "1",
+                     "--out", str(tmp_path / "e.json"), "--csv", str(tmp_path / "e.csv")])
+        assert code == EXIT_ERROR and "max-answer-retries is not supported" in capsys.readouterr().err
+        code = main(["eval", "--briefs", str(briefs), "--llm", "fixture", "--loop", "on",
+                     "--out", str(tmp_path / "e.json"), "--csv", str(tmp_path / "e.csv")])
+        assert code == EXIT_OK and len(stub.created) == 1
+        assert planner_options("core", None) == {}
+
+    def test_rows_are_flushed_to_the_csv_as_they_complete(self, tmp_path, capsys, planner_stub):
+        stub = planner_stub(RecordingPlanner)
+        stub.trip = (3, ValueError("worker crashed on the third run"))
+        out_csv = tmp_path / "e.csv"
+        code = main(["eval", "--briefs", str(briefs_dir(tmp_path, 2)), "--llm", "fixture",
+                     "--loop", "both", "--out", str(tmp_path / "e.json"), "--csv", str(out_csv)])
+        assert code == EXIT_ERROR
+        assert "worker crashed" in capsys.readouterr().err
+        rows = list(csv.DictReader(out_csv.open(encoding="utf-8")))
+        assert [(r["brief"], r["condition"]) for r in rows] == [
+            ("zz_brief_0", "loop_off"), ("zz_brief_0", "loop_on")]   # two finished, then the crash
+        assert not (tmp_path / "e.json").exists()   # the report needs every row
+
+    def test_workers_run_in_parallel_and_keep_job_order(self, tmp_path, capsys, monkeypatch):
+        """Four jobs that each sleep 0.2 s finish in well under 0.8 s on 4 workers, and the
+        report lists them in brief / condition / repeat order whatever order they finished."""
+        active, peak, lock = [0], [0], threading.Lock()
+
+        class Slow(RecordingPlanner):
+            def plan(self, brief, *, brief_id=None):
+                with lock:
+                    active[0] += 1
+                    peak[0] = max(peak[0], active[0])
+                time.sleep(0.2)
+                with lock:
+                    active[0] -= 1
+                return FAILED_RESULT
+
+        Slow.created = []
+        monkeypatch.setattr(cli_module, "Planner", Slow)
+        t0 = time.perf_counter()
+        code = main(["eval", "--briefs", str(briefs_dir(tmp_path, 2)), "--llm", "fixture",
+                     "--workers", "4", "--out", str(tmp_path / "e.json"),
+                     "--csv", str(tmp_path / "e.csv")])
+        elapsed = time.perf_counter() - t0
+        assert code == EXIT_OK and peak[0] >= 2 and elapsed < 0.7
+        report = json.loads((tmp_path / "e.json").read_text())
+        assert [(r["brief"], r["condition"], r["repeat"]) for r in report["rows"]] == [
+            ("zz_brief_0", "loop_off", 1), ("zz_brief_0", "loop_on", 1),
+            ("zz_brief_1", "loop_off", 1), ("zz_brief_1", "loop_on", 1)]
+        assert report["workers"] == 4
+        err = capsys.readouterr().err
+        assert err.count("FAIL llm_error") == 4 and "workers=4" in err
+
+
+# --------------------------------------------------------------------------- scripts/llm_schedule_check.py
+def load_schedule_check():
+    spec = importlib.util.spec_from_file_location("llm_schedule_check", SCHEDULE_CHECK_SCRIPT)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class ScheduleStub:
+    """Scripted answers to the direct-scheduling prompt: dicts are validated into Schedules,
+    exceptions are raised."""
+
+    name = "stub"
+
+    def __init__(self, answers: list[Any]):
+        self.answers = list(answers)
+        self.prompts: list[str] = []
+
+    def complete_json(self, *, role, system, user, schema, key=None, attempt=1, variant=None,
+                      max_attempts=2):
+        self.prompts.append(user)
+        answer = self.answers.pop(0)
+        if isinstance(answer, Exception):
+            raise answer
+        return validate_into(schema, answer), Usage(model="stub-model", input_tokens=50,
+                                                    output_tokens=20, latency_s=0.1)
+
+
+def entries(*spans: tuple[str, str, int, int]) -> list[dict[str, Any]]:
+    return [{"task": t, "robot": r, "start_h": s, "end_h": e} for t, r, s, e in spans]
+
+
+class TestLlmScheduleCheck:
+    def test_recomputes_the_makespan_and_counts_clean_worse_answers(self, tmp_path, monkeypatch,
+                                                                    capsys):
+        module = load_schedule_check()
+        plan_path = tmp_path / "demo.plan.json"
+        plan_path.write_text(AT_DEPOT.model_dump_json())
+        answers = [
+            # 1: valid entries, absurd claimed makespan -> recomputed to 18, equal to the solver
+            {"entries": entries(("T1", "EX1", 0, 6), ("T2", "EX1", 6, 18)), "makespan_h": 999,
+             "status": "feasible"},
+            # 2: clean but 4 h worse than the solver's optimum
+            {"entries": entries(("T1", "EX1", 0, 6), ("T2", "EX1", 10, 22)), "makespan_h": 22,
+             "status": "feasible"},
+            # 3: T2 overlaps T1 on EX1 (and in zone Z1) and starts before T1 ends
+            {"entries": entries(("T1", "EX1", 0, 6), ("T2", "EX1", 3, 15)), "makespan_h": 15,
+             "status": "feasible"},
+            # 4: the model failed to answer at all
+            LLMError("structure (m): APITimeoutError"),
+        ]
+        stub = ScheduleStub(answers)
+        monkeypatch.setattr(module, "make_client", lambda kind=None: stub)
+        out = tmp_path / "check.json"
+        code = module.main([str(plan_path), "--repeat", "4", "--out", str(out)])
+        assert code == 0
+        report = json.loads(out.read_text())
+        rows = report["rows"]
+        assert [r["model_makespan_h"] for r in rows] == [18, 22, 15, None]
+        assert [r["claimed_makespan_h"] for r in rows] == [999, 22, 15, None]
+        assert [r["violations"] for r in rows] == [0, 0, 3, None]
+        assert rows[2]["conflicts"] == ["precedence:T1->T2", "robot:EX1", "zone:Z1"]
+        assert [r["travel_only"] for r in rows] == [False, False, False, None]
+        assert "makespan" not in rows[0]["conflicts"]          # the claim is not a violation
+        assert rows[3]["llm_error"].startswith("LLMError") and rows[3]["conflicts"] == []
+        assert all(r["solver_makespan_h"] == 18 and r["solver_status"] == "optimal" for r in rows)
+        assert [r["makespan_gap_h"] for r in rows] == [0, 4, -3, None]
+        assert all(r["plan"] == "demo" and r["model"] == "stub-model" for r in rows[:3])
+        summary = report["summary"]
+        assert (summary["runs"], summary["answered"], summary["violating"]) == (4, 3, 1)
+        assert summary["violation_rate"] == pytest.approx(1 / 3)
+        assert summary["travel_only_violating"] == 0
+        assert summary["violation_rate_excluding_travel"] == pytest.approx(1 / 3)
+        assert "travel" in summary["rules_told_to_the_model"]
+        assert summary["conflict_kinds"] == {"precedence": 1, "robot": 1, "zone": 1}
+        assert summary["makespan_claim_mismatches"] == 1
+        assert (summary["clean"], summary["clean_equal_makespan"], summary["clean_worse_makespan"],
+                summary["clean_better_makespan"]) == (2, 1, 1, 0)
+        assert summary["clean_worse_makespan_rate"] == 0.5
+        assert (summary["makespan_gap_mean_h"], summary["makespan_gap_max_h"]) == (2.0, 4)
+        assert summary["makespan_gap_mean_pct"] == pytest.approx(100 * 2 / 18, abs=0.01)
+        assert summary["models"] == ["stub-model"]
+        # the CSV next to the JSON has one row per run
+        csv_rows = list(csv.DictReader((tmp_path / "check.csv").open(encoding="utf-8")))
+        assert len(csv_rows) == 4 and list(csv_rows[0]) == list(module.CSV_FIELDS)
+        assert csv_rows[2]["conflicts"] == "precedence:T1->T2;robot:EX1;zone:Z1"
+        assert csv_rows[0]["claimed_makespan_h"] == "999" and csv_rows[0]["model_makespan_h"] == "18"
+        printed = capsys.readouterr().out
+        assert "makespan 18 (claimed 999) vs solver 18 optimal" in printed
+        assert printed.rstrip().endswith(f"-> {out}, {tmp_path / 'check.csv'}")
+        # the prompt carries the requirements, the geometry and the graph, never the brief text
+        assert "TASKS:" in stub.prompts[0] and "source_brief" not in stub.prompts[0]
+        assert "DEPOT: (20, 1)\nZONE CENTRES: Z1 at (20, 1)" in stub.prompts[0]
+        assert "whole hours apart" in module.SYSTEM and "0.5 Wh" in module.SYSTEM
+
+    def test_travel_only_answers_are_counted_apart(self, tmp_path, monkeypatch):
+        """Z2 is 12 cells from Z1, an hour at 12 cells/h. An answer that puts T2 right after T1
+        breaks only the travel rule: it is a violation (the model was told the rule) but the
+        summary sets it apart from scheduling defects proper."""
+        module = load_schedule_check()
+        site = Site(zones=[Zone(id="Z1", center=(20, 1)), Zone(id="Z2", center=(20, 13))])
+        graph = GRAPH2.model_copy(update={"tasks": [
+            GRAPH2.tasks[0], GRAPH2.tasks[1].model_copy(update={"zone": "Z2"})]})
+        schedule = Schedule(entries=[ScheduleEntry(task="T1", robot="EX1", start_h=0, end_h=6),
+                                     ScheduleEntry(task="T2", robot="EX1", start_h=7, end_h=19)],
+                            makespan_h=19, status="optimal")
+        plan = PlanResult(requirements=REQ.model_copy(update={"site": site}), task_graph=graph,
+                          schedule=schedule, success=True)
+        assert check_schedule(plan.requirements, graph, schedule, module.CHECK_OPTS) == []
+        plan_path = tmp_path / "two.plan.json"
+        plan_path.write_text(plan.model_dump_json())
+        stub = ScheduleStub([
+            {"entries": entries(("T1", "EX1", 0, 6), ("T2", "EX1", 6, 18)), "makespan_h": 18,
+             "status": "feasible"},                                   # no hour for the drive
+            {"entries": entries(("T1", "EX1", 0, 6), ("T2", "EX1", 7, 19)), "makespan_h": 19,
+             "status": "feasible"},                                   # the solver's own answer
+        ])
+        monkeypatch.setattr(module, "make_client", lambda kind=None: stub)
+        out = tmp_path / "check.json"
+        assert module.main([str(plan_path), "--repeat", "2", "--out", str(out)]) == 0
+        report = json.loads(out.read_text())
+        rows = report["rows"]
+        assert [r["conflicts"] for r in rows] == [["robot:EX1"], []]
+        assert [r["travel_only"] for r in rows] == [True, False]
+        summary = report["summary"]
+        assert (summary["violating"], summary["travel_only_violating"]) == (1, 1)
+        assert summary["violation_rate"] == 0.5 and summary["violation_rate_excluding_travel"] == 0.0
+        assert "Z2 at (20, 13)" in stub.prompts[0]
+        assert module.travel_only(["robot:EX1"], Schedule(
+            entries=[ScheduleEntry(task="T1", robot="EX1", start_h=0, end_h=6),
+                     ScheduleEntry(task="T2", robot="EX1", start_h=3, end_h=15)],
+            makespan_h=15, status="feasible")) is False                # a double booking
+        assert module.travel_only([], schedule) is False
+
+    def test_skips_unverified_plans_and_honours_the_csv_flag(self, tmp_path, monkeypatch, capsys):
+        module = load_schedule_check()
+        unverified = tmp_path / "no.plan.json"
+        unverified.write_text(PlanResult(requirements=REQ).model_dump_json())
+        broken = SCHEDULE.model_copy(update={"entries": SCHEDULE.entries[:1]})
+        edited = tmp_path / "edited.plan.json"
+        edited.write_text(VERIFIED.model_copy(update={"schedule": broken}).model_dump_json())
+        stub = ScheduleStub([])
+        monkeypatch.setattr(module, "make_client", lambda kind=None: stub)
+        out, out_csv = tmp_path / "r.json", tmp_path / "rows.csv"
+        assert module.main([str(unverified), str(edited), "--out", str(out),
+                            "--csv", str(out_csv)]) == 0
+        assert stub.prompts == []
+        report = json.loads(out.read_text())
+        assert report["rows"] == [] and report["summary"]["runs"] == 0
+        assert report["summary"]["violation_rate"] is None
+        assert out_csv.read_text().splitlines() == [",".join(module.CSV_FIELDS)]
+        err = capsys.readouterr().err
+        assert "not a verified plan" in err and "fails re-verification" in err
+
+    def test_models_arm(self, tmp_path, monkeypatch):
+        module = load_schedule_check()
+        assert module.parse_models(None) == {} and module.parse_models("  ") == {}
+        assert module.parse_models("nvidia/x") == {"taskgraph": "nvidia/x"}
+        assert module.parse_models("repair=a, structure = b,") == {"repair": "a", "structure": "b"}
+        with pytest.raises(ValueError, match="unknown role"):
+            module.parse_models("scheduler=x")
+        with pytest.raises(ValueError, match="no model id"):
+            module.parse_models("repair=")
+        # the arm is applied to the environment before the client is built
+        monkeypatch.setenv("MOONWRIGHT_MODEL_TASKGRAPH", "placeholder")
+        seen: dict[str, str] = {}
+
+        def fake_client(kind=None):
+            seen["model"] = os.environ["MOONWRIGHT_MODEL_TASKGRAPH"]
+            return ScheduleStub([])
+
+        monkeypatch.setattr(module, "make_client", fake_client)
+        out = tmp_path / "arm.json"
+        plan_path = tmp_path / "demo.plan.json"
+        plan_path.write_text(PlanResult(requirements=REQ).model_dump_json())
+        assert module.main([str(plan_path), "--models", "nvidia/super", "--out", str(out)]) == 0
+        assert seen["model"] == "nvidia/super"
+        with pytest.raises(SystemExit):
+            module.main([str(plan_path), "--models", "bogus=x", "--out", str(out)])
+        with pytest.raises(SystemExit):
+            module.main([str(plan_path), "--repeat", "0", "--out", str(out)])
 
 
 # --------------------------------------------------------------------------- CLI commands

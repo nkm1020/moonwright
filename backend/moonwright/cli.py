@@ -10,21 +10,26 @@ from __future__ import annotations
 
 import argparse
 import csv
+import inspect
 import math
+import os
 import statistics
 import sys
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Final
+from typing import Any, Final, Self
 
 from pydantic import BaseModel, Field
 
-from moonwright.api import clean_brief_id, list_briefs, thin_frames
+from moonwright.api import ExampleBrief, clean_brief_id, list_briefs, thin_frames
 from moonwright.llm.base import LLMClient, LLMError
 from moonwright.llm.factory import KINDS, make_client
+from moonwright.llm.tokenfactory import THINKING_ENV_VAR
 from moonwright.pipeline.loop import Planner, brief_key
+from moonwright.pipeline.rates import apply_rates
 from moonwright.pipeline.schedule import check_schedule
 from moonwright.schemas import (
     Event,
@@ -34,6 +39,7 @@ from moonwright.schemas import (
     Requirements,
     Role,
     Schedule,
+    TaskGraph,
     Usage,
 )
 from moonwright.sim.montecarlo import (
@@ -56,6 +62,11 @@ CONDITIONS: Final[dict[str, tuple[str, ...]]] = {
     "on": ("loop_on",),
     "both": ("loop_off", "loop_on"),
 }
+FEEDBACK_MODES: Final = ("core", "verdict")   # what a repair round is told (eval ablation arm)
+DEFAULT_FEEDBACK: Final = "core"
+MAX_REPAIRS_LIMIT: Final = 10                 # same bound as the API request models
+MAX_ANSWER_RETRIES_LIMIT: Final = 5
+WILSON_Z: Final = 1.959964                    # two-sided 95%
 
 
 def say(message: str) -> None:
@@ -277,6 +288,9 @@ def format_event(event: Event) -> str:
 
 
 def format_replan(index: int, record: ReplanRecord) -> str:
+    """One report line per replan: the event, the makespan before and after, and how the
+    remaining work was rescheduled (solver-first, or escalated to Nemotron) as the closing
+    ``replan`` step of the trace tells it."""
     after = record.after
     if after.success and after.schedule is not None:
         outcome = (
@@ -287,9 +301,14 @@ def format_replan(index: int, record: ReplanRecord) -> str:
         outcome = f"no feasible replan ({after.failure.kind}: {', '.join(after.failure.conflicts) or '-'})"
     else:
         outcome = "no feasible replan"
+    closing = after.steps[-1] if after.steps and after.steps[-1].stage == "replan" else None
+    if closing is not None and closing.message:
+        how = closing.message.split("; ", 1)[0]   # "CP-SAT rescheduled ..." / "infeasible (...) -> escalated ..."
+    else:
+        how = "escalated to Nemotron" if record.escalated else "solver-only, Nemotron not asked"
     return (
         f"#{index} at t={record.t_h:.2f}h after {record.event.kind} {record.event.robot or ''}: "
-        f"{len(record.remaining_tasks)} tasks remaining; {outcome}"
+        f"{len(record.remaining_tasks)} tasks remaining; {outcome}; {how}"
     )
 
 
@@ -364,6 +383,17 @@ def cmd_montecarlo(args: argparse.Namespace) -> int:
 
 # --------------------------------------------------------------------------- eval
 class EvalRow(BaseModel):
+    """One planning run of the eval (docs/plan-phase3.md item 3).
+
+    ``models`` are the ``Usage.model`` ids of the task-graph / repair steps (unique, in order);
+    ``answer_valid`` says whether the *first* task-graph answer passed the schema;
+    ``first_try_feasible`` whether the plan was verified without a repair round (a schema
+    re-ask is not a repair); ``first_*`` total the first valid graph and ``final_*`` the final
+    one (scheduled, or the last one tried), so ``scope_drift_pct`` = 100 x (final - first) /
+    first energy says how much work the repairs re-scoped (negative = cut); ``thinking`` is the
+    ``MOONWRIGHT_THINKING`` setting the run used.
+    """
+
     brief: str
     condition: str
     repeat: int
@@ -376,6 +406,15 @@ class EvalRow(BaseModel):
     output_tokens: int
     failure_kind: str | None = None
     conflicts: list[str] = Field(default_factory=list)
+    models: str = ""
+    answer_valid: bool = False
+    first_try_feasible: bool = False
+    first_duration_h: int | None = None
+    first_energy_wh: float | None = None
+    final_duration_h: int | None = None
+    final_energy_wh: float | None = None
+    scope_drift_pct: float | None = None
+    thinking: str = "auto"
 
 
 class ConditionSummary(BaseModel):
@@ -388,6 +427,12 @@ class ConditionSummary(BaseModel):
     mean_latency_s: float
     mean_input_tokens: float
     mean_output_tokens: float
+    feasible_ci_low: float = 0.0     # Wilson 95% interval of feasible_rate
+    feasible_ci_high: float = 1.0
+    first_try_feasible: int = 0
+    first_try_rate: float = 0.0
+    answer_valid_rate: float = 0.0
+    mean_scope_drift_pct: float | None = None   # over runs with a first and a final graph
 
 
 class EvalReport(BaseModel):
@@ -398,10 +443,84 @@ class EvalReport(BaseModel):
     repeat: int
     summary: list[ConditionSummary]
     rows: list[EvalRow]
+    max_repairs: int = 3
+    feedback: str = DEFAULT_FEEDBACK
+    max_answer_retries: int | None = None
+    workers: int = 1
+    thinking: str = "auto"
 
 
-def eval_row(brief_id: str, condition: str, repeat: int, result: PlanResult, wall_s: float) -> EvalRow:
+class GraphCapture:
+    """LLMClient wrapper that keeps every task graph a run's model calls returned (validated
+    answers only, in order), so the eval can compare the first valid graph with the final one.
+    Each graph is grounded the way the planner grounds a fresh plan's answer
+    (:func:`~moonwright.pipeline.rates.apply_rates`, no remaining graph), so ``first_*`` and
+    ``final_*`` are both post-rate-model figures and ``scope_drift_pct`` measures what the
+    repair rounds re-scoped, not what the rate table recomputed. One per run: the wrapped
+    client is shared between the eval's worker threads."""
+
+    def __init__(self, inner: LLMClient):
+        self.inner = inner
+        self.name = inner.name
+        self.graphs: list[TaskGraph] = []
+
+    def complete_json(
+        self,
+        *,
+        role: Role,
+        system: str,
+        user: str,
+        schema: type,
+        key: str | None = None,
+        attempt: int = 1,
+        variant: str | None = None,
+        max_attempts: int = 2,
+    ):
+        obj, usage = self.inner.complete_json(
+            role=role, system=system, user=user, schema=schema,
+            key=key, attempt=attempt, variant=variant, max_attempts=max_attempts,
+        )
+        if isinstance(obj, TaskGraph):
+            self.graphs.append(apply_rates(obj)[0])
+        return obj, usage
+
+
+def graph_totals(graph: TaskGraph | None) -> tuple[int | None, float | None]:
+    """``(sum of duration_h, sum of energy_wh)`` of a graph, ``(None, None)`` without one."""
+    if graph is None:
+        return None, None
+    return (sum(t.duration_h for t in graph.tasks),
+            round(sum(t.energy_wh for t in graph.tasks), 3))
+
+
+def scope_drift(first_energy_wh: float | None, final_energy_wh: float | None) -> float | None:
+    """Signed percentage change of total energy from the first valid graph to the final one
+    (2 dp); None without both graphs or when the first graph carries no energy."""
+    if first_energy_wh is None or final_energy_wh is None or first_energy_wh <= 0:
+        return None
+    return round(100.0 * (final_energy_wh - first_energy_wh) / first_energy_wh, 2)
+
+
+def thinking_setting() -> str:
+    """``MOONWRIGHT_THINKING`` as the eval records it: on | off | auto (unset or blank = auto)."""
+    return os.environ.get(THINKING_ENV_VAR, "").strip().lower() or "auto"
+
+
+def eval_row(
+    brief_id: str,
+    condition: str,
+    repeat: int,
+    result: PlanResult,
+    wall_s: float,
+    *,
+    first_graph: TaskGraph | None = None,
+    thinking: str = "auto",
+) -> EvalRow:
     usage: Usage = result.total_usage()
+    graph_steps = [s for s in result.steps if s.stage in ("taskgraph", "repair")]
+    models = dict.fromkeys(s.usage.model for s in graph_steps if s.usage and s.usage.model)
+    first_duration, first_energy = graph_totals(first_graph)
+    final_duration, final_energy = graph_totals(result.task_graph)
     return EvalRow(
         brief=brief_id,
         condition=condition,
@@ -415,27 +534,61 @@ def eval_row(brief_id: str, condition: str, repeat: int, result: PlanResult, wal
         output_tokens=usage.output_tokens,
         failure_kind=result.failure.kind if result.failure else None,
         conflicts=list(result.failure.conflicts) if result.failure else [],
+        models=",".join(models),
+        answer_valid=bool(graph_steps) and graph_steps[0].ok,
+        first_try_feasible=result.success and not any(s.stage == "repair" for s in result.steps),
+        first_duration_h=first_duration,
+        first_energy_wh=first_energy,
+        final_duration_h=final_duration,
+        final_energy_wh=final_energy,
+        scope_drift_pct=scope_drift(first_energy, final_energy),
+        thinking=thinking,
     )
 
 
+def wilson_interval(successes: int, n: int, z: float = WILSON_Z) -> tuple[float, float]:
+    """Wilson score interval for a proportion (95% with the default ``z``), clipped to [0, 1];
+    ``(0, 1)`` when there is no data. Unlike the normal approximation it never collapses to a
+    point at 0/n or n/n, which is what a 3-repeat eval table needs."""
+    if n <= 0:
+        return 0.0, 1.0
+    p = successes / n
+    z2 = z * z
+    denominator = 1.0 + z2 / n
+    centre = (p + z2 / (2 * n)) / denominator
+    half = z * math.sqrt(p * (1.0 - p) / n + z2 / (4 * n * n)) / denominator
+    return max(0.0, centre - half), min(1.0, centre + half)
+
+
 def summarise(rows: Sequence[EvalRow]) -> list[ConditionSummary]:
-    """Per-condition aggregates in first-seen order; makespan is averaged over feasible runs."""
+    """Per-condition aggregates in first-seen order; makespan is averaged over feasible runs,
+    scope drift over runs that have one, the CI is :func:`wilson_interval` of the feasible rate."""
     out: list[ConditionSummary] = []
     for condition in dict.fromkeys(r.condition for r in rows):
         group = [r for r in rows if r.condition == condition]
+        n = len(group)
         makespans = [r.makespan_h for r in group if r.success and r.makespan_h is not None]
+        drifts = [r.scope_drift_pct for r in group if r.scope_drift_pct is not None]
         feasible = sum(r.success for r in group)
+        first_try = sum(r.first_try_feasible for r in group)
+        low, high = wilson_interval(feasible, n)
         out.append(
             ConditionSummary(
                 condition=condition,
-                runs=len(group),
+                runs=n,
                 feasible=feasible,
-                feasible_rate=feasible / len(group),
+                feasible_rate=feasible / n,
                 mean_repairs=statistics.fmean(r.repairs for r in group),
                 mean_makespan_h=statistics.fmean(makespans) if makespans else None,
                 mean_latency_s=statistics.fmean(r.latency_s for r in group),
                 mean_input_tokens=statistics.fmean(r.input_tokens for r in group),
                 mean_output_tokens=statistics.fmean(r.output_tokens for r in group),
+                feasible_ci_low=round(low, 4),
+                feasible_ci_high=round(high, 4),
+                first_try_feasible=first_try,
+                first_try_rate=first_try / n,
+                answer_valid_rate=sum(r.answer_valid for r in group) / n,
+                mean_scope_drift_pct=round(statistics.fmean(drifts), 2) if drifts else None,
             )
         )
     return out
@@ -443,29 +596,123 @@ def summarise(rows: Sequence[EvalRow]) -> list[ConditionSummary]:
 
 def format_summary(summary: Sequence[ConditionSummary]) -> str:
     header = (
-        f"{'condition':<10}{'runs':>6}{'feasible':>10}{'repairs':>9}"
-        f"{'makespan':>10}{'latency':>9}{'tok in/out':>14}"
+        f"{'condition':<10}{'runs':>6}{'feasible':>10}{'95% CI':>12}{'1st-try':>9}"
+        f"{'repairs':>9}{'makespan':>10}{'drift':>8}{'latency':>9}{'tok in/out':>14}"
     )
     lines = [header]
     for s in summary:
         makespan = f"{s.mean_makespan_h:.1f}h" if s.mean_makespan_h is not None else "-"
+        ci = f"{s.feasible_ci_low:.0%}-{s.feasible_ci_high:.0%}"
+        drift = f"{s.mean_scope_drift_pct:+.0f}%" if s.mean_scope_drift_pct is not None else "-"
         tokens = f"{s.mean_input_tokens:.0f}/{s.mean_output_tokens:.0f}"
         lines.append(
-            f"{s.condition:<10}{s.runs:>6}{s.feasible_rate:>10.0%}{s.mean_repairs:>9.2f}"
-            f"{makespan:>10}{s.mean_latency_s:>8.2f}s{tokens:>14}"
+            f"{s.condition:<10}{s.runs:>6}{s.feasible_rate:>10.0%}{ci:>12}{s.first_try_rate:>9.0%}"
+            f"{s.mean_repairs:>9.2f}{makespan:>10}{drift:>8}{s.mean_latency_s:>8.2f}s{tokens:>14}"
         )
     return "\n".join(lines)
 
 
+CSV_FIELDS: Final = tuple(EvalRow.model_fields)
+
+
+def csv_record(row: EvalRow) -> dict[str, Any]:
+    record = row.model_dump()
+    record["conflicts"] = ";".join(row.conflicts)
+    return record
+
+
+class CsvSink:
+    """``eval.csv`` written one row at a time: the header on open, every row appended and
+    flushed the moment it arrives, so a run killed half-way keeps the rows it finished."""
+
+    def __init__(self, path: Path):
+        self.path = path
+        self._fh = None
+        self._writer: csv.DictWriter | None = None
+
+    def __enter__(self) -> Self:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._fh = self.path.open("w", newline="", encoding="utf-8")
+        self._writer = csv.DictWriter(self._fh, fieldnames=list(CSV_FIELDS))
+        self._writer.writeheader()
+        self._fh.flush()
+        return self
+
+    def add(self, row: EvalRow) -> None:
+        assert self._writer is not None and self._fh is not None
+        self._writer.writerow(csv_record(row))
+        self._fh.flush()
+
+    def __exit__(self, *exc: object) -> None:
+        if self._fh is not None:
+            self._fh.close()
+
+
 def write_csv(path: Path, rows: Sequence[EvalRow]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", newline="", encoding="utf-8") as fh:
-        writer = csv.DictWriter(fh, fieldnames=list(EvalRow.model_fields))
-        writer.writeheader()
+    with CsvSink(path) as sink:
         for row in rows:
-            record = row.model_dump()
-            record["conflicts"] = ";".join(row.conflicts)
-            writer.writerow(record)
+            sink.add(row)
+
+
+def planner_options(feedback: str, max_answer_retries: int | None) -> dict[str, Any]:
+    """Keyword arguments for :class:`Planner` from ``--feedback`` / ``--max-answer-retries``.
+
+    Only options this build's ``Planner`` accepts are passed (``feedback_mode`` and
+    ``max_answer_retries`` land with the repair-loop work); asking for a value the planner
+    cannot honour is an input error rather than a silently different experiment.
+    """
+    params = inspect.signature(Planner.__init__).parameters
+    options: dict[str, Any] = {}
+    if "feedback_mode" in params:
+        options["feedback_mode"] = feedback
+    elif feedback != DEFAULT_FEEDBACK:
+        raise ValueError(
+            f"--feedback {feedback} is not supported by this Planner (no feedback_mode option)"
+        )
+    if max_answer_retries is not None:
+        if "max_answer_retries" not in params:
+            raise ValueError("--max-answer-retries is not supported by this Planner")
+        options["max_answer_retries"] = max_answer_retries
+    return options
+
+
+EvalJob = tuple[ExampleBrief, str, int]
+
+
+def run_eval_jobs(
+    jobs: Sequence[EvalJob],
+    run: Callable[[ExampleBrief, str, int], EvalRow],
+    *,
+    workers: int,
+    csv_path: Path,
+    report: Callable[[EvalRow], None],
+) -> list[EvalRow]:
+    """Run every ``(brief, condition, repeat)`` job, ``workers`` at a time, appending each row
+    to ``csv_path`` and reporting it the moment it completes (so a killed run keeps the rows
+    it finished, in completion order); the rows come back in job order whatever order they
+    finished in. An interrupt cancels the jobs not yet started."""
+    done: dict[int, EvalRow] = {}
+    with CsvSink(csv_path) as sink, ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(run, *job): i for i, job in enumerate(jobs)}
+        try:
+            for future in as_completed(futures):
+                row = future.result()
+                done[futures[future]] = row
+                sink.add(row)
+                report(row)
+        except BaseException:
+            for future in futures:
+                future.cancel()
+            raise
+    return [done[i] for i in range(len(jobs))]
+
+
+def report_row(row: EvalRow) -> None:
+    verdict = f"makespan {row.makespan_h}h" if row.success else f"FAIL {row.failure_kind}"
+    say(
+        f"  {row.brief:<16} {row.condition:<8} #{row.repeat} {verdict}, "
+        f"{row.repairs} repair(s), {row.latency_s:.1f}s"
+    )
 
 
 def cmd_eval(args: argparse.Namespace) -> int:
@@ -473,32 +720,37 @@ def cmd_eval(args: argparse.Namespace) -> int:
     if not briefs:
         raise ValueError(f"no briefs (*.md, *.txt) found in {args.briefs}")
     conditions = CONDITIONS[args.loop]
+    options = planner_options(args.feedback, args.max_answer_retries)
     client = make_client(args.llm)
+    thinking = thinking_setting()
+    jobs: list[EvalJob] = [
+        (brief, condition, repeat)
+        for brief in briefs
+        for condition in conditions
+        for repeat in range(1, args.repeat + 1)
+    ]
     say(
         f"eval: {len(briefs)} brief(s) x {len(conditions)} condition(s) x {args.repeat} repeat(s), "
-        f"llm={client.name}"
+        f"llm={client.name} workers={args.workers} feedback={args.feedback} thinking={thinking}"
     )
-    rows: list[EvalRow] = []
-    for brief in briefs:
-        for condition in conditions:
-            max_repairs = args.max_repairs if condition == "loop_on" else 0
-            for repeat in range(1, args.repeat + 1):
-                planner = Planner(
-                    client,
-                    max_repairs=max_repairs,
-                    solver_time_limit_s=args.time_limit,
-                    explain=args.explain,
-                )
-                t0 = time.perf_counter()
-                result = planner.plan(brief.text, brief_id=brief.id)
-                row = eval_row(brief.id, condition, repeat, result, time.perf_counter() - t0)
-                rows.append(row)
-                verdict = f"makespan {row.makespan_h}h" if row.success else f"FAIL {row.failure_kind}"
-                say(
-                    f"  {brief.id:<16} {condition:<8} #{repeat} {verdict}, "
-                    f"{row.repairs} repair(s), {row.latency_s:.1f}s"
-                )
 
+    def run(brief: ExampleBrief, condition: str, repeat: int) -> EvalRow:
+        capture = GraphCapture(client)
+        planner = Planner(
+            capture,
+            max_repairs=args.max_repairs if condition == "loop_on" else 0,
+            solver_time_limit_s=args.time_limit,
+            explain=args.explain,
+            **options,
+        )
+        t0 = time.perf_counter()
+        result = planner.plan(brief.text_markdown, brief_id=brief.id)
+        return eval_row(
+            brief.id, condition, repeat, result, time.perf_counter() - t0,
+            first_graph=capture.graphs[0] if capture.graphs else None, thinking=thinking,
+        )
+
+    rows = run_eval_jobs(jobs, run, workers=args.workers, csv_path=args.csv, report=report_row)
     summary = summarise(rows)
     print(format_summary(summary))
     report = EvalReport(
@@ -509,9 +761,13 @@ def cmd_eval(args: argparse.Namespace) -> int:
         repeat=args.repeat,
         summary=summary,
         rows=rows,
+        max_repairs=args.max_repairs,
+        feedback=args.feedback,
+        max_answer_retries=args.max_answer_retries,
+        workers=args.workers,
+        thinking=thinking,
     )
     write_json(args.out, report)
-    write_csv(args.csv, rows)
     print(f"-> {args.out}, {args.csv}")
     return EXIT_OK
 
@@ -547,8 +803,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("brief", help="path to a brief (.md/.txt) or '-' for stdin")
     p.add_argument("--brief-id", help="stable id for fixtures and output names (default: file stem)")
     _add_common(p)
-    p.add_argument("--max-repairs", type=int_in_range(0), default=3,
-                   help="LLM repair rounds after a failure")
+    p.add_argument("--max-repairs", type=int_in_range(0, MAX_REPAIRS_LIMIT), default=3,
+                   help=f"LLM repair rounds after a failure, 0..{MAX_REPAIRS_LIMIT}")
     p.add_argument("--out", type=Path, help="PlanResult JSON path (default out/<brief_id>.plan.json)")
     p.add_argument("--no-explain", action="store_true", help="skip the LLM explanation stage")
     p.add_argument("--quiet", "-q", action="store_true", help="only print the final summary line")
@@ -563,8 +819,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dt", type=positive_float, default=DEFAULT_DT_H,
                    help="simulation step in hours")
     p.add_argument("--max-replans", type=int_in_range(0, 5), default=2, help="0..5")
-    p.add_argument("--max-repairs", type=int_in_range(0), default=3,
-                   help="LLM repair rounds per replan")
+    p.add_argument("--max-repairs", type=int_in_range(0, MAX_REPAIRS_LIMIT), default=3,
+                   help=f"LLM repair rounds per replan, 0..{MAX_REPAIRS_LIMIT}")
     p.add_argument("--brief-id", help="fixture key for offline replans (default: plan file stem)")
     _add_common(p)
     p.add_argument("--out", type=Path, help="SimResult JSON path (default out/<brief_id>.sim.json)")
@@ -593,8 +849,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--llm", choices=KINDS, default=None,
         help="replan through this LLM client instead of the solver-only replanner (default)",
     )
-    p.add_argument("--max-repairs", type=int_in_range(0), default=3,
-                   help="LLM repair rounds per replan (only with --llm)")
+    p.add_argument("--max-repairs", type=int_in_range(0, MAX_REPAIRS_LIMIT), default=3,
+                   help=f"LLM repair rounds per replan, 0..{MAX_REPAIRS_LIMIT} (only with --llm)")
     p.add_argument("--time-limit", type=positive_float, default=10.0, metavar="S",
                    help="CP-SAT time limit per replan in seconds")
     p.add_argument("--out", type=Path, help="MonteCarloResult JSON path (default out/<stem>.mc.json)")
@@ -606,8 +862,23 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--loop", choices=sorted(CONDITIONS), default="both",
                    help="repair loop off (max_repairs 0), on, or both")
     _add_common(p)
-    p.add_argument("--max-repairs", type=int_in_range(0), default=3,
-                   help="repair rounds for the loop-on condition")
+    p.add_argument("--max-repairs", type=int_in_range(0, MAX_REPAIRS_LIMIT), default=3,
+                   help=f"repair rounds for the loop-on condition, 0..{MAX_REPAIRS_LIMIT}")
+    p.add_argument(
+        "--max-answer-retries", type=int_in_range(0, MAX_ANSWER_RETRIES_LIMIT), default=None,
+        metavar="N",
+        help=f"re-asks after a schema / transport failure, 0..{MAX_ANSWER_RETRIES_LIMIT}, in "
+             "both conditions (default: the planner's own)",
+    )
+    p.add_argument(
+        "--feedback", choices=FEEDBACK_MODES, default=DEFAULT_FEEDBACK,
+        help="what a repair round is told: the minimal infeasibility core with its hints "
+             "(core) or only the verdict kind (verdict, the ablation arm)",
+    )
+    p.add_argument(
+        "--workers", type=int_in_range(1), default=1, metavar="N",
+        help="parallel runs over brief x condition x repeat; rows reach the CSV as they finish",
+    )
     p.add_argument("--explain", action="store_true", help="include the explanation stage")
     p.add_argument("--out", type=Path, default=Path("eval.json"))
     p.add_argument("--csv", type=Path, default=Path("eval.csv"))

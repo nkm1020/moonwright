@@ -1,11 +1,26 @@
-"""F2 (+F5): Requirements -> TaskGraph, and repair of a rejected graph (LLM, Nemotron Ultra)."""
+"""F2 (+F5): Requirements -> TaskGraph, and repair of a rejected graph (LLM, Nemotron Ultra).
+
+Every graph the model answers with (first graph, repair, replan) is grounded by the rate model
+before it is returned: :func:`moonwright.pipeline.rates.apply_rates` recomputes duration_h and
+energy_wh from each task's quantity and unit and keeps the model's own figures in
+``estimated_*``. The step's ``payload`` carries the rate model's advisories
+(``{"advisories": [...], "rate_model": True, "grounded": n}``); an answer that states no
+quantity at all gets :data:`~moonwright.pipeline.rates.UNGROUNDED_ADVISORY`. The graph the
+model was handed (the remaining graph of a replan, ``prior`` or ``baseline``; the previous graph
+of a repair) is passed to ``apply_rates`` as ``keep`` together with the ids of the ``locked``
+tasks (underway on a robot), so a task returned as handed over, or underway, keeps its
+*remaining* hours and Wh instead of being re-sized to its full quantity, while a task whose
+numbers the model edited is grounded from its quantity again.
+"""
 
 from __future__ import annotations
 
 import time
+from collections.abc import Collection
 
 from moonwright.llm.base import FixtureMissing, LLMClient, LLMError
 from moonwright.llm.prompts import repair_messages, replan_messages, taskgraph_messages
+from moonwright.pipeline.rates import UNGROUNDED_ADVISORY, apply_rates, is_engaged
 from moonwright.schemas import Failure, LoopStep, Requirements, TaskGraph, schema_conflict
 
 
@@ -20,6 +35,7 @@ def generate_task_graph(
     context: str | None = None,
     variant: str | None = None,
     baseline: TaskGraph | None = None,
+    locked: Collection[str] = (),
 ) -> tuple[TaskGraph | None, LoopStep]:
     """attempt=1 generates; attempt>=2 with ``prior``+``feedback`` repairs.
 
@@ -27,7 +43,8 @@ def generate_task_graph(
     itself (:func:`replan_messages`), so the model re-plans the work that is actually left
     instead of guessing it from task ids; ``context`` says what happened (what is done, which
     robot failed, time now); ``baseline`` is that remaining graph again for the repair rounds
-    of a replan. ``variant`` ("replan") selects the replan fixture offline; when that
+    of a replan, and ``locked`` the ids of its tasks that are underway on a robot (the rate
+    model leaves their numbers alone). ``variant`` ("replan") selects the replan fixture offline; when that
     fixture is missing the first attempt keeps ``prior`` as-is and a repair attempt fails with
     ``feedback`` (the solver's verdict) rather than falling back to the original run's fixtures.
 
@@ -78,7 +95,15 @@ def generate_task_graph(
             # a fixture that exists but cannot be read is as deterministic as a missing one
             message=None if getattr(e, "retryable", True) else f"offline: {e}",
         )
+    # the graph the model was handed: a replan's remaining graph (its numbers are the work
+    # still outstanding) or the graph a repair answered
+    handed = baseline if baseline is not None else prior
+    graph, advisories = apply_rates(graph, keep=handed, locked=locked)
+    if not is_engaged(graph, handed):
+        advisories = [*advisories, UNGROUNDED_ADVISORY]
+    grounded = sum(1 for t in graph.tasks if t.estimated_duration_h is not None)
     return graph, LoopStep(
         stage=stage, attempt=attempt, ok=True, duration_s=time.perf_counter() - t0, usage=usage,
         message=f"{len(graph.tasks)} tasks",
+        payload={"advisories": advisories, "rate_model": True, "grounded": grounded},
     )

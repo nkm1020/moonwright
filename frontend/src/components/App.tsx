@@ -312,6 +312,7 @@ export function App() {
             id: SAMPLE_IDS[i],
             title: titleFromBrief(p.requirements.source_brief ?? "", SAMPLE_IDS[i]),
             text: p.requirements.source_brief ?? "",
+            text_markdown: p.requirements.source_brief ?? "",
           }))
           .filter((ex) => ex.text.length > 0);
         dispatch({

@@ -125,7 +125,12 @@
     "energy_wh": 300.0,
     "zone": "Z1",
     "after": [],
-    "structure": "S1"
+    "structure": "S1",
+    "quantity": null,
+    "unit": null,
+    "basis": null,
+    "estimated_duration_h": null,
+    "estimated_energy_wh": null
    },
    {
     "id": "T2",
@@ -137,7 +142,12 @@
     "after": [
      "T1"
     ],
-    "structure": "S1"
+    "structure": "S1",
+    "quantity": null,
+    "unit": null,
+    "basis": null,
+    "estimated_duration_h": null,
+    "estimated_energy_wh": null
    },
    {
     "id": "T3",
@@ -149,7 +159,12 @@
     "after": [
      "T2"
     ],
-    "structure": "S1"
+    "structure": "S1",
+    "quantity": null,
+    "unit": null,
+    "basis": null,
+    "estimated_duration_h": null,
+    "estimated_energy_wh": null
    },
    {
     "id": "T4",
@@ -161,7 +176,12 @@
     "after": [
      "T1"
     ],
-    "structure": "S2"
+    "structure": "S2",
+    "quantity": null,
+    "unit": null,
+    "basis": null,
+    "estimated_duration_h": null,
+    "estimated_energy_wh": null
    },
    {
     "id": "T5",
@@ -173,7 +193,12 @@
     "after": [
      "T1"
     ],
-    "structure": null
+    "structure": null,
+    "quantity": null,
+    "unit": null,
+    "basis": null,
+    "estimated_duration_h": null,
+    "estimated_energy_wh": null
    },
    {
     "id": "T6",
@@ -185,7 +210,12 @@
     "after": [
      "T2"
     ],
-    "structure": "S2"
+    "structure": "S2",
+    "quantity": null,
+    "unit": null,
+    "basis": null,
+    "estimated_duration_h": null,
+    "estimated_energy_wh": null
    },
    {
     "id": "T7",
@@ -198,7 +228,12 @@
      "T3",
      "T4"
     ],
-    "structure": "S2"
+    "structure": "S2",
+    "quantity": null,
+    "unit": null,
+    "basis": null,
+    "estimated_duration_h": null,
+    "estimated_energy_wh": null
    },
    {
     "id": "T8",
@@ -210,7 +245,12 @@
     "after": [
      "T6"
     ],
-    "structure": "S1"
+    "structure": "S1",
+    "quantity": null,
+    "unit": null,
+    "basis": null,
+    "estimated_duration_h": null,
+    "estimated_energy_wh": null
    },
    {
     "id": "T9",
@@ -222,7 +262,12 @@
     "after": [
      "T3"
     ],
-    "structure": "S1"
+    "structure": "S1",
+    "quantity": null,
+    "unit": null,
+    "basis": null,
+    "estimated_duration_h": null,
+    "estimated_energy_wh": null
    },
    {
     "id": "T10",
@@ -234,7 +279,12 @@
     "after": [
      "T7"
     ],
-    "structure": "S2"
+    "structure": "S2",
+    "quantity": null,
+    "unit": null,
+    "basis": null,
+    "estimated_duration_h": null,
+    "estimated_energy_wh": null
    },
    {
     "id": "T11",
@@ -247,7 +297,12 @@
      "T8",
      "T9"
     ],
-    "structure": "S1"
+    "structure": "S1",
+    "quantity": null,
+    "unit": null,
+    "basis": null,
+    "estimated_duration_h": null,
+    "estimated_energy_wh": null
    },
    {
     "id": "T12",
@@ -259,7 +314,12 @@
     "after": [
      "T10"
     ],
-    "structure": "S2"
+    "structure": "S2",
+    "quantity": null,
+    "unit": null,
+    "basis": null,
+    "estimated_duration_h": null,
+    "estimated_energy_wh": null
    },
    {
     "id": "T13",
@@ -271,7 +331,12 @@
     "after": [
      "T12"
     ],
-    "structure": "S2"
+    "structure": "S2",
+    "quantity": null,
+    "unit": null,
+    "basis": null,
+    "estimated_duration_h": null,
+    "estimated_energy_wh": null
    },
    {
     "id": "T14",
@@ -283,7 +348,12 @@
     "after": [
      "T11"
     ],
-    "structure": "S1"
+    "structure": "S1",
+    "quantity": null,
+    "unit": null,
+    "basis": null,
+    "estimated_duration_h": null,
+    "estimated_energy_wh": null
    }
   ],
   "notes": "Berm fill comes from the pad bowl spoil; sintering waits for the compacted subgrade and staged feedstock."
@@ -293,147 +363,239 @@
    {
     "task": "T1",
     "robot": "SV1",
-    "start_h": 0,
-    "end_h": 4
+    "start_h": 1,
+    "end_h": 5
    },
    {
     "task": "T2",
     "robot": "EX2",
-    "start_h": 4,
-    "end_h": 16
+    "start_h": 5,
+    "end_h": 17
    },
    {
     "task": "T3",
     "robot": "EX1",
-    "start_h": 16,
-    "end_h": 34
+    "start_h": 17,
+    "end_h": 35
    },
    {
     "task": "T4",
     "robot": "EX2",
-    "start_h": 16,
-    "end_h": 30
+    "start_h": 19,
+    "end_h": 33
    },
    {
     "task": "T5",
     "robot": "EX2",
-    "start_h": 32,
-    "end_h": 38
+    "start_h": 35,
+    "end_h": 41
    },
    {
     "task": "T6",
     "robot": "HL2",
-    "start_h": 16,
-    "end_h": 26
+    "start_h": 17,
+    "end_h": 27
    },
    {
     "task": "T7",
     "robot": "HL2",
-    "start_h": 34,
-    "end_h": 50
+    "start_h": 37,
+    "end_h": 53
    },
    {
     "task": "T8",
     "robot": "HL2",
-    "start_h": 26,
-    "end_h": 32
+    "start_h": 29,
+    "end_h": 35
    },
    {
     "task": "T9",
     "robot": "CP1",
-    "start_h": 34,
-    "end_h": 46
+    "start_h": 35,
+    "end_h": 47
    },
    {
     "task": "T10",
     "robot": "CP1",
-    "start_h": 50,
-    "end_h": 64
+    "start_h": 53,
+    "end_h": 67
    },
    {
     "task": "T11",
     "robot": "PR1",
-    "start_h": 46,
-    "end_h": 68
+    "start_h": 47,
+    "end_h": 69
    },
    {
     "task": "T12",
     "robot": "PR1",
-    "start_h": 68,
-    "end_h": 74
+    "start_h": 71,
+    "end_h": 77
    },
    {
     "task": "T13",
     "robot": "SV1",
-    "start_h": 74,
-    "end_h": 77
+    "start_h": 77,
+    "end_h": 80
    },
    {
     "task": "T14",
     "robot": "SV1",
-    "start_h": 68,
-    "end_h": 72
+    "start_h": 69,
+    "end_h": 73
    }
   ],
-  "makespan_h": 77,
+  "makespan_h": 80,
   "status": "optimal",
-  "objective_bound_h": 77,
-  "solve_time_s": 0.023058000000000002
+  "objective_bound_h": 80,
+  "solve_time_s": 0.035161000000000005
  },
- "explanation": "Moonwright builds the 20 m landing pad and the 60 m blast berm at LS-1 in fourteen tasks with seven robots. SV1 stakes the site first, then the two excavators split the pad strip, the bowl excavation, the berm key trench and the hauler approach lane between them. The hauler fleet moves strip spoil to the stockpile and bowl spoil onto the berm line and stages feedstock for the printer, while CP1 compacts the pad subgrade and later the berm. PR1 sinters the pad surface and then the berm crest, and SV1 inspects both structures. The verified schedule finishes in 77 hours, just over three days of the 14-day deadline, so time is not the binding constraint. Battery is: PR1 spends about 3400 of its 4000 Wh on the two sintering tasks, and the printer is also the pinch point in time, since the berm crest waits for the pad surface. The CP-SAT solver proved this makespan optimal and verified every precedence edge, one task per robot at a time, one robot per zone and every battery budget.",
+ "explanation": "Moonwright builds the 20 m landing pad and the 60 m blast berm at LS-1 in fourteen tasks with seven robots. SV1 stakes the site first, then the two excavators split the pad strip, the bowl excavation, the berm key trench and the hauler approach lane between them. The hauler fleet moves strip spoil to the stockpile and bowl spoil onto the berm line and stages feedstock for the printer, while CP1 compacts the pad subgrade and later the berm. PR1 sinters the pad surface and then the berm crest, and SV1 inspects both structures. The verified schedule finishes in 80 hours including transit between zones, just over three days of the 14-day deadline, so time is not the binding constraint. Battery is: PR1 spends about 3400 of its 4000 Wh on the two sintering tasks, and the printer is also the pinch point in time, since the berm crest waits for the pad surface. The CP-SAT solver proved this makespan optimal and verified every precedence edge, one task per robot at a time, one robot per zone and every battery budget.",
  "steps": [
   {
    "stage": "structure",
    "attempt": 1,
    "ok": true,
    "failure": null,
-   "duration_s": 0.0025192080065608025,
+   "duration_s": 0.0025952080031856894,
    "usage": {
     "model": "fixture:structure.json",
     "input_tokens": 0,
     "output_tokens": 0,
-    "latency_s": 0.0007490840507671237
+    "latency_s": 0.0008848750730976462
    },
    "message": "2 structures, 7 robots, horizon 336h",
-   "payload": null
+   "payload": {
+    "zones": 4,
+    "grid": [
+     40,
+     40
+    ],
+    "depot": [
+     20,
+     8
+    ],
+    "warnings": []
+   }
   },
   {
    "stage": "taskgraph",
    "attempt": 1,
    "ok": true,
    "failure": null,
-   "duration_s": 0.0013987079728394747,
+   "duration_s": 0.001836207928135991,
    "usage": {
     "model": "fixture:taskgraph_1.json",
     "input_tokens": 0,
     "output_tokens": 0,
-    "latency_s": 0.00038104201667010784
+    "latency_s": 0.00022466701921075583
    },
    "message": "14 tasks",
-   "payload": null
+   "payload": {
+    "advisories": [
+     "ungrounded: no task states a quantity, so every duration_h and energy_wh is the model's own estimate and the rate table was not applied"
+    ],
+    "rate_model": true,
+    "grounded": 0
+   }
   },
   {
    "stage": "validate",
    "attempt": 1,
    "ok": true,
    "failure": null,
-   "duration_s": 0.00017491600010544062,
+   "duration_s": 0.0021942080929875374,
    "usage": null,
    "message": "14 tasks valid",
-   "payload": null
+   "payload": {
+    "advisories": [
+     "ungrounded: no task states a quantity, so every duration_h and energy_wh is the model's own estimate and the rate table was not applied"
+    ]
+   }
   },
   {
    "stage": "schedule",
    "attempt": 1,
    "ok": true,
    "failure": null,
-   "duration_s": 0.02854454191401601,
+   "duration_s": 0.042105792090296745,
    "usage": null,
-   "message": "makespan 77h (optimal)",
+   "message": "makespan 80h (optimal)",
    "payload": {
-    "makespan_h": 77,
+    "makespan_h": 80,
     "status": "optimal",
-    "verified": true
+    "verified": true,
+    "verification": {
+     "precedence_edges": 15,
+     "robot_rows": 7,
+     "zone_groups": 4,
+     "battery": [
+      {
+       "robot": "EX1",
+       "used_wh": 2005.0,
+       "work_wh": 2000.0,
+       "travel_wh": 5.0,
+       "budget_wh": 5000.0,
+       "pct": 40.1
+      },
+      {
+       "robot": "EX2",
+       "used_wh": 3722.987,
+       "work_wh": 3700.0,
+       "travel_wh": 22.987,
+       "budget_wh": 5000.0,
+       "pct": 74.5
+      },
+      {
+       "robot": "HL1",
+       "used_wh": 0.0,
+       "work_wh": 0.0,
+       "travel_wh": 0.0,
+       "budget_wh": 3000.0,
+       "pct": 0.0
+      },
+      {
+       "robot": "HL2",
+       "used_wh": 2527.207,
+       "work_wh": 2500.0,
+       "travel_wh": 27.207,
+       "budget_wh": 3000.0,
+       "pct": 84.2
+      },
+      {
+       "robot": "CP1",
+       "used_wh": 2811.325,
+       "work_wh": 2800.0,
+       "travel_wh": 11.325,
+       "budget_wh": 3500.0,
+       "pct": 80.3
+      },
+      {
+       "robot": "PR1",
+       "used_wh": 3411.325,
+       "work_wh": 3400.0,
+       "travel_wh": 11.325,
+       "budget_wh": 4000.0,
+       "pct": 85.3
+      },
+      {
+       "robot": "SV1",
+       "used_wh": 811.325,
+       "work_wh": 800.0,
+       "travel_wh": 11.325,
+       "budget_wh": 1500.0,
+       "pct": 54.1
+      }
+     ],
+     "tightest_robot": "PR1",
+     "horizon_used_h": 80,
+     "horizon_h": 336,
+     "status": "optimal",
+     "objective_bound_h": 80,
+     "solve_time_s": 0.035,
+     "travel_allowance": true,
+     "recheck": "independent check_schedule passed"
+    }
    }
   },
   {
@@ -441,12 +603,12 @@
    "attempt": 1,
    "ok": true,
    "failure": null,
-   "duration_s": 0.0005234170239418745,
+   "duration_s": 0.0004254590021446347,
    "usage": {
     "model": "fixture:explain.json",
     "input_tokens": 0,
     "output_tokens": 0,
-    "latency_s": 0.0004443749785423279
+    "latency_s": 0.00034179200883954763
    },
    "message": null,
    "payload": null

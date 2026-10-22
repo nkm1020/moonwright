@@ -6,22 +6,30 @@ No network: an ``httpx.MockTransport`` plays the server and records every reques
 from __future__ import annotations
 
 import json
+import logging
+import threading
 from collections.abc import Callable
+from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import httpx
 import pytest
+from openai.types.chat import ChatCompletion
 
 from moonwright.llm.base import ExplainText, LLMError, SchemaMismatch
 from moonwright.llm.tokenfactory import (
     DEFAULT_BASE_URL,
+    DEFAULT_LOG_PATH,
     DEFAULT_MAX_TOKENS,
     MODEL_DEFAULTS,
     REGIONAL_BASE_URL,
     THINKING_DEFAULTS,
     THINKING_MAX_TOKENS,
+    CallLog,
     RequestMode,
     TokenFactoryClient,
+    log_path_from_env,
     response_format_for,
     thinking_from_env,
 )
@@ -90,9 +98,12 @@ def fmt(body: dict[str, Any]) -> str | None:
 
 
 @pytest.fixture(autouse=True)
-def clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
+def clean_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A clean environment, with the call log pointed at the test's tmp dir so no test ever
+    appends to ``backend/out/llm_log.jsonl``."""
     for name in ENV_VARS:
         monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("MOONWRIGHT_LLM_LOG", str(tmp_path / "llm_log.jsonl"))
 
 
 # --------------------------------------------------------------------------- catalogue facts
@@ -290,3 +301,170 @@ def test_silent_model_keeps_its_token_usage():
     with pytest.raises(LLMError, match="empty completion") as info:
         ask(server.client())
     assert info.value.usage.output_tokens == 10
+
+
+# --------------------------------------------------------------------------- call log
+def tagged(text: str, request_id: str = "req-abc", status: int = 200) -> httpx.Response:
+    body = completion(text) if status == 200 else {"error": {"message": text}}
+    return httpx.Response(status, json=body, headers={"x-request-id": request_id})
+
+
+def read_log(path: Path) -> list[dict[str, Any]]:
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+
+def test_log_path_resolution(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    monkeypatch.delenv("MOONWRIGHT_LLM_LOG")
+    assert log_path_from_env() == DEFAULT_LOG_PATH
+    assert DEFAULT_LOG_PATH.parts[-2:] == ("out", "llm_log.jsonl")
+    monkeypatch.setenv("MOONWRIGHT_LLM_LOG", " OFF ")
+    assert log_path_from_env() is None
+    monkeypatch.setenv("MOONWRIGHT_LLM_LOG", str(tmp_path / "calls.jsonl"))
+    assert log_path_from_env() == tmp_path / "calls.jsonl"
+    # an explicit argument beats the environment
+    assert log_path_from_env("off") is None
+    assert log_path_from_env(tmp_path / "x.jsonl") == tmp_path / "x.jsonl"
+    assert log_path_from_env("") == DEFAULT_LOG_PATH
+
+
+def test_every_request_is_logged_without_prompt_or_answer_text(tmp_path: Path):
+    server = Server(lambda _r, _b: tagged('{"text": "the answer"}'))
+    path = tmp_path / "calls.jsonl"
+    client = server.client(log_path=path)
+    obj, _ = client.complete_json(role="taskgraph", system="SECRET SYSTEM PROMPT",
+                                  user="SECRET USER BRIEF", schema=ExplainText,
+                                  key="demo", attempt=2, variant="replan")
+    assert obj.text == "the answer"
+    records = read_log(path)
+    assert len(records) == 1 and client.log.records == 1 and client.log.enabled
+    rec = records[0]
+    assert rec["role"] == "taskgraph" and rec["model"] == MODEL_DEFAULTS["taskgraph"]
+    assert rec["endpoint"] == GLOBAL and rec["regional"] is False
+    assert rec["json_format"] == "json_schema"
+    assert rec["thinking"] is True and rec["thinking_switch"] is False
+    assert rec["max_tokens"] == THINKING_MAX_TOKENS
+    assert rec["status"] == 200 and rec["request_id"] == "req-abc"
+    assert rec["finish_reason"] == "stop"
+    assert (rec["prompt_tokens"], rec["completion_tokens"]) == (10, 5)
+    assert rec["latency_s"] >= 0 and rec["error"] is None and rec["error_message"] is None
+    assert (rec["key"], rec["attempt"], rec["variant"], rec["ask"]) == ("demo", 2, "replan", 1)
+    assert rec["ts"].endswith("+00:00")
+    raw = path.read_text(encoding="utf-8")
+    assert "SECRET" not in raw and "the answer" not in raw
+
+
+def test_structure_role_logs_the_thinking_switch_and_the_ask_number(tmp_path: Path):
+    replies = iter(['{"text": 1}', '{"text": "fixed"}'])
+    server = Server(lambda _r, _b: tagged(next(replies)))
+    client = server.client(log_path=tmp_path / "calls.jsonl")
+    assert ask(client)[0].text == "fixed"
+    records = read_log(tmp_path / "calls.jsonl")
+    assert [r["ask"] for r in records] == [1, 2]
+    assert all(r["thinking"] is False and r["thinking_switch"] is True for r in records)
+    assert all(r["max_tokens"] == DEFAULT_MAX_TOKENS and r["role"] == "structure"
+               for r in records)
+
+
+def test_rejected_rungs_and_transport_failures_are_logged(tmp_path: Path):
+    def handler(request: httpx.Request, body: dict[str, Any]) -> httpx.Response:
+        if fmt(body) == "json_schema":
+            return tagged("response_format is not supported", request_id="req-400", status=400)
+        return tagged('{"text": "ok"}', request_id="req-200")
+
+    server = Server(handler)
+    client = server.client(log_path=tmp_path / "calls.jsonl")
+    assert ask(client)[0].text == "ok"
+    first, second = read_log(tmp_path / "calls.jsonl")
+    assert (first["status"], first["request_id"], first["error"]) == (400, "req-400",
+                                                                     "BadRequestError")
+    assert "not supported" in first["error_message"] and first["json_format"] == "json_schema"
+    assert first["finish_reason"] is None and first["prompt_tokens"] is None
+    assert (second["status"], second["request_id"], second["error"]) == (200, "req-200", None)
+    assert second["json_format"] == "json_object"
+
+    def timeout(request: httpx.Request, _body: dict[str, Any]) -> httpx.Response:
+        raise httpx.ReadTimeout("slow upstream", request=request)
+
+    server = Server(timeout)
+    client = server.client(log_path=tmp_path / "timeouts.jsonl")
+    with pytest.raises(LLMError, match="APITimeoutError"):
+        ask(client)
+    (rec,) = read_log(tmp_path / "timeouts.jsonl")
+    assert rec["status"] is None and rec["request_id"] is None
+    assert rec["error"] == "APITimeoutError" and rec["latency_s"] >= 0
+
+
+def test_regional_fallback_logs_both_endpoints(tmp_path: Path):
+    def handler(request: httpx.Request, body: dict[str, Any]) -> httpx.Response:
+        if request.url.host == "global.test":
+            return tagged("model does not exist", request_id="req-404", status=404)
+        return tagged('{"text": "ok"}')
+
+    client = Server(handler).client(log_path=tmp_path / "calls.jsonl")
+    assert ask(client, "taskgraph")[0].text == "ok"
+    first, second = read_log(tmp_path / "calls.jsonl")
+    assert (first["endpoint"], first["regional"], first["status"]) == (GLOBAL, False, 404)
+    assert first["error"] == "NotFoundError"
+    assert (second["endpoint"], second["regional"], second["status"]) == (REGIONAL, True, 200)
+
+
+def test_log_off_writes_nothing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    client = Server(ok).client(log_path="off")
+    assert client.log.enabled is False and client.log.path is None
+    assert ask(client)[0].text == "ok"
+    assert client.log.records == 0 and list(tmp_path.iterdir()) == []
+    monkeypatch.setenv("MOONWRIGHT_LLM_LOG", "off")
+    assert Server(ok).client().log.path is None
+    # the default from the (test) environment is used when nothing is passed
+    monkeypatch.setenv("MOONWRIGHT_LLM_LOG", str(tmp_path / "from_env.jsonl"))
+    client = Server(ok).client()
+    ask(client)
+    assert (tmp_path / "from_env.jsonl").exists() and client.log.records == 1
+
+
+def test_unwritable_log_disables_itself_and_never_fails_the_call(tmp_path: Path, caplog):
+    blocker = tmp_path / "blocker"
+    blocker.write_text("not a directory")
+    client = Server(ok).client(log_path=blocker / "calls.jsonl")
+    with caplog.at_level(logging.WARNING, logger="moonwright.llm.tokenfactory"):
+        assert ask(client)[0].text == "ok"
+        assert ask(client)[0].text == "ok"
+    assert client.log.enabled is False and client.log.records == 0
+    assert sum("LLM call log disabled" in r.message for r in caplog.records) == 1
+
+
+def test_plain_create_path_when_the_sdk_has_no_raw_response(tmp_path: Path):
+    def create(**params: Any) -> ChatCompletion:
+        return ChatCompletion.model_validate(completion('{"text": "plain"}'))
+
+    stub_sdk = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+    client = Server(ok).client(log_path=tmp_path / "calls.jsonl")
+    client._sdk = lambda endpoint: stub_sdk  # type: ignore[method-assign]
+    assert ask(client)[0].text == "plain"
+    (rec,) = read_log(tmp_path / "calls.jsonl")
+    assert rec["status"] is None and rec["request_id"] is None
+    assert rec["finish_reason"] == "stop" and rec["completion_tokens"] == 5
+
+
+def test_call_log_is_safe_under_threads(tmp_path: Path):
+    client = Server(lambda _r, _b: tagged('{"text": "ok"}')).client(log_path=tmp_path / "c.jsonl")
+
+    def work() -> None:
+        for _ in range(5):
+            ask(client)
+
+    threads = [threading.Thread(target=work) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    records = read_log(tmp_path / "c.jsonl")
+    assert len(records) == 40 and client.log.records == 40
+    assert all(r["status"] == 200 for r in records)
+
+
+def test_call_log_write_returns_whether_it_wrote(tmp_path: Path):
+    assert CallLog(None).write({"a": 1}) is False
+    sink = CallLog(tmp_path / "nested" / "dir" / "log.jsonl")
+    assert sink.write({"a": 1, "when": Path("x")}) is True   # non-JSON values are stringified
+    assert read_log(sink.path) == [{"a": 1, "when": "x"}]

@@ -58,6 +58,10 @@ export interface Requirements {
 }
 
 // ------------------------------------------------------------------ F2 task graph
+/** Unit of Task.quantity: m3 excavated or hauled, m2 stripped / graded / compacted / sintered /
+ *  surveyed, m of linear work, ea for discrete items. */
+export type Unit = "m3" | "m2" | "m" | "ea";
+
 export interface Task {
   id: string;
   name: string;
@@ -67,6 +71,16 @@ export interface Task {
   zone: string;
   after: string[];
   structure: string | null;
+  /** Scope statement (phase 3a): how much work, in `unit`, derived as `basis` from the
+   *  structure's dimensions (e.g. "pi*(10 m)^2*0.4 m = 126 m3"); null for a pure time task or
+   *  a graph recorded before the rate model. For a task with a quantity, duration_h and
+   *  energy_wh are computed by the rate model (backend/moonwright/pipeline/rates.py) and the
+   *  model's own figures are kept in estimated_duration_h / estimated_energy_wh. */
+  quantity: number | null;
+  unit: Unit | null;
+  basis: string | null;
+  estimated_duration_h: number | null;
+  estimated_energy_wh: number | null;
 }
 
 export interface TaskGraph {
@@ -120,6 +134,8 @@ export const CONFLICT_PREFIXES: Record<string, string> = {
   duration: "entry length differs from task duration",
   makespan: "makespan differs from the latest entry end",
   changed: "remaining task redefined by the replan",
+  scope: "structure lacks a required phase or lost every task",
+  locked: "task underway at the event redefined by the repair",
 };
 
 export function conflictPrefix(conflict: string): string {
@@ -135,9 +151,15 @@ export const LIMITS = {
   durationH: 10_000,
   horizonH: 100_000,
   speedCellsPerH: 1e4,
+  quantity: 1e5,
 } as const;
 
 // ------------------------------------------------------------------ F7 -> F8 events
+/** robot_failure: an injected failure or a battery that ran dry (the robot stops for good);
+ *  battery_low: the simulator's forecast that a robot's battery no longer covers what the plan
+ *  in force still asks of it (rest of its task, queued tasks, travel), fired once per plan in
+ *  force and never on a disturbance-free replay of a verified plan; task_overrun: a task took
+ *  more than 2 h longer than its entry. */
 export type EventKind = "robot_failure" | "battery_low" | "task_overrun";
 
 export interface SimEvent {
@@ -156,6 +178,97 @@ export interface Usage {
   latency_s: number;
 }
 
+/** `structure` step payload (ok): zone geometry summary with soft warnings. */
+export interface StructurePayload {
+  zones: number;
+  grid: [number, number];
+  depot: [number, number] | null;
+  /** overlapping zones, a structure in an undeclared zone, no depot, ... (never a failure) */
+  warnings: string[];
+}
+
+/** `taskgraph` / `repair` step payload (ok): what the rate model did to the answer. */
+export interface TaskGraphPayload {
+  /** "estimate:<task>: model said 10 h / 1000 Wh, rate model gives 27 h / 3000 Wh (+170%)",
+   *  or "ungrounded: no task states a quantity, ..." when the rate table could not be applied
+   *  at all (the hand-made fixtures); warnings, never conflicts */
+  advisories: string[];
+  rate_model: boolean;
+  /** tasks whose duration / energy came from the rate table (they carried a quantity) */
+  grounded: number;
+}
+
+export type DiffField = "duration_h" | "energy_wh" | "quantity" | "robot_type" | "zone" | "after";
+
+/** Added to a `repair` step payload (`diff`) when the answer validated: what the model
+ *  changed relative to the graph the repair answered. */
+export interface RepairDiff {
+  added: string[];
+  removed: string[];
+  changed: { task: string; field: DiffField; before: unknown; after: unknown }[];
+  per_type_energy_before: Record<string, number>;
+  per_type_energy_after: Record<string, number>;
+  /** signed % change of total energy_wh (negative = the repair re-scoped work away) */
+  scope_drift_pct: number;
+  total_energy_wh_before: number;
+  total_energy_wh_after: number;
+  total_duration_h_before: number;
+  total_duration_h_after: number;
+}
+
+export type RepairPayload = TaskGraphPayload & { diff: RepairDiff };
+
+/** `validate` step payload: the producing step's advisories, or null when it had none. */
+export type ValidatePayload = { advisories: string[] } | null;
+
+/** The verification receipt carried by an ok `schedule` step. */
+export interface VerificationReceipt {
+  precedence_edges: number;
+  /** = number of robots (one no-overlap row each) */
+  robot_rows: number;
+  zone_groups: number;
+  /** one row per robot in requirements order: work_wh is the energy of its entries, travel_wh
+   *  the legs its sequence drives (depot to first zone, then zone to zone, 0.5 Wh per cell: what
+   *  a replay spends, at most what CP-SAT reserved), used_wh = work_wh + travel_wh, pct of budget */
+  battery: {
+    robot: string;
+    used_wh: number;
+    work_wh: number;
+    travel_wh: number;
+    budget_wh: number;
+    pct: number;
+  }[];
+  tightest_robot: string | null;
+  horizon_used_h: number;
+  horizon_h: number;
+  status: "optimal" | "feasible";
+  objective_bound_h: number | null;
+  solve_time_s: number;
+  /** true when CP-SAT budgeted transit between zones (time and 0.5 Wh per cell) */
+  travel_allowance: boolean;
+  /** "independent check_schedule passed" */
+  recheck: string;
+}
+
+export interface SchedulePayload {
+  makespan_h: number;
+  status: "optimal" | "feasible";
+  verified: true;
+  verification: VerificationReceipt;
+}
+
+/** The closing `replan` step of every ReplanRecord.after trace (ok = a verified replan). */
+export interface ReplanOutcomePayload {
+  /** a repair prompt went to Nemotron (CP-SAT alone could not finish the remaining work) */
+  escalated: boolean;
+  offset_h: number;
+  time_base: "absolute";
+  remaining_tasks: number;
+  before_makespan_h: number;
+  after_makespan_h: number | null;
+  solve_time_s: number | null;
+}
+
 export interface LoopStep {
   stage: Stage;
   attempt: number;
@@ -164,7 +277,14 @@ export interface LoopStep {
   duration_s: number;
   usage: Usage | null;
   message: string | null;
-  /** Small stage-specific extras, e.g. schedule: {makespan_h, status, verified}. */
+  /**
+   * Small stage-specific extras: StructurePayload, TaskGraphPayload (a `repair` adds
+   * `diff: RepairDiff`), ValidatePayload, SchedulePayload (the verification receipt) and
+   * ReplanOutcomePayload. Inside ReplanRecord.after.steps every payload also carries
+   * `offset_h` (planner time 0 in simulator hours) and `time_base: "relative" | "absolute"`:
+   * an ok schedule step is absolute (makespan_h and the receipt's horizon figures shifted by
+   * offset_h), validate / failed-schedule / repair steps quote planner hours (relative).
+   */
   payload: Record<string, unknown> | null;
 }
 
@@ -205,9 +325,17 @@ export interface ReplanRecord {
   remaining_tasks: string[];
   /** Schedule in force before the event (absolute simulator hours). */
   before: Schedule;
-  /** The replanned PlanResult; its schedule is in absolute simulator hours. */
+  /** The replanned PlanResult; its schedule is in absolute simulator hours, while
+   *  after.requirements is what the planner was given: the surviving robots with their
+   *  remaining batteries, every zone the simulator laid out declared, and horizon_h = the
+   *  hours left at the event (relative); the ok schedule step's receipt quotes the brief's
+   *  deadline. */
   after: PlanResult;
   context: string;
+  /** True when CP-SAT alone could not finish the remaining work and a repair prompt went to
+   *  Nemotron (solver-first replanning escalated); also true when an offline client had no
+   *  recorded answer (the closing replan step's message says so). */
+  escalated: boolean;
 }
 
 export interface SimResult {
@@ -238,7 +366,10 @@ export interface Health {
 export interface ExampleBrief {
   id: string;
   title: string;
+  /** plain prose (markdown markers stripped) */
   text: string;
+  /** the brief file as written, what `moonwright plan <file>` reads */
+  text_markdown: string;
 }
 
 export interface StructureRequest {
@@ -301,6 +432,10 @@ export interface MonteCarloRequest {
   duration_jitter?: number;
   seed?: number;
   max_replans?: number;
+  /** LLM repair rounds per replan, 0..10 (only used with `llm`) */
+  max_repairs?: number;
+  /** replan through this client instead of the solver-only replanner (default) */
+  llm?: LLMKind;
   brief_id?: string;
 }
 
@@ -308,6 +443,9 @@ export interface MonteCarloSample {
   seed: number;
   completed: boolean;
   within_horizon: boolean;
+  /** "completed" | "late" | "lost_only:<type>[,<type>]" | "replan_infeasible:<kind>[,<kind>]"
+   *  | "stuck" */
+  outcome: string;
   finished_at_h: number | null;
   events: number;
   replans: number;
@@ -335,11 +473,17 @@ export interface MonteCarloResult {
   completion_rate: number;
   /** completed within horizon_h / runs: the "기한 내 완공 확률" of the PRD */
   within_horizon_rate: number;
+  /** Wilson 95% interval of within_horizon_rate, [low, high] */
+  within_horizon_ci: [number, number];
   horizon_h: number;
   /** over completed runs */
   finish_h: MonteCarloStats;
   replans_mean: number;
   failures_mean: number;
+  /** MonteCarloSample.outcome -> number of runs, most frequent first */
+  outcomes: Record<string, number>;
+  /** robot types with exactly one robot (sorted): losing it strands that type's work */
+  single_points_of_failure: string[];
   histogram: HistogramBin[];
   samples: MonteCarloSample[];
   elapsed_s: number;

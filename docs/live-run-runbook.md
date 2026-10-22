@@ -39,7 +39,7 @@ uv run pytest                                                          # fixture
 ```
 
 `--llm record` overwrites `fixtures/<brief>/*.json`; the explanation texts in the e2e tests
-quote the makespans 77/59/65 h, so if the live graphs differ, update
+quote the makespans 80/64/68 h (transit allowance included), so if the live graphs differ, update
 `tests/test_pipeline_e2e.py` or keep the old fixtures (copy them aside first).
 
 Fast demo setting when Ultra with thinking is slow: `MOONWRIGHT_THINKING=off` (every call

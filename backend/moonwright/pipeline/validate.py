@@ -2,18 +2,65 @@
 
 Contract (see conflict id formats in schemas.py):
 
-    validate_graph(req, graph) -> Failure | None
+    validate_graph(req, graph, previous=None, *, coverage=False) -> Failure | None
 
 Checks, in this order, collecting *all* conflicts of the kinds below before returning:
   duplicate ids (tasks, robots, zones) .................... duplicate:<id>
   `after` references to unknown tasks ..................... reference:<task>.after=<id>
   self/cyclic precedence (report the cycle path) .......... cycle:<a>-><b>->...-><a>
   robot_type with no robot in requirements ................ capability:<task_id>
+  physical task without a priced quantity (see below) ..... quantity:<task_id>
+  structure coverage (coverage=True only, see below) ...... scope:<structure_id>
   task energy > max battery of any robot of that type ..... energy_task:<task_id>
   critical path (longest duration chain) > horizon_h ...... horizon_path:<a>-><b>->...
   per robot type: ceil(total duration / #robots) > horizon  horizon   (hint names the type)
   per robot type: total energy > sum of batteries ......... energy:<type>  (hint explains)
 Return None when everything passes. `hint` is one human sentence per conflict group, joined.
+
+Quantities (``quantity:<task_id>``)
+-----------------------------------
+Once a graph states quantities (any task of it, or of the graph the repair answered, carries
+a quantity with a unit), the rate model owns every duration and energy, so every *physical*
+task of a rated robot type (:func:`needs_quantity`: excavator, hauler, compactor or printer
+work that excavates, grades, hauls, compacts or sinters by :func:`task_phases`; surveyors and
+pure inspection passes are exempt) must carry a positive quantity in a unit the rate table
+prices for its type. A task without one, with a quantity of 0, or counted in a unit the table
+has no row for would otherwise keep the model's own hours and Wh next to grounded tasks,
+which is the hand-sizing the rate model exists to prevent. A graph with no quantity at all
+(the hand-made fixtures, a solver-only replan) is judged on its own numbers and the task-graph
+stage marks it ungrounded in its advisories instead.
+
+Structure coverage (``scope:<structure_id>``, ``coverage=True``)
+----------------------------------------------------------------
+Opt-in because it judges a whole plan: a fresh graph and its repairs are checked with
+``coverage=True``; the remaining graph of a replan (finished phases gone) with
+``coverage=False``, where :func:`check_scope` guards the outstanding work instead.
+Every structure in ``req.structures`` must be served by the graph. A task serves a structure
+when its ``structure`` tag names it (:func:`tag_names`: the structure's id in any case, its
+type, or a label that contains the id as a word, such as "Landing pad S1"), or when it sits
+in the structure's zone while tagged with nothing that names any structure (no tag, or a tag
+that resolves to none). What a structure needs depends on its ``type`` (matched by keyword
+after lower-casing: "berm", "road", "foundation", "pad"; anything else is "other"):
+
+  landing pad (type contains "pad") ... survey, excavate, compact, sinter
+  berm (contains "berm") .............. excavate or haul, and compact
+  road (contains "road") .............. grade and compact
+  foundation (contains "foundation") .. excavate and compact
+  other ............................... at least one task
+
+A phase is only required while the fleet has a robot of its type (surveyor, excavator,
+hauler, compactor, printer): "sinter when a printer exists" from the brief, applied to every
+phase so a fleet that cannot staff a phase is never asked for it.
+A task's phases are the union of three signals, so the check only fires when work is really
+absent, not when it is named unusually: the robot type (surveyor -> survey, hauler -> haul,
+compactor -> compact, printer -> sinter; an excavator counts as excavate with unit m3 or m and
+as grade with unit m2), the unit, and keyword stems in the task name (survey/stake/inspect/
+scan/map; excavat/dig/trench/cut/bowl/pit/borrow; grad/strip/level/smooth/blade;
+haul/transport/carr/mov/deliver/stag/dump; compact/roll/tamp/consolidat; sinter/print/melt/
+pav/fus/bak). An excavator task with no unit and no recognised keyword counts as both
+excavate and grade. With ``previous`` (the graph a repair answered), a structure that had
+tasks before and has none now is reported with the tasks it lost, so the repair prompt can
+ask for them back by id.
 
     check_scope(graph, required, baseline=None) -> Failure | None
 
@@ -44,15 +91,36 @@ Implementation notes
 
 from __future__ import annotations
 
+import re
 from collections import Counter, deque
-from collections.abc import Collection
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 
-from moonwright.schemas import Failure, Requirements, Robot, Task, TaskGraph, fmt_wh, to_mwh
+from moonwright.pipeline.rates import RATED_TYPES, rate_for, rated_units, scoped
+from moonwright.schemas import (
+    Failure,
+    Requirements,
+    Robot,
+    Structure,
+    Task,
+    TaskGraph,
+    fmt_wh,
+    to_mwh,
+)
 
 
-def validate_graph(req: Requirements, graph: TaskGraph) -> Failure | None:
-    """Run every check and return a ``validation`` Failure, or None when the graph is clean."""
+def validate_graph(req: Requirements, graph: TaskGraph, previous: TaskGraph | None = None,
+                   *, coverage: bool = False) -> Failure | None:
+    """Run every check and return a ``validation`` Failure, or None when the graph is clean.
+
+    ``coverage=True`` adds the structure coverage check (``scope:<structure_id>``). It is an
+    opt-in because it judges a *whole* plan: the remaining graph of a replan legitimately
+    lacks the phases that are already built, so a replan must be checked with
+    ``coverage=False`` (its work is guarded by :func:`check_scope` instead) and a fresh plan
+    and its repairs with ``coverage=True``. ``previous`` is the graph a repair answered (if
+    any): a structure it served that ``graph`` no longer serves is reported with the tasks
+    that went missing.
+    """
     prec = _Precedence.from_graph(graph)
     cycles = _check_cycles(prec)
     groups = [
@@ -60,6 +128,8 @@ def validate_graph(req: Requirements, graph: TaskGraph) -> Failure | None:
         _check_references(graph),
         cycles,
         _check_capability(req, graph),
+        _check_quantity(graph, previous),
+        _check_coverage(req, graph, previous) if coverage else None,
         _check_task_energy(req, graph),
         None if cycles else _check_critical_path(prec, req.horizon_h),
         _check_type_horizon(req, graph),
@@ -345,7 +415,7 @@ def _check_task_energy(req: Requirements, graph: TaskGraph) -> _Group | None:
         ids=ids,
         details=[items[i] for i in ids],
         hint=f"No single robot can power {_join_and([phrases[i] for i in ids])}; split such "
-        "tasks or lower their energy_wh.",
+        "tasks into smaller quantities or move the work to another robot type.",
     )
 
 
@@ -412,8 +482,187 @@ def _check_type_energy(req: Requirements, graph: TaskGraph) -> _Group | None:
     return _Group(
         ids=ids,
         details=details,
-        hint=f"Battery budgets are exceeded per robot type: {_join_and(phrases)}; lower "
-        "energy_wh or move work to other robot types.",
+        hint=f"Battery budgets are exceeded per robot type: {_join_and(phrases)}; reduce the "
+        "quantities if the brief allows it or move work to other robot types.",
+    )
+
+
+# ----------------------------------------------------------------------------- quantities
+_PHYSICAL_PHASES = frozenset({"excavate", "grade", "haul", "compact", "sinter"})
+
+
+def needs_quantity(task: Task) -> bool:
+    """Whether the rate model must price ``task``: a rated robot type other than the surveyor
+    doing physical work by :func:`task_phases` (an inspection pass by an excavator is not)."""
+    return (task.robot_type in RATED_TYPES and task.robot_type != "surveyor"
+            and bool(task_phases(task) & _PHYSICAL_PHASES))
+
+
+def _check_quantity(graph: TaskGraph, previous: TaskGraph | None) -> _Group | None:
+    if not any(scoped(t) for t in graph.tasks) and not (
+            previous is not None and any(scoped(t) for t in previous.tasks)):
+        return None   # a graph the rate model never had standing over
+    items: dict[str, str] = {}
+    for t in graph.tasks:
+        if not needs_quantity(t):
+            continue
+        if t.quantity is None:
+            why = "has no quantity"
+        elif t.unit is None:
+            why = "has a quantity but no unit"
+        elif t.quantity <= 0:
+            why = f"has a quantity of 0 {t.unit}"
+        elif rate_for(t.robot_type, t.unit) is None:
+            why = f"is counted in {t.unit}, which the rate table does not price for a {t.robot_type}"
+        else:
+            continue
+        items[f"quantity:{t.id}"] = f"{t.id} ({t.robot_type}: {t.name}) {why}"
+    if not items:
+        return None
+    ids = sorted(items)
+    types = sorted({graph.task(i.removeprefix("quantity:")).robot_type for i in ids})
+    priced = _join_and([f"{typ} in {' or '.join(rated_units(typ))}" for typ in types])
+    return _Group(
+        ids=ids,
+        details=[items[i] for i in ids],
+        hint=f"Physical work is sized by the rate table, so {_join_and(ids)} cannot keep "
+        f"hand-written hours and Wh: give each such task a positive quantity in a unit the "
+        f"table prices ({priced}), with its basis; only an inspection pass or a wait may be a "
+        "pure time task without one.",
+    )
+
+
+# ----------------------------------------------------------------------------- coverage
+_PHASE_OF_TYPE = {"surveyor": "survey", "hauler": "haul", "compactor": "compact",
+                  "printer": "sinter"}
+_PHASE_OF_EXCAVATOR_UNIT = {"m3": "excavate", "m": "excavate", "m2": "grade"}
+_PHASE_STEMS: dict[str, tuple[str, ...]] = {
+    "survey": ("survey", "stak", "inspect", "scan", "map"),
+    "excavate": ("excavat", "dig", "trench", "cut", "bowl", "pit", "borrow"),
+    "grade": ("grad", "strip", "level", "smooth", "blade"),
+    "haul": ("haul", "transport", "carr", "mov", "deliver", "stag", "dump"),
+    "compact": ("compact", "roll", "tamp", "consolidat"),
+    "sinter": ("sinter", "print", "melt", "pav", "fus", "bak"),
+}
+# structure kind -> required phases, each entry a tuple of alternatives (any one satisfies);
+# a phase is only required while the fleet has a robot of its canonical type (the brief's
+# "sinter when a printer exists" rule, applied to every phase so a fleet without, say, a
+# surveyor is never asked for a task it cannot staff)
+_REQUIRED_PHASES: dict[str, tuple[tuple[str, ...], ...]] = {
+    "landing_pad": (("survey",), ("excavate",), ("compact",), ("sinter",)),
+    "berm": (("excavate", "haul"), ("compact",)),
+    "road": (("grade",), ("compact",)),
+    "foundation": (("excavate",), ("compact",)),
+}
+_CANONICAL_TYPE = {"survey": "surveyor", "excavate": "excavator", "grade": "excavator",
+                   "haul": "hauler", "compact": "compactor", "sinter": "printer"}
+_PHASE_RULES_TEXT = (
+    "landing pad: survey, excavate, compact and sinter; berm: excavate or haul, then compact; "
+    "road: grade and compact; foundation: excavate and compact; anything else at least one "
+    "task; a phase is only required while the fleet has its robot type"
+)
+
+
+def structure_kind(structure_type: str) -> str | None:
+    """'landing_pad' / 'berm' / 'road' / 'foundation' by keyword, None for any other type."""
+    typ = structure_type.lower()
+    for word, kind in (("berm", "berm"), ("road", "road"), ("foundation", "foundation"),
+                       ("pad", "landing_pad")):
+        if word in typ:
+            return kind
+    return None
+
+
+def task_phases(task: Task) -> set[str]:
+    """Phases a task evidently performs: robot type, unit and name keywords combined."""
+    phases: set[str] = set()
+    if task.robot_type in _PHASE_OF_TYPE:
+        phases.add(_PHASE_OF_TYPE[task.robot_type])
+    if task.robot_type == "excavator" and task.unit in _PHASE_OF_EXCAVATOR_UNIT:
+        phases.add(_PHASE_OF_EXCAVATOR_UNIT[task.unit])
+    words = re.findall(r"[a-z]+", task.name.lower())
+    for phase, stems in _PHASE_STEMS.items():
+        if any(w.startswith(stems) for w in words):
+            phases.add(phase)
+    if task.robot_type == "excavator" and not phases:
+        phases.update(("excavate", "grade"))   # earthmoving of an unnamed kind
+    return phases
+
+
+def tag_names(tag: str, structure: Structure) -> bool:
+    """Whether a task's ``structure`` tag names ``structure``: its id (any case), its type, or
+    a label that contains the id as a word ("Landing pad S1")."""
+    low = tag.strip().lower()
+    if low == structure.id.lower() or low == structure.type.strip().lower():
+        return True
+    return structure.id.lower() in re.findall(r"[a-z0-9_.-]+", low)
+
+
+def structure_tasks(structure: Structure, graph: TaskGraph,
+                    structures: Sequence[Structure] | None = None) -> list[Task]:
+    """Tasks that serve ``structure``: tagged with something that names it
+    (:func:`tag_names`), or in its zone while tagged with nothing that names any structure of
+    ``structures`` (default: ``structure`` alone), the tag being free text the model may fill
+    with a type, a label or a different case."""
+    known = list(structures) if structures is not None else [structure]
+
+    def serves(t: Task) -> bool:
+        if t.structure is not None and tag_names(t.structure, structure):
+            return True
+        if structure.zone is None or t.zone != structure.zone:
+            return False
+        return t.structure is None or not any(tag_names(t.structure, s) for s in known)
+
+    return [t for t in graph.tasks if serves(t)]
+
+
+def missing_phases(req: Requirements, structure: Structure, tasks: list[Task]) -> list[str]:
+    """Required phases ``tasks`` do not cover, as 'excavate or haul' style strings; for a
+    structure of unknown kind, ``['any work']`` when it has no task at all."""
+    kind = structure_kind(structure.type)
+    if kind is None:
+        return [] if tasks else ["any work"]
+    fleet = {r.type for r in req.robots}
+    required = [group for group in _REQUIRED_PHASES[kind]
+                if any(_CANONICAL_TYPE[phase] in fleet for phase in group)]
+    covered: set[str] = set()
+    for t in tasks:
+        covered |= task_phases(t)
+    return [" or ".join(group) for group in required if not covered & set(group)]
+
+
+def _check_coverage(req: Requirements, graph: TaskGraph,
+                    previous: TaskGraph | None) -> _Group | None:
+    items: dict[str, str] = {}
+    phrases: dict[str, str] = {}
+    for s in req.structures:
+        tasks = structure_tasks(s, graph, req.structures)
+        missing = missing_phases(req, s, tasks)
+        if not missing:
+            continue
+        label = f"{s.id} ({s.type})"
+        before = ([t.id for t in structure_tasks(s, previous, req.structures)]
+                  if previous is not None else [])
+        if not tasks and before:
+            detail = (f"{label} had {_join_and(before)} before the repair and has no task now")
+            phrase = f"{label} lost every task it had ({', '.join(before)})"
+        elif missing == ["any work"]:
+            detail = phrase = f"{label} has no task"
+        else:
+            noun = "task" if len(missing) == 1 else "tasks"
+            detail = f"{label} lacks {_join_and(missing)} {noun}"
+            phrase = f"{label} has no {_join_and(missing)} task"
+        items[f"scope:{s.id}"] = detail
+        phrases[f"scope:{s.id}"] = phrase
+    if not items:
+        return None
+    ids = sorted(items)
+    return _Group(
+        ids=ids,
+        details=[items[i] for i in ids],
+        hint=f"Structure coverage is incomplete: {_join_and([phrases[i] for i in ids])}; every "
+        f"structure keeps its phases ({_PHASE_RULES_TEXT}), so add the missing work back as "
+        "tasks tagged with the structure id, with quantity and unit.",
     )
 
 

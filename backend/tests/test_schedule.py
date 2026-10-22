@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import random
 import time
 
@@ -9,6 +10,7 @@ import pytest
 from ortools.sat.python import cp_model
 
 import moonwright.pipeline.schedule as schedule_module
+from moonwright.geometry import distance, travel_hours, travel_wh
 from moonwright.pipeline.schedule import (
     SolveOptions,
     _build,
@@ -25,16 +27,30 @@ from moonwright.schemas import (
     Robot,
     Schedule,
     ScheduleEntry,
+    Site,
     Task,
     TaskGraph,
+    Zone,
+    to_mwh,
 )
+from moonwright.sim.simulator import Simulator
 
 FAST = SolveOptions(time_limit_s=5.0, num_workers=4, core_time_limit_s=3.0)
 
+# Every zone on the depot cell: no leg to drive, so the scheduling logic is tested on its own
+# (travel has its own section at the end of this module).
+FLAT = Site(depot=(20, 20), zones=[Zone(id=f"Z{i}", center=(20, 20)) for i in range(1, 6)])
+
 
 # ----------------------------------------------------------------------------- helpers
-def robot(robot_id: str, robot_type: str, battery_wh: float) -> Robot:
-    return Robot(id=robot_id, type=robot_type, battery_wh=battery_wh)
+def robot(robot_id: str, robot_type: str, battery_wh: float,
+          speed_cells_per_h: float = 12.0) -> Robot:
+    return Robot(id=robot_id, type=robot_type, battery_wh=battery_wh,
+                 speed_cells_per_h=speed_cells_per_h)
+
+
+def reqs(robots: list[Robot], horizon_h: int, site: Site = FLAT) -> Requirements:
+    return Requirements(site=site, robots=robots, horizon_h=horizon_h)
 
 
 def task(task_id: str, robot_type: str, duration_h: int, energy_wh: float, zone: str,
@@ -50,8 +66,7 @@ def opts(**overrides) -> SolveOptions:
 
 
 def two_excavators(horizon_h: int = 40) -> Requirements:
-    return Requirements(robots=[robot("EX1", "excavator", 5000), robot("EX2", "excavator", 5000)],
-                        horizon_h=horizon_h)
+    return reqs([robot("EX1", "excavator", 5000), robot("EX2", "excavator", 5000)], horizon_h)
 
 
 def hand_solvable_graph() -> TaskGraph:
@@ -77,8 +92,8 @@ def assert_infeasible(out: Schedule | Failure) -> Failure:
 
 # ----------------------------------------------------------------------------- feasible solves
 def test_feasible_small_instance_passes_check_schedule():
-    req = Requirements(robots=[robot("EX1", "excavator", 5000), robot("EX2", "excavator", 5000),
-                               robot("HL1", "hauler", 3000)], horizon_h=40)
+    req = reqs([robot("EX1", "excavator", 5000), robot("EX2", "excavator", 5000),
+                robot("HL1", "hauler", 3000)], horizon_h=40)
     graph = TaskGraph(tasks=[
         task("T1", "excavator", 4, 1200, "Z1"),
         task("T2", "excavator", 3, 900, "Z2", after=("T1",)),
@@ -121,11 +136,11 @@ def test_zone_no_overlap_serialises_two_tasks_in_one_zone():
 
 
 def test_realistic_landing_pad_instance_is_optimal_at_critical_path():
-    req = Requirements(
-        robots=[robot("SV1", "surveyor", 1500), robot("EX1", "excavator", 5000),
-                robot("EX2", "excavator", 5000), robot("HL1", "hauler", 3000),
-                robot("HL2", "hauler", 3000), robot("CP1", "compactor", 3500),
-                robot("PR1", "printer", 4000)],
+    req = reqs(
+        [robot("SV1", "surveyor", 1500), robot("EX1", "excavator", 5000),
+         robot("EX2", "excavator", 5000), robot("HL1", "hauler", 3000),
+         robot("HL2", "hauler", 3000), robot("CP1", "compactor", 3500),
+         robot("PR1", "printer", 4000)],
         horizon_h=120,
     )
     graph = TaskGraph(tasks=[
@@ -150,8 +165,8 @@ def test_realistic_landing_pad_instance_is_optimal_at_critical_path():
 
 # ----------------------------------------------------------------------------- locked / offset
 def test_locked_task_is_pinned_to_robot_and_start():
-    req = Requirements(robots=[robot("EX1", "excavator", 5000), robot("EX2", "excavator", 5000),
-                               robot("HL1", "hauler", 3000)], horizon_h=60)
+    req = reqs([robot("EX1", "excavator", 5000), robot("EX2", "excavator", 5000),
+                robot("HL1", "hauler", 3000)], horizon_h=60)
     graph = hand_solvable_graph()
     lock = ScheduleEntry(task="T3", robot="EX2", start_h=3, end_h=8)
     out = assert_schedule(solve_schedule(req, graph, FAST, locked=[lock]))
@@ -188,8 +203,8 @@ def test_start_offset_shifts_absolute_times():
 
 # ----------------------------------------------------------------------------- infeasibility cores
 def test_energy_core_for_single_capable_robot():
-    req = Requirements(robots=[robot("EX1", "excavator", 5000), robot("HL1", "hauler", 3000)],
-                       horizon_h=100)
+    req = reqs([robot("EX1", "excavator", 5000), robot("HL1", "hauler", 3000)],
+                horizon_h=100)
     graph = TaskGraph(tasks=[
         task("T1", "excavator", 4, 3000, "Z1"),
         task("T2", "excavator", 3, 3200, "Z2"),
@@ -230,7 +245,7 @@ def test_bin_packing_core_names_both_robots_but_not_horizon():
 
 
 def test_robot_no_overlap_core_with_horizon():
-    req = Requirements(robots=[robot("EX1", "excavator", 5000)], horizon_h=15)
+    req = reqs([robot("EX1", "excavator", 5000)], horizon_h=15)
     graph = TaskGraph(tasks=[task("T1", "excavator", 10, 100, "Z1"),
                              task("T2", "excavator", 10, 100, "Z2")])
     failure = assert_infeasible(solve_schedule(req, graph, FAST))
@@ -256,8 +271,8 @@ def test_precedence_cycle_core():
 
 
 def test_minimize_core_shrinks_a_redundant_core():
-    req = Requirements(robots=[robot("EX1", "excavator", 5000), robot("HL1", "hauler", 3000)],
-                       horizon_h=100)
+    req = reqs([robot("EX1", "excavator", 5000), robot("HL1", "hauler", 3000)],
+                horizon_h=100)
     graph = TaskGraph(tasks=[
         task("T1", "excavator", 4, 3000, "Z1"),
         task("T2", "excavator", 3, 3200, "Z2"),
@@ -272,7 +287,7 @@ def test_minimize_core_shrinks_a_redundant_core():
 
 
 def test_explain_infeasibility_can_be_disabled():
-    req = Requirements(robots=[robot("EX1", "excavator", 5000)], horizon_h=100)
+    req = reqs([robot("EX1", "excavator", 5000)], horizon_h=100)
     graph = TaskGraph(tasks=[task("T1", "excavator", 4, 3000, "Z1"),
                              task("T2", "excavator", 3, 3200, "Z2")])
     failure = assert_infeasible(solve_schedule(req, graph, opts(explain_infeasibility=False)))
@@ -320,8 +335,8 @@ def test_core_extraction_timeout_yields_empty_core(monkeypatch):
 
 # ----------------------------------------------------------------------------- check_schedule
 def test_check_schedule_reports_every_kind_of_violation():
-    req = Requirements(robots=[robot("EX1", "excavator", 5000), robot("EX2", "excavator", 5000),
-                               robot("HL1", "hauler", 3000)], horizon_h=10)
+    req = reqs([robot("EX1", "excavator", 5000), robot("EX2", "excavator", 5000),
+                robot("HL1", "hauler", 3000)], horizon_h=10)
     graph = TaskGraph(tasks=[
         task("T1", "excavator", 4, 3000, "Z1"),
         task("T2", "excavator", 3, 2500, "Z1", after=("T1",)),
@@ -379,7 +394,7 @@ def tight_two_robot_instance() -> tuple[Requirements, TaskGraph]:
     tasks = [task(f"T{i}", "excavator", rng.randint(2, 8), 10, f"Z{rng.randint(1, 4)}",
                   tuple(f"T{j}" for j in range(max(0, i - 3), i) if rng.random() < 0.3))
              for i in range(20)]
-    return Requirements(robots=robots, horizon_h=50), TaskGraph(tasks=tasks)
+    return reqs(robots, 50), TaskGraph(tasks=tasks)
 
 
 def test_core_isolation_falls_back_to_hard_trials_when_the_assumption_solve_times_out():
@@ -444,7 +459,7 @@ def test_trial_skips_the_solve_without_time():
 def test_fractional_energies_and_batteries_are_exact_to_a_milli_wh():
     """Replans hand over 3-dp task energies and 2-dp remaining batteries. Rounding tasks up and
     batteries down to whole Wh used to reject budgets the validator and the checker accept."""
-    req = Requirements(robots=[robot("EX1", "excavator", 1784.38)], horizon_h=100)
+    req = reqs([robot("EX1", "excavator", 1784.38)], horizon_h=100)
     graph = TaskGraph(tasks=[task("T1", "excavator", 4, 892.19, "Z1"),
                              task("T2", "excavator", 3, 892.19, "Z2")])
     assert validate_graph(req, graph) is None
@@ -510,8 +525,8 @@ def test_horizon_hint_names_a_locked_task_that_ends_past_the_horizon():
 
 # ----------------------------------------------------------------------------- disjoint cores
 def test_independent_conflicts_are_reported_together_as_disjoint_cores():
-    req = Requirements(robots=[robot("EX1", "excavator", 5000), robot("HL1", "hauler", 3000),
-                               robot("SV1", "surveyor", 1500)], horizon_h=15)
+    req = reqs([robot("EX1", "excavator", 5000), robot("HL1", "hauler", 3000),
+                robot("SV1", "surveyor", 1500)], horizon_h=15)
     graph = TaskGraph(tasks=[
         task("T1", "excavator", 4, 3000, "Z1"),   # EX1 cannot power T1 + T2 ........ energy:EX1
         task("T2", "excavator", 3, 3200, "Z2"),
@@ -534,3 +549,242 @@ def test_independent_conflicts_are_reported_together_as_disjoint_cores():
     assert _trial(inst, rest, time_limit_s=5.0) in (cp_model.OPTIMAL, cp_model.FEASIBLE)
     for conflict in failure.conflicts:  # and no reported group is idle
         assert conflict in _build(inst, soft=True).groups
+
+
+# ----------------------------------------------------------------------------- travel
+# Site A is the simulator tests' geometry: default depot (20, 1), Z1 = (10, 30), Z2 = (30, 30)
+# and Z3 auto-placed at (4, 36). At 60 cells/h every leg is under an hour, so each task gets a
+# 1 h allowance. Site B puts two zones 36 cells apart in the far corners, 41 cells from the
+# depot: at 12 cells/h the first leg takes 4 h (20.573 Wh), the leg between them 3 h (18 Wh).
+SITE_A = Site(grid=(40, 40), zones=[Zone(id="Z1", center=(10, 30)),
+                                    Zone(id="Z2", center=(30, 30))])
+DEPOT_A = (20, 1)
+Z3_A = (4, 36)
+SITE_B = Site(grid=(40, 40), zones=[Zone(id="Z1", center=(2, 38)),
+                                    Zone(id="Z2", center=(38, 38))])
+DEPOT_TO_Z1_B = math.hypot(2 - 20, 38 - 1)   # 41.15 cells
+Z1_TO_Z2_B = 36.0
+
+
+def three_task_graph() -> TaskGraph:
+    """T1 (Z1) and T2 (Z2) for the excavators, T3 (Z3) for the hauler after both: 7 h."""
+    return TaskGraph(tasks=[
+        task("T1", "excavator", 4, 800, "Z1"),
+        task("T2", "excavator", 4, 800, "Z2"),
+        task("T3", "hauler", 3, 600, "Z3", after=("T1", "T2")),
+    ])
+
+
+def site_a_req(speed: float = 60.0) -> Requirements:
+    return reqs([robot("EX1", "excavator", 5000, speed), robot("EX2", "excavator", 5000, speed),
+                 robot("HL1", "hauler", 3000, speed)], 100, site=SITE_A)
+
+
+def far_zones_req(battery_wh: float, horizon_h: int = 50) -> Requirements:
+    return reqs([robot("R1", "excavator", battery_wh, 12.0)], horizon_h, site=SITE_B)
+
+
+def two_far_tasks() -> TaskGraph:
+    return TaskGraph(tasks=[task("T1", "excavator", 4, 100, "Z1"),
+                            task("T2", "excavator", 4, 100, "Z2", after=("T1",))])
+
+
+def test_first_leg_delays_the_start_and_the_simulator_arrives_on_time():
+    req, graph = site_a_req(), three_task_graph()
+    out = assert_schedule(solve_schedule(req, graph, FAST))
+    # 7 h of work plus the hour the first legs take (31 and 38 cells at 60 cells/h round up)
+    assert out.makespan_h == 8 and out.status == "optimal"
+    assert {e.task: e.start_h for e in out.entries} == {"T1": 1, "T2": 1, "T3": 5}
+    assert check_schedule(req, graph, out) == [] and check_schedule(req, graph, out, FAST) == []
+    inst = _instance(req, graph, FAST, [])
+    assert {k: (t.allowance_h, t.first_leg_h) for k, t in inst.transit.items()} == {
+        (0, "EX1"): (1, 1), (0, "EX2"): (1, 1), (1, "EX1"): (1, 1), (1, "EX2"): (1, 1),
+        (2, "HL1"): (1, 1)}
+    # the energy allowance is the longest leg to the zone at 0.5 Wh per cell
+    assert inst.transit[0, "EX1"].allowance_mwh == to_mwh(travel_wh(distance(DEPOT_A, (10, 30))))
+    assert inst.transit[2, "HL1"].allowance_mwh == to_mwh(travel_wh(distance(DEPOT_A, Z3_A)))
+    # the simulator drives the real legs and starts every task at its scheduled hour
+    res = Simulator(req, graph, out).run(stop_on_event=False)
+    assert res.completed and res.finished_at_h == pytest.approx(8.0) and res.events == []
+
+
+def test_consecutive_tasks_on_one_robot_are_a_whole_allowance_apart():
+    req, graph = far_zones_req(300), two_far_tasks()
+    out = assert_schedule(solve_schedule(req, graph, FAST))
+    # 41 cells from the depot at 12 cells/h: T1 cannot start before 4 h. The allowance before
+    # T2 is the longest leg R1 could drive to Z2 (41 cells from the depot, not the 36 from Z1):
+    # the bound is independent of the sequence, so T2 waits 4 h after T1 rather than 3.
+    entries = sorted(out.entries, key=lambda e: e.start_h)
+    assert [(e.task, e.start_h, e.end_h) for e in entries] == [("T1", 4, 8), ("T2", 12, 16)]
+    assert out.makespan_h == 16 and out.status == "optimal"
+    assert check_schedule(req, graph, out, FAST) == []
+    inst = _instance(req, graph, FAST, [])
+    assert inst.transit[1, "R1"] == inst.transit[0, "R1"]
+    assert inst.transit[0, "R1"].allowance_h == travel_hours(DEPOT_TO_Z1_B, 12) == 4
+    res = Simulator(req, graph, out).run(stop_on_event=False)
+    assert res.completed and res.finished_at_h == pytest.approx(16.0) and res.events == []
+    # the real legs (41 + 36 cells, 38.6 Wh) stay within the 41.1 Wh the solver reserved
+    left = res.frames[-1].robots[0].battery_wh
+    assert left == pytest.approx(300 - 200 - travel_wh(DEPOT_TO_Z1_B + Z1_TO_Z2_B), abs=0.05)
+
+
+def test_travel_energy_is_budgeted_and_the_hint_names_its_share():
+    req, graph = far_zones_req(200), two_far_tasks()
+    failure = assert_infeasible(solve_schedule(req, graph, FAST))
+    assert failure.conflicts == ["energy:R1"]
+    assert "R1 would need 241.146 Wh (incl. ~41 Wh of travel) but has 200 Wh." in failure.hint
+    # the allowance is a bound: 238.6 Wh would really be spent, 241.146 Wh is what must fit
+    assert assert_schedule(solve_schedule(far_zones_req(241.15), graph, FAST)).makespan_h == 16
+    assert assert_infeasible(solve_schedule(far_zones_req(241.14), graph, FAST)).conflicts == \
+        ["energy:R1"]
+
+    # the shared-pool hint carries the share as well: three 100 Wh tasks on two 125 Wh robots,
+    # each task worth 120.573 Wh with its leg, so no robot can take two of them
+    pool = reqs([robot("R1", "excavator", 125, 12.0), robot("R2", "excavator", 125, 12.0)], 50,
+                site=SITE_B)
+    three = TaskGraph(tasks=[task("T1", "excavator", 4, 100, "Z1"),
+                             task("T2", "excavator", 4, 100, "Z2"),
+                             task("T3", "excavator", 4, 100, "Z1")])
+    failure = assert_infeasible(solve_schedule(pool, three, FAST))
+    assert set(failure.conflicts) == {"energy:R1", "energy:R2"}
+    assert "361.719 Wh in total (incl. ~62 Wh of travel)" in failure.hint
+    assert "250 Wh combined" in failure.hint
+
+
+def test_check_schedule_times_and_charges_the_actual_legs():
+    req, graph = far_zones_req(200), two_far_tasks()
+    back_to_back = Schedule(status="optimal", makespan_h=8, entries=[
+        ScheduleEntry(task="T1", robot="R1", start_h=0, end_h=4),
+        ScheduleEntry(task="T2", robot="R1", start_h=4, end_h=8),
+    ])
+    # the 36-cell leg between the zones needs 3 h and 18 Wh the schedule does not have
+    assert check_schedule(req, graph, back_to_back) == ["energy:R1", "robot:R1"]
+    # with the solver's options the first leg (41 cells from the depot) is timed and charged too
+    assert check_schedule(req, graph, back_to_back, SolveOptions()) == ["energy:R1", "robot:R1"]
+
+    spaced = Schedule(status="feasible", makespan_h=14, entries=[
+        ScheduleEntry(task="T1", robot="R1", start_h=3, end_h=7),
+        ScheduleEntry(task="T2", robot="R1", start_h=10, end_h=14),
+    ])
+    roomy = far_zones_req(300)
+    assert check_schedule(roomy, graph, spaced) == []             # start position unknown
+    assert check_schedule(roomy, graph, spaced, SolveOptions()) == ["robot:R1"]  # 3 h < 4 h
+    assert check_schedule(req, graph, spaced) == ["energy:R1"]    # 200 Wh of work + the 18 Wh leg
+    nearby = SolveOptions(robot_positions={"R1": (2.0, 34.0)})   # 4 cells from Z1: 1 h
+    assert check_schedule(roomy, graph, spaced, nearby) == []
+    later = SolveOptions(start_offset_h=3, robot_positions={"R1": (2.0, 34.0)})
+    assert check_schedule(roomy, graph, spaced, later) == ["robot:R1"]  # 3 + 1 > 3
+
+
+def test_robot_positions_move_the_first_leg():
+    # one task in Z1 from three starting points: the depot (31 cells away, 3 h at 12 cells/h),
+    # a cell 5 cells away (1 h) and the zone itself (no leg at all)
+    req = reqs([robot("EX1", "excavator", 5000, 12.0)], 50, site=SITE_A)
+    graph = TaskGraph(tasks=[task("T1", "excavator", 4, 100, "Z1")])
+    for positions, start in ((None, 3), ({"EX1": (10.0, 25.0)}, 1), ({"EX1": (10.0, 30.0)}, 0)):
+        o = opts(robot_positions=positions)
+        out = assert_schedule(solve_schedule(req, graph, o))
+        assert (out.entry("T1").start_h, out.makespan_h) == (start, start + 4)
+        assert check_schedule(req, graph, out, o) == []
+    # verified against the wrong starting point, the schedule from the zone fails its first leg
+    assert check_schedule(req, graph, out, SolveOptions()) == ["robot:EX1"]
+    # the leg counts from the moment the plan starts
+    shifted = opts(start_offset_h=10)
+    out = assert_schedule(solve_schedule(req, graph, shifted))
+    assert out.entry("T1").start_h == 13 and check_schedule(req, graph, out, shifted) == []
+    # a replan passes the frame positions: the allowance covers the leg from there as well
+    far = opts(robot_positions={"EX1": (39.0, 0.0)})            # 41.7 cells from Z1: 4 h
+    transit = _instance(req, graph, far, []).transit[0, "EX1"]
+    assert transit.first_leg_h == transit.allowance_h == 4
+    assert transit.allowance_mwh == to_mwh(travel_wh(distance((39, 0), (10, 30))))
+
+
+def test_allowance_covers_only_the_zones_a_robot_can_be_sent_to():
+    # the printer only ever works in Z1, 4 cells from the depot; the excavators' far zone must
+    # not inflate its allowance (the bound is over the zones the robot can be sent to)
+    site = Site(grid=(40, 40), zones=[Zone(id="Z1", center=(20, 5)),
+                                      Zone(id="Z2", center=(20, 38))])
+    req = reqs([robot("PR1", "printer", 4000, 12.0), robot("EX1", "excavator", 5000, 12.0)],
+               100, site=site)
+    graph = TaskGraph(tasks=[task("T1", "printer", 4, 100, "Z1"),
+                             task("T2", "printer", 4, 100, "Z1", after=("T1",)),
+                             task("T3", "excavator", 4, 100, "Z2")])
+    inst = _instance(req, graph, FAST, [])
+    assert inst.transit[0, "PR1"].allowance_h == inst.transit[1, "PR1"].allowance_h == 1
+    assert inst.transit[2, "EX1"].allowance_h == 4            # 37 cells
+    out = assert_schedule(solve_schedule(req, graph, FAST))
+    assert [(e.start_h, e.end_h) for e in (out.entry("T1"), out.entry("T2"))] == [(1, 5), (6, 10)]
+    assert out.entry("T3").start_h == 4 and out.makespan_h == 10
+    assert check_schedule(req, graph, out, FAST) == []
+
+
+def test_locked_task_is_not_held_up_by_its_first_leg():
+    # a replan pins the task underway to planner time 0: its robot is on it already, wherever
+    # the options say the robots start
+    req, graph = far_zones_req(300), two_far_tasks()
+    lock = ScheduleEntry(task="T1", robot="R1", start_h=0, end_h=4)
+    out = assert_schedule(solve_schedule(req, graph, FAST, locked=[lock]))
+    assert (out.entry("T1").start_h, out.entry("T2").start_h) == (0, 8)
+    assert check_schedule(req, graph, out) == []
+    at_zone = SolveOptions(robot_positions={"R1": (2.0, 38.0)})  # where the frame has it
+    assert check_schedule(req, graph, out, at_zone) == []
+
+
+def test_horizon_and_robot_hints_count_the_transit():
+    req = far_zones_req(300, horizon_h=7)
+    graph = TaskGraph(tasks=[task("T1", "excavator", 4, 100, "Z1")])
+    failure = assert_infeasible(solve_schedule(req, graph, FAST))
+    assert failure.conflicts == ["horizon"]
+    assert "7 h horizon" in failure.hint
+    assert "takes 8 h (transit to its first zone included)" in failure.hint
+
+    # 8 h of work on one robot, but 4 h to reach each zone: 16 h against a 15 h horizon
+    req = far_zones_req(300, horizon_h=15)
+    graph = TaskGraph(tasks=[task("T1", "excavator", 4, 100, "Z1"),
+                             task("T2", "excavator", 4, 100, "Z2")])
+    failure = assert_infeasible(solve_schedule(req, graph, FAST))
+    assert set(failure.conflicts) == {"horizon", "robot:R1"}
+    assert ("R1 runs one task at a time, and the 2 task(s) only it can do already take 8 h "
+            "back to back plus up to 8 h of transit.") in failure.hint
+
+
+def test_allowance_adds_no_variables_to_the_model():
+    graph = three_task_graph()
+    with_travel = _build(_instance(site_a_req(), graph, FAST, []), soft=False, minimize=True)
+    flat = reqs([robot("EX1", "excavator", 5000, 60.0), robot("EX2", "excavator", 5000, 60.0),
+                 robot("HL1", "hauler", 3000, 60.0)], 100)
+    without = _build(_instance(flat, graph, FAST, []), soft=False, minimize=True)
+    assert len(with_travel.model.proto.variables) == len(without.model.proto.variables)
+    # the only additions are the five first-leg bounds, one per (task, capable robot) pair
+    assert len(with_travel.model.proto.constraints) == len(without.model.proto.constraints) + 5
+
+
+def spread_instance(horizon_h: int) -> tuple[Requirements, TaskGraph]:
+    """20 tasks on 3 robots of 2 types over four corner zones at 12 cells/h (3-5 h legs)."""
+    rng = random.Random(3)
+    site = Site(grid=(40, 40), zones=[Zone(id="Z1", center=(4, 4)), Zone(id="Z2", center=(35, 4)),
+                                      Zone(id="Z3", center=(4, 35)), Zone(id="Z4", center=(35, 35))])
+    robots = [robot("EX1", "excavator", 10**6, 12.0), robot("EX2", "excavator", 10**6, 12.0),
+              robot("HL1", "hauler", 10**6, 12.0)]
+    tasks = [task(f"T{i}", "excavator" if i % 3 else "hauler", rng.randint(2, 8), 10,
+                  f"Z{rng.randint(1, 4)}",
+                  tuple(f"T{j}" for j in range(max(0, i - 3), i) if rng.random() < 0.3))
+             for i in range(20)]
+    return reqs(robots, horizon_h, site=site), TaskGraph(tasks=tasks)
+
+
+def test_twenty_task_instance_with_travel_solves_fast_and_still_explains():
+    req, graph = spread_instance(10**4)
+    t0 = time.perf_counter()
+    out = assert_schedule(solve_schedule(req, graph, opts(num_workers=8)))
+    assert time.perf_counter() - t0 < 1.0
+    assert out.status == "optimal" and check_schedule(req, graph, out, FAST) == []
+    res = Simulator(req, graph, out).run(stop_on_event=False)
+    assert res.completed and res.events == [] and res.finished_at_h == pytest.approx(out.makespan_h)
+
+    tight = req.model_copy(update={"horizon_h": out.makespan_h - 1})
+    t0 = time.perf_counter()
+    failure = assert_infeasible(solve_schedule(tight, graph, opts(core_time_limit_s=1.0)))
+    assert time.perf_counter() - t0 < 8.0
+    assert "horizon" in failure.conflicts and "could not isolate" not in failure.hint
+    assert f"{out.makespan_h - 1} h horizon" in failure.hint
