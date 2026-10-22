@@ -252,5 +252,5 @@ def test_battery_depletion_still_stops_the_robot_and_the_checker_now_says_why():
     # and the solver's answer to the same brief is honest: the legs do not fit the battery
     verdict = solve_schedule(req, graph, FAST)
     assert not isinstance(verdict, Schedule) and verdict.conflicts == ["energy:R1"]
-    assert "(incl. ~41 Wh of travel)" in verdict.hint
+    assert "about 41 Wh of it travel" in verdict.hint
     assert math.isclose(distance((20, 1), (2, 38)) + 36, 77.146, abs_tol=0.001)

@@ -113,10 +113,11 @@ def to_mwh(wh: float) -> int:
 
 
 def fmt_wh(mwh: int) -> str:
-    """Milli-Wh as a Wh figure with only the decimals it needs: 6200000 -> '6200',
-    4200250 -> '4200.25', 4200251 -> '4200.251'."""
+    """Milli-Wh as an exact Wh figure, thousands separated, with only the decimals it needs:
+    6200000 -> '6,200', 4200250 -> '4,200.25', 4200251 -> '4,200.251'. The rounded form with
+    the unit ('6,200 Wh') is :func:`moonwright.text.wh`."""
     whole, frac = divmod(mwh, MWH_PER_WH)
-    return str(whole) if frac == 0 else f"{whole}.{frac:03d}".rstrip("0")
+    return f"{whole:,}" if frac == 0 else f"{whole:,}.{frac:03d}".rstrip("0")
 
 
 def schema_conflict(error: str) -> str:

@@ -5,6 +5,8 @@ Contract:
     solve_schedule(req, graph, opts=None, locked=None) -> Schedule | Failure
     check_schedule(req, graph, schedule, opts=None) -> list[str]   # independent re-verification
     sequence_travel(req, graph, schedule, opts=None) -> {robot id: RobotTravel}   # the legs driven
+    budget_rows(req, graph, failure, opts=None, locked=None) -> [{kind, subject, robots,
+        budget_wh, demanded_wh, travel_wh}]   # the energy figures behind a verdict, as numbers
 
 Model (PRD section "스케줄링 모델"):
   x[i,r]  BoolVar for every task i and every robot r with r.type == task.robot_type
@@ -62,7 +64,8 @@ Solve strategy:
      explanation shares one wall-clock budget (opts.explain_time_limit_s).
   3. UNKNOWN (timeout) -> Failure(kind="solver_timeout").
 `locked` entries pin task->robot and start (replanning of tasks already underway).
-Return Failure(kind="infeasible", conflicts=[group names], hint=<one sentence per group>).
+Return Failure(kind="infeasible", conflicts=[group names], hint=<one sentence per group, the
+pool-form sentences of one robot type merged into one that lists the robots>).
 
 Implementation notes
 --------------------
@@ -90,7 +93,9 @@ Implementation notes
   validator, this model and :func:`check_schedule` share, so the three agree to 1e-3 Wh and a
   fractional budget (replans hand over 3-dp task energies and 2-dp remaining batteries) is
   neither rejected by rounding up nor accepted by rounding down. Hints quote the figures the
-  model used, with the travel share called out when it is worth a Wh.
+  model used as whole Wh with thousands separators ("9,930 Wh"), the travel share called out
+  when it is worth a Wh; a fractional budget gets just the decimals that keep the two figures
+  apart (see the "hints" section). :func:`budget_rows` returns the same figures as numbers.
 * ``locked``: an entry pins ``x[task, robot] = 1`` and ``start == entry.start_h`` (absolute hours,
   the entry's ``end_h`` is ignored; the graph's duration counts). A locked robot that cannot do
   the task by type is treated as capable for that pair. Locks naming a task that is not in the
@@ -116,6 +121,7 @@ import time
 from collections import defaultdict
 from collections.abc import Collection, Iterable
 from dataclasses import dataclass
+from typing import Any
 
 from ortools.sat.python import cp_model
 
@@ -134,9 +140,14 @@ from moonwright.schemas import (
     ScheduleEntry,
     Task,
     TaskGraph,
-    fmt_wh,
     to_mwh,
 )
+from moonwright.text import an as _an
+from moonwright.text import h as _h
+from moonwright.text import join_and as _join_and
+from moonwright.text import plural as _plural
+from moonwright.text import wh as _wh
+from moonwright.text import whole_wh as _whole_wh
 
 MAX_CORES = 3  # disjoint conflict cores reported per infeasible solve
 
@@ -317,6 +328,34 @@ def sequence_travel(
             here, free_h = there, max(free_h, entry.end_h)
         out[robot_id] = RobotTravel(mwh=mwh, late_legs=late)
     return out
+
+
+def budget_rows(
+    req: Requirements, graph: TaskGraph, failure: Failure,
+    opts: SolveOptions | None = None, locked: list[ScheduleEntry] | None = None,
+) -> list[dict[str, Any]]:
+    """The numbers behind the ``energy:<robot>`` conflicts of ``failure`` (a verdict of
+    :func:`solve_schedule` on ``req``/``graph`` under the same ``opts`` and ``locked``), as
+    JSON-ready rows for a UI's budget table, in the order the conflicts first name them:
+
+    * ``{"kind": "type", "subject": <robot type>, "robots": [every robot of the type],
+      "budget_wh": <their batteries combined>, "demanded_wh": <the type's work plus the least
+      transit allowance of each task>, "travel_wh": <that allowance>}``: one row per type whose
+      work fits the pool but no split of it fits the single batteries, however many of its
+      robots the core names;
+    * ``{"kind": "robot", "subject": <robot id>, "robots": [<robot id>], "budget_wh": <its
+      battery>, "demanded_wh": <the tasks only it can run, transit included>, "travel_wh":
+      <that transit>}``: one row per robot whose own forced tasks exceed its battery.
+
+    Wh to the milli-Wh: exactly the figures the hint sentences quote (rounded there). ``[]``
+    when the failure has no energy conflict; conflicts naming a robot ``req`` does not have
+    are skipped.
+    """
+    core = [c for c in failure.conflicts if c.startswith("energy:")]
+    if not core:
+        return []
+    inst = _instance(req, graph, opts or SolveOptions(), locked or [])
+    return [row.as_dict() for row in _energy_budgets(inst, core)]
 
 
 def _overlapping(entries: Iterable[ScheduleEntry]) -> bool:
@@ -729,16 +768,71 @@ def _explain(inst: _Instance) -> Failure:
 
 
 # ----------------------------------------------------------------------------- hints
+# Copy rules (phase 3d; a mission planner reads the hint on the trace, the repair prompt reads
+# it verbatim): whole-number figures with thousands separators and a unit ("9,930 Wh", "62 h"),
+# real plurals, no nested parentheses, and one sentence per conflict, except that the robots of
+# one type whose conflict has the same pool-form explanation share one sentence that lists them.
+# Every figure a repair needs (budget, demand, travel share, pool) stays in the sentence;
+# :func:`budget_rows` hands the energy figures over as numbers, from the very rows the
+# sentences are rendered from, so prose and table can never disagree.
 def _hints(inst: _Instance, core: list[str]) -> str:
-    """One human sentence per conflict id, joined with spaces."""
+    """The human hint for ``core``: one sentence per conflict in core order, pool-form energy
+    and robot sentences of one type merged into one (emitted where the group's first conflict
+    stands)."""
     if not core:
         return "The plan is infeasible even with every soft constraint relaxed."
-    return " ".join(_hint(inst, conflict) for conflict in core)
+    merged: dict[str, tuple[int, str]] = {}   # conflict id -> (group number, its sentence)
+    groups = 0
+    for budget in _energy_budgets(inst, core):
+        groups += 1
+        for robot_id in budget.named:
+            merged[f"energy:{robot_id}"] = (groups, _energy_sentence(inst, budget))
+    for load in _robot_loads(inst, core):
+        groups += 1
+        for robot_id in load.named:
+            merged[f"robot:{robot_id}"] = (groups, _robot_sentence(load))
+    sentences: list[str] = []
+    said: set[int] = set()
+    for conflict in core:
+        if conflict in merged:
+            group, sentence = merged[conflict]
+            if group not in said:
+                said.add(group)
+                sentences.append(sentence)
+            continue
+        kind, _, arg = conflict.partition(":")
+        hint = _HINTS.get(kind)
+        sentences.append(hint(inst, arg) if hint else _unknown_hint(inst, conflict))
+    return " ".join(sentences)
 
 
-def _hint(inst: _Instance, conflict: str) -> str:
-    kind, _, arg = conflict.partition(":")
-    return _HINTS[kind](inst, arg)
+# -- figures: whole Wh and h with thousands separators and real plurals (moonwright.text)
+def _wh_value(mwh: int) -> float:
+    """Milli-Wh as the Wh number a table shows: exact to the milli-Wh, never float noise."""
+    return round(mwh / MWH_PER_WH, 3)
+
+
+def _decimals_apart(need: int, budget: int) -> int:
+    """The fewest decimals (0 to 3) at which ``need`` (milli-Wh, above ``budget``) still prints
+    above ``budget``: 0 for every whole-Wh case, more only for the fractional figures a replan
+    hands over (1,784.381 Wh against 1,784.38 Wh), so no sentence ever reads "would need
+    1,784 Wh but has 1,784 Wh". :func:`moonwright.text.wh` rounds the same way (half up on the
+    integer milli-Wh), so the decimals chosen here are the decimals printed."""
+    for decimals in range(3):
+        unit = MWH_PER_WH // 10 ** decimals
+        if (need + unit // 2) // unit > (budget + unit // 2) // unit:
+            return decimals
+    return 3
+
+
+def _travel_clause(mwh: int) -> str:
+    """', about 30 Wh of it travel' when the transit share is worth a Wh, else ''. The share
+    is the allowance the model reserved (an upper bound), hence "about"."""
+    return f", about {_wh(mwh)} of it travel" if _whole_wh(mwh) >= 1 else ""
+
+
+def _transit_note(hours: int) -> str:
+    return f" plus up to {_h(hours)} of transit" if hours else ""
 
 
 def _forced_tasks(inst: _Instance, robot_id: str) -> list[int]:
@@ -748,22 +842,6 @@ def _forced_tasks(inst: _Instance, robot_id: str) -> list[int]:
             or (i in inst.locked and inst.locked[i].robot == robot_id)]
 
 
-def _join_and(parts: list[str]) -> str:
-    """'a', 'a and b', 'a, b and c'."""
-    if len(parts) <= 2:
-        return " and ".join(parts)
-    return ", ".join(parts[:-1]) + " and " + parts[-1]
-
-
-def _travel_note(mwh: int) -> str:
-    """The suffix ' (incl. ~120 Wh of travel)' when the transit share is worth a Wh, else ''."""
-    return f" (incl. ~{mwh / MWH_PER_WH:.0f} Wh of travel)" if mwh >= MWH_PER_WH // 2 else ""
-
-
-def _transit_note(hours: int) -> str:
-    return f" plus up to {hours} h of transit" if hours else ""
-
-
 def _least_allowance(inst: _Instance, i: int) -> _Transit:
     """The transit budget of task ``i`` on whichever capable robot needs the least: a lower
     bound whatever the solver assigns."""
@@ -771,48 +849,152 @@ def _least_allowance(inst: _Instance, i: int) -> _Transit:
                key=lambda t: (t.allowance_mwh, t.allowance_h))
 
 
-def _energy_hint(inst: _Instance, robot_id: str) -> str:
-    """Quotes the milli-Wh figures the model used, so the hint matches the verdict exactly."""
-    robot = inst.req.robot(robot_id)
-    budget = inst.battery[robot_id]
-    forced = _forced_tasks(inst, robot_id)
-    travel = sum(inst.transit[i, robot_id].allowance_mwh for i in forced)
-    need = sum(inst.energy[i] for i in forced) + travel
-    if need > budget:
-        return (f"{robot_id} would need {fmt_wh(need)} Wh{_travel_note(travel)} but has "
-                f"{fmt_wh(budget)} Wh.")
-    peers = inst.req.robots_of_type(robot.type)
-    typed = [i for i, t in enumerate(inst.tasks) if t.robot_type == robot.type]
-    travel = sum(_least_allowance(inst, i).allowance_mwh for i in typed)
-    total = sum(inst.energy[i] for i in typed) + travel
-    pool = sum(inst.battery[r.id] for r in peers)
-    return (f"{robot_id} has {fmt_wh(budget)} Wh, and the {robot.type} tasks "
-            f"({fmt_wh(total)} Wh in total{_travel_note(travel)}) cannot be split across the "
-            f"{len(peers)} {robot.type} robot(s) ({fmt_wh(pool)} Wh combined) without exceeding "
-            "its budget.")
+# -- energy: the budget rows behind energy:<robot> conflicts, and their sentences
+@dataclass(eq=False)
+class _Budget:
+    """The figures behind one or more ``energy:<robot>`` conflicts, in milli-Wh. ``kind``
+    "robot": the tasks only ``subject`` can run (locked to it, or it is the only robot of its
+    type) already exceed its battery. ``kind`` "type": the ``subject`` type's work fits the pool
+    of its robots' batteries but no split of it fits the single batteries. ``named`` are the
+    robots of the core the row explains; ``robots`` those whose batteries make up
+    ``budget_mwh`` (the robot itself, or every robot of the type)."""
+
+    kind: str
+    subject: str
+    named: list[str]
+    robots: list[str]
+    budget_mwh: int
+    demanded_mwh: int
+    travel_mwh: int
+
+    def as_dict(self) -> dict[str, Any]:
+        return {"kind": self.kind, "subject": self.subject, "robots": list(self.robots),
+                "budget_wh": _wh_value(self.budget_mwh),
+                "demanded_wh": _wh_value(self.demanded_mwh),
+                "travel_wh": _wh_value(self.travel_mwh)}
 
 
-def _robot_hint(inst: _Instance, robot_id: str) -> str:
-    robot = inst.req.robot(robot_id)
-    forced = _forced_tasks(inst, robot_id)
-    if forced:
-        hours = sum(inst.tasks[i].duration_h for i in forced)
-        transit = sum(inst.transit[i, robot_id].allowance_h for i in forced)
-        return (f"{robot_id} runs one task at a time, and the {len(forced)} task(s) only it can "
-                f"do already take {hours} h back to back{_transit_note(transit)}.")
-    peers = inst.req.robots_of_type(robot.type)
-    typed = [i for i, t in enumerate(inst.tasks) if t.robot_type == robot.type]
-    hours = sum(inst.tasks[i].duration_h for i in typed)
-    transit = sum(_least_allowance(inst, i).allowance_h for i in typed)
-    return (f"{robot_id} runs one task at a time; the {robot.type} tasks total {hours} h across "
-            f"{len(peers)} {robot.type} robot(s){_transit_note(transit)}.")
+def _energy_budgets(inst: _Instance, core: list[str]) -> list[_Budget]:
+    """One :class:`_Budget` per robot-form ``energy:<robot>`` conflict of ``core`` and one per
+    robot *type* of the pool-form ones, in order of first appearance; conflicts naming a robot
+    the instance does not have are skipped. The figures are the model's own (milli-Wh, travel
+    allowances included), so a hint matches the verdict exactly."""
+    rows: list[_Budget] = []
+    pools: dict[str, _Budget] = {}
+    for conflict in core:
+        kind, _, robot_id = conflict.partition(":")
+        if kind != "energy" or robot_id not in inst.battery:
+            continue
+        robot = inst.req.robot(robot_id)
+        budget = inst.battery[robot_id]
+        forced = _forced_tasks(inst, robot_id)
+        travel = sum(inst.transit[i, robot_id].allowance_mwh for i in forced)
+        need = sum(inst.energy[i] for i in forced) + travel
+        if need > budget:
+            rows.append(_Budget("robot", robot_id, [robot_id], [robot_id], budget, need, travel))
+            continue
+        pool = pools.get(robot.type)
+        if pool is None:
+            peers = inst.req.robots_of_type(robot.type)
+            typed = [i for i, t in enumerate(inst.tasks) if t.robot_type == robot.type]
+            travel = sum(_least_allowance(inst, i).allowance_mwh for i in typed)
+            pool = _Budget("type", robot.type, [], [r.id for r in peers],
+                           sum(inst.battery[r.id] for r in peers),
+                           sum(inst.energy[i] for i in typed) + travel, travel)
+            pools[robot.type] = pool
+            rows.append(pool)
+        pool.named.append(robot_id)
+    return rows
 
 
+def _energy_sentence(inst: _Instance, row: _Budget) -> str:
+    """Robot form: "PR1 would need 4,023 Wh, about 33 Wh of it travel, but has 4,000 Wh."
+    Type form: "EX1 and EX2 each have 5,000 Wh; the excavator tasks need 9,930 Wh in total,
+    about 30 Wh of it travel, and cannot be split across 2 excavators (10,000 Wh combined)
+    without exceeding one budget." """
+    travel = _travel_clause(row.travel_mwh)
+    comma = "," if travel else ""
+    if row.kind == "robot":
+        decimals = _decimals_apart(row.demanded_mwh, row.budget_mwh)
+        return (f"{row.subject} would need {_wh(row.demanded_mwh, decimals)}{travel}{comma} "
+                f"but has {_wh(row.budget_mwh, decimals)}.")
+    budgets = [inst.battery[r] for r in row.named]
+    if len(row.named) > 1 and len(set(budgets)) == 1:
+        who = f"{_join_and(row.named)} each have {_wh(budgets[0])}"
+    else:
+        who = _join_and([f"{r} has {_wh(b)}" for r, b in zip(row.named, budgets, strict=True)])
+    fleet = _plural(len(row.robots), row.subject)
+    need = f"the {row.subject} tasks need {_wh(row.demanded_mwh)} in total{travel}"
+    if row.demanded_mwh > row.budget_mwh:
+        return (f"{who}; {need}, more than the {_wh(row.budget_mwh)} the {fleet} have "
+                "combined.")
+    return (f"{who}; {need}{comma} and cannot be split across {fleet} "
+            f"({_wh(row.budget_mwh)} combined) without exceeding one budget.")
+
+
+# -- robot time: the hours behind robot:<robot> conflicts, and their sentences
+@dataclass(eq=False)
+class _Load:
+    """The hours behind ``robot:<robot>`` conflicts: ``kind`` "robot" when the ``tasks`` only
+    ``subject`` can run already take ``hours`` back to back, "type" when the ``subject`` type's
+    ``tasks`` take ``hours`` across its ``count`` robots; ``transit_h`` is the transit on top."""
+
+    kind: str
+    subject: str
+    named: list[str]
+    count: int
+    tasks: int
+    hours: int
+    transit_h: int
+
+
+def _robot_loads(inst: _Instance, core: list[str]) -> list[_Load]:
+    """Like :func:`_energy_budgets`, for the ``robot:<robot>`` conflicts of ``core``."""
+    rows: list[_Load] = []
+    pools: dict[str, _Load] = {}
+    for conflict in core:
+        kind, _, robot_id = conflict.partition(":")
+        if kind != "robot" or robot_id not in inst.battery:
+            continue
+        robot = inst.req.robot(robot_id)
+        forced = _forced_tasks(inst, robot_id)
+        if forced:
+            rows.append(_Load("robot", robot_id, [robot_id], 1, len(forced),
+                              sum(inst.tasks[i].duration_h for i in forced),
+                              sum(inst.transit[i, robot_id].allowance_h for i in forced)))
+            continue
+        pool = pools.get(robot.type)
+        if pool is None:
+            typed = [i for i, t in enumerate(inst.tasks) if t.robot_type == robot.type]
+            pool = _Load("type", robot.type, [], len(inst.req.robots_of_type(robot.type)),
+                         len(typed), sum(inst.tasks[i].duration_h for i in typed),
+                         sum(_least_allowance(inst, i).allowance_h for i in typed))
+            pools[robot.type] = pool
+            rows.append(pool)
+        pool.named.append(robot_id)
+    return rows
+
+
+def _robot_sentence(row: _Load) -> str:
+    if row.kind == "robot":
+        if row.tasks == 1:
+            return (f"{row.subject} runs one task at a time, and the task only it can do "
+                    f"already takes {_h(row.hours)}{_transit_note(row.transit_h)}.")
+        return (f"{row.subject} runs one task at a time, and the {_plural(row.tasks, 'task')} "
+                f"only it can do already take {_h(row.hours)} back to back"
+                f"{_transit_note(row.transit_h)}.")
+    verb = "runs" if len(row.named) == 1 else "each run"
+    return (f"{_join_and(row.named)} {verb} one task at a time; the {row.subject} tasks total "
+            f"{_h(row.hours)} across {_plural(row.count, row.subject)}"
+            f"{_transit_note(row.transit_h)}.")
+
+
+# -- the other groups
 def _zone_hint(inst: _Instance, zone_id: str) -> str:
     in_zone = [t for t in inst.tasks if t.zone == zone_id]
     hours = sum(t.duration_h for t in in_zone)
-    return (f"Zone {zone_id} admits one robot at a time, so its {len(in_zone)} tasks "
-            f"({hours} h in total) cannot overlap.")
+    return (f"Zone {zone_id} admits one robot at a time, so its {_plural(len(in_zone), 'task')} "
+            f"({_h(hours)} in total) cannot overlap.")
 
 
 def _precedence_hint(inst: _Instance, edge: str) -> str:
@@ -824,29 +1006,36 @@ def _precedence_hint(inst: _Instance, edge: str) -> str:
                 "form a cycle, so no order exists.")
     into, out_of = chains
     return (f"{succ_id} cannot start until {pred_id} finishes ({pred_id} takes "
-            f"{inst.tasks[i].duration_h} h); the precedence chain through this edge is "
-            f"{into[i] + out_of[j]} h long.")
+            f"{_h(inst.tasks[i].duration_h)}); the precedence chain through this edge is "
+            f"{_h(into[i] + out_of[j])} long.")
 
 
 def _horizon_hint(inst: _Instance, _arg: str) -> str:
+    """"The plan cannot finish within the 60 h horizon: the longest precedence chain alone
+    needs 86 h, 26 h past the 60 h deadline; the busiest robot type (excavator) needs at least
+    40 h." Every figure that overshoots says by how much."""
     horizon = inst.req.horizon_h
-    parts = []
-    overdue = [(inst.tasks[i].id, lock.start_h + inst.tasks[i].duration_h)
-               for i, lock in sorted(inst.locked.items())
-               if lock.start_h + inst.tasks[i].duration_h > horizon]
-    if overdue:
-        parts.append(_join_and([f"the locked task {task_id} cannot end before {end} h"
-                                for task_id, end in overdue]))
+
+    def past(end_h: int) -> str:
+        """', 26 h past the 60 h deadline' when an absolute end overshoots, else ''."""
+        return (f", {_h(end_h - horizon)} past the {_h(horizon)} deadline"
+                if end_h > horizon else "")
+
+    parts: list[str] = []
+    for i, lock in sorted(inst.locked.items()):
+        end = lock.start_h + inst.tasks[i].duration_h
+        if end > horizon:
+            parts.append(f"the locked task {inst.tasks[i].id} cannot end before {_h(end)}"
+                         f"{past(end)}")
     chains = _chains(inst, with_locks=True, with_travel=True)
     if chains is not None:
-        into, _ = chains
+        longest = max(chains[0])
         what = ("the longest chain of work, locked starts included," if inst.locked
                 else "the longest precedence chain alone")
-        longest = max(into)
         without_travel = _chains(inst, with_locks=True)
         note = ("" if without_travel is None or max(without_travel[0]) == longest
-                else " (transit to its first zone included)")
-        parts.append(f"{what} takes {longest} h{note}")
+                else " including the transit to its first zone")
+        parts.append(f"{what} needs {_h(longest)}{note}{past(inst.start_lb + longest)}")
     by_type: dict[str, int] = defaultdict(int)
     for task in inst.tasks:
         by_type[task.robot_type] += task.duration_h
@@ -854,14 +1043,16 @@ def _horizon_hint(inst: _Instance, _arg: str) -> str:
              for rtype, hours in by_type.items() if inst.req.robots_of_type(rtype)}
     if loads:
         busiest = max(loads, key=lambda rtype: (loads[rtype], rtype))
-        parts.append(f"the busiest robot type ({busiest}) needs at least {loads[busiest]} h")
-    elapsed = f" after the {inst.start_lb} h already elapsed" if inst.start_lb else ""
-    return f"The plan cannot finish within the {horizon} h horizon{elapsed}: {_join_and(parts)}."
+        parts.append(f"the busiest robot type ({busiest}) needs at least {_h(loads[busiest])}"
+                     f"{past(inst.start_lb + loads[busiest])}")
+    elapsed = f" after the {_h(inst.start_lb)} already elapsed" if inst.start_lb else ""
+    return (f"The plan cannot finish within the {_h(horizon)} horizon{elapsed}: "
+            f"{'; '.join(parts)}.")
 
 
 def _capability_hint(inst: _Instance, task_id: str) -> str:
     task = inst.tasks[inst.index[task_id]]
-    return f"Task {task_id} needs a {task.robot_type} but no robot of that type exists."
+    return f"Task {task_id} needs {_an(task.robot_type)} but no robot of that type exists."
 
 
 def _reference_hint(_inst: _Instance, arg: str) -> str:
@@ -869,9 +1060,12 @@ def _reference_hint(_inst: _Instance, arg: str) -> str:
     return f"Task {task_id} waits for unknown task {pred_id}."
 
 
+def _unknown_hint(_inst: _Instance, conflict: str) -> str:
+    """A conflict id the solver never produces (a caller's own), named rather than crashed on."""
+    return f"The constraint {conflict} cannot be satisfied."
+
+
 _HINTS = {
-    "energy": _energy_hint,
-    "robot": _robot_hint,
     "zone": _zone_hint,
     "precedence": _precedence_hint,
     "horizon": _horizon_hint,

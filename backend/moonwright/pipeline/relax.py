@@ -31,7 +31,7 @@ Candidates are derived from the conflict ids of ``failure`` (the verdict on ``gr
                    clone is a conservative spare), its id is the type's id prefix plus the next
                    number free in the fleet and in ``reserved_ids`` (the robots a replan has
                    lost: EX1, EX2 -> EX3), and it is solved under the ORIGINAL horizon ->
-                   "one more excavator (EX3, 5000 Wh like EX1): feasible at 62 h". A type the
+                   "one more excavator (EX3, 5,000 Wh like EX1): feasible at 62 h". A type the
                    fleet lacks gets a robot sized to what its tasks charge it.
   raise_battery    for every robot an energy conflict names (``energy:<robot>``; the type's
                    largest battery for the validator's ``energy:<type>`` and
@@ -41,10 +41,10 @@ Candidates are derived from the conflict ids of ``failure`` (the verdict on ``gr
                    :data:`BATTERY_STEP_WH`: a battery that is certainly enough), then search
                    the :data:`BATTERY_STEP_WH` grid between the battery it has and that figure
                    for the smallest one CP-SAT still schedules (feasibility is monotone in a
-                   battery, so a binary search is exact) -> "EX1 needs 5950 Wh (has 5000 Wh):
+                   battery, so a binary search is exact) -> "EX1 needs 5,950 Wh (has 5,000 Wh):
                    feasible at 62 h". The makespan-optimal lifted schedule often piles more
                    work on the lifted robot than it needs, so without the search the sentence
-                   over-claimed by whole tasks ("EX2 needs 7800 Wh" where 5200 Wh works).
+                   over-claimed by whole tasks ("EX2 needs 7,800 Wh" where 5,200 Wh works).
                    When the search runs out of time the last proven figure is reported as
                    "a battery of X Wh on EX2 is enough", never as a need.
   reduce_scope     not a solver matter: when every candidate above was tried and refuted, or
@@ -105,6 +105,7 @@ from moonwright.schemas import (
     fmt_wh,
     to_mwh,
 )
+from moonwright.text import join_and as _join_and
 
 KINDS: tuple[str, ...] = ("extend_horizon", "add_robot", "raise_battery", "reduce_scope")
 SOLVE_LIMIT_S = 2.0        # CP-SAT budget per verification solve
@@ -471,7 +472,7 @@ def _extend_detail(makespan_h: int, deadline_h: int, proof: str) -> str:
 
 _EXTEND_RE = re.compile(r"^finishing needs \d+ h, \d+ h past the \d+ h deadline \((?P<proof>.*)\)$")
 _FEASIBLE_AT_RE = re.compile(r"feasible at \d+ h$")
-_SPARE_RE = re.compile(r"\((?P<id>[A-Za-z0-9_.-]+), (?P<wh>[\d.]+) Wh"
+_SPARE_RE = re.compile(r"\((?P<id>[A-Za-z0-9_.-]+), (?P<wh>[\d.,]+) Wh"
                        r"(?P<how> like [A-Za-z0-9_.-]+|; the fleet has none)\)")
 
 
@@ -541,9 +542,3 @@ def _largest_work(graph: TaskGraph, structures: int = 3) -> str:
                      f"{fmt_wh(to_mwh(top.energy_wh))} Wh)")
     return _join_and(items)
 
-
-def _join_and(parts: list[str]) -> str:
-    """'a', 'a and b', 'a, b and c'."""
-    if len(parts) <= 2:
-        return " and ".join(parts)
-    return ", ".join(parts[:-1]) + " and " + parts[-1]

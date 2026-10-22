@@ -212,7 +212,7 @@ def test_energy_core_for_single_capable_robot():
     ])
     failure = assert_infeasible(solve_schedule(req, graph, FAST))
     assert failure.conflicts == ["energy:EX1"]
-    assert "EX1 would need 6200 Wh but has 5000 Wh" in failure.hint
+    assert failure.hint == "EX1 would need 6,200 Wh but has 5,000 Wh."
 
 
 def test_precedence_plus_horizon_core():
@@ -241,7 +241,7 @@ def test_bin_packing_core_names_both_robots_but_not_horizon():
     failure = assert_infeasible(solve_schedule(req, graph, FAST))
     assert set(failure.conflicts) == {"energy:EX1", "energy:EX2"}
     assert "horizon" not in failure.conflicts
-    assert "9900 Wh" in failure.hint and "10000 Wh" in failure.hint
+    assert "9,900 Wh in total" in failure.hint and "10,000 Wh combined" in failure.hint
 
 
 def test_robot_no_overlap_core_with_horizon():
@@ -471,7 +471,7 @@ def test_fractional_energies_and_batteries_are_exact_to_a_milli_wh():
                             task("T2", "excavator", 3, 892.19, "Z2")])
     failure = assert_infeasible(solve_schedule(req, over, FAST))
     assert failure.conflicts == ["energy:EX1"]
-    assert "EX1 would need 1784.381 Wh but has 1784.38 Wh" in failure.hint
+    assert failure.hint == "EX1 would need 1,784.381 Wh but has 1,784.38 Wh."
     hand = Schedule(status="feasible", makespan_h=7, entries=[
         ScheduleEntry(task="T1", robot="EX1", start_h=0, end_h=4),
         ScheduleEntry(task="T2", robot="EX1", start_h=4, end_h=7),
@@ -488,7 +488,7 @@ def test_fractional_energies_and_batteries_are_exact_to_a_milli_wh():
                              task("T3", "excavator", 1, 1000.5, "Z3")])
     failure = assert_infeasible(solve_schedule(req2, split, FAST))
     assert set(failure.conflicts) == {"energy:EX1", "energy:EX2"}
-    assert "4001 Wh in total" in failure.hint and "4001 Wh combined" in failure.hint
+    assert "4,001 Wh in total" in failure.hint and "4,001 Wh combined" in failure.hint
 
 
 # ----------------------------------------------------------------------------- hint robustness
@@ -515,8 +515,9 @@ def test_horizon_hint_names_a_locked_task_that_ends_past_the_horizon():
     failure = assert_infeasible(solve_schedule(req, graph, FAST, locked=[lock]))
     assert failure.conflicts == ["horizon"]
     assert "10 h horizon" in failure.hint
-    assert "the locked task T3 cannot end before 13 h" in failure.hint
-    assert "locked starts included, takes 13 h" in failure.hint  # folded into the chain figure
+    assert "the locked task T3 cannot end before 13 h, 3 h past the 10 h deadline" in failure.hint
+    # folded into the chain figure
+    assert "locked starts included, needs 13 h, 3 h past the 10 h deadline" in failure.hint
 
     # the same lock inside the horizon: no complaint, the plan simply waits for it
     out = assert_schedule(solve_schedule(two_excavators(horizon_h=13), graph, FAST, locked=[lock]))
@@ -538,8 +539,8 @@ def test_independent_conflicts_are_reported_together_as_disjoint_cores():
     assert failure.conflicts == ["energy:EX1", "energy:SV1", "horizon", "robot:HL1"]
     sentences = failure.hint.split(". ")
     assert len(sentences) == 4 and failure.hint.endswith(".")  # one sentence per conflict
-    assert "EX1 would need 6200 Wh but has 5000 Wh" in failure.hint
-    assert "SV1 would need 2000 Wh but has 1500 Wh" in failure.hint
+    assert "EX1 would need 6,200 Wh but has 5,000 Wh." in failure.hint
+    assert "SV1 would need 2,000 Wh but has 1,500 Wh." in failure.hint
     assert "15 h horizon" in failure.hint and "HL1 runs one task at a time" in failure.hint
 
     # deterministic, and the union really explains everything: without it the rest is feasible
@@ -632,7 +633,7 @@ def test_travel_energy_is_budgeted_and_the_hint_names_its_share():
     req, graph = far_zones_req(200), two_far_tasks()
     failure = assert_infeasible(solve_schedule(req, graph, FAST))
     assert failure.conflicts == ["energy:R1"]
-    assert "R1 would need 241.146 Wh (incl. ~41 Wh of travel) but has 200 Wh." in failure.hint
+    assert failure.hint == "R1 would need 241 Wh, about 41 Wh of it travel, but has 200 Wh."
     # the allowance is a bound: 238.6 Wh would really be spent, 241.146 Wh is what must fit
     assert assert_schedule(solve_schedule(far_zones_req(241.15), graph, FAST)).makespan_h == 16
     assert assert_infeasible(solve_schedule(far_zones_req(241.14), graph, FAST)).conflicts == \
@@ -647,8 +648,9 @@ def test_travel_energy_is_budgeted_and_the_hint_names_its_share():
                              task("T3", "excavator", 4, 100, "Z1")])
     failure = assert_infeasible(solve_schedule(pool, three, FAST))
     assert set(failure.conflicts) == {"energy:R1", "energy:R2"}
-    assert "361.719 Wh in total (incl. ~62 Wh of travel)" in failure.hint
-    assert "250 Wh combined" in failure.hint
+    assert failure.hint == ("R1 and R2 each have 125 Wh; the excavator tasks need 362 Wh in "
+                            "total, about 62 Wh of it travel, more than the 250 Wh the "
+                            "2 excavators have combined.")
 
 
 def test_check_schedule_times_and_charges_the_actual_legs():
@@ -736,7 +738,8 @@ def test_horizon_and_robot_hints_count_the_transit():
     failure = assert_infeasible(solve_schedule(req, graph, FAST))
     assert failure.conflicts == ["horizon"]
     assert "7 h horizon" in failure.hint
-    assert "takes 8 h (transit to its first zone included)" in failure.hint
+    assert ("needs 8 h including the transit to its first zone, 1 h past the 7 h deadline"
+            in failure.hint)
 
     # 8 h of work on one robot, but 4 h to reach each zone: 16 h against a 15 h horizon
     req = far_zones_req(300, horizon_h=15)
@@ -744,7 +747,7 @@ def test_horizon_and_robot_hints_count_the_transit():
                              task("T2", "excavator", 4, 100, "Z2")])
     failure = assert_infeasible(solve_schedule(req, graph, FAST))
     assert set(failure.conflicts) == {"horizon", "robot:R1"}
-    assert ("R1 runs one task at a time, and the 2 task(s) only it can do already take 8 h "
+    assert ("R1 runs one task at a time, and the 2 tasks only it can do already take 8 h "
             "back to back plus up to 8 h of transit.") in failure.hint
 
 

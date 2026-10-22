@@ -57,9 +57,10 @@ Every command answers `--help`; `--llm fixture|nebius|record` picks the model cl
   re-scope work (shown in the repair diff) but a task underway may not change (`locked:<task>`).
   The closing `replan` step of the trace says what happened in one sentence.
 * **Trace payloads**. `schedule` steps carry a verification receipt (constraint counts, battery use
-  per robot, `travel_allowance`, the independent re-check); `repair` steps a diff with
-  `scope_drift_pct`; `taskgraph` / `repair` steps the rate-model advisories; replan traces an
-  `offset_h` / `time_base` per step.
+  per robot, `travel_allowance`, the independent re-check), or, when CP-SAT refused the graph over
+  a battery, the `budget` rows behind the hint (phase 3d); `repair` steps a diff with
+  `scope_drift_pct` (tasks paired across a renumbering, phase 3d); `taskgraph` / `repair` steps
+  the rate-model advisories; replan traces an `offset_h` / `time_base` per step.
 * **Monte Carlo** (`moonwright/sim/montecarlo.py`). Every sample has an `outcome` (`completed`,
   `late`, `lost_only:<type>`, `replan_infeasible:<kind>`, `stuck`); the result carries
   `within_horizon_ci` (Wilson 95 %), `outcomes` counts and `single_points_of_failure`.
@@ -143,6 +144,59 @@ Every command answers `--help`; `--llm fixture|nebius|record` picks the model cl
   cost, notable requests with ids); `scripts/brief_budget.py` prices a brief, a structure fixture
   or a plan with the rate table and runs canonical graphs through validator + CP-SAT
   (`docs/eval-briefs.md` documents the 22 briefs by kind).
+
+## Pipeline notes (phase 3d)
+
+* **Hint copy** (`pipeline/schedule.py`). Every solver hint is one readable sentence per
+  conflict with every figure a repair needs: whole Wh and h with thousands separators and a
+  spaced unit, real plurals, no `robot(s)`, no nested parentheses, no milli-Wh (decimals appear
+  only when a demand and a budget would otherwise print equal: `1,784.39 Wh but has
+  1,784.38 Wh`). The robots of one type share one pool sentence (`EX1 and EX2 each have
+  5,000 Wh; the excavator tasks need 9,930 Wh in total, about 30 Wh of it travel, and cannot be
+  split across 2 excavators (10,000 Wh combined) without exceeding one budget.`, the recorded
+  tight_battery verdict); a robot whose own tasks exceed its battery reads `PR1 would need
+  4,031 Wh, about 41 Wh of it travel, but has 4,000 Wh.`; the horizon hint says by how much each
+  bound overshoots the deadline. The prose and the numbers come from one table:
+  `budget_rows(req, graph, failure, opts, locked)` returns the rows behind the `energy:<robot>`
+  conflicts (`kind` `type` | `robot`, `subject`, `robots`, `budget_wh`, `demanded_wh`,
+  `travel_wh`, exact to the milli-Wh), and the failed `schedule` step carries them as
+  `payload["budget"]` for the UI's budget table. The rows never reach the model: `Failure` is
+  unchanged and `--feedback verdict` still blanks only the core. The decimals are chosen and
+  printed by one rule (half up on the integer milli-Wh, `moonwright/text.py: wh`), never
+  through a float, so a demand above its budget never prints equal to it.
+* **One number format per screen** (`moonwright/text.py`). The relaxation advice
+  (`EX1 needs 5,950 Wh (has 5,000 Wh): feasible at 62 h`), the validator's energy verdicts
+  (`T1 needs 4,200.251 Wh but the largest excavator battery is 4,200.25 Wh`, exact because the
+  comparison is) and the simulator's `battery_low` events render their Wh and h with the same
+  thousands separators and plurals as the solver hint they sit next to; `fmt_wh` in
+  `schemas.py` is the exact figure, `text.wh` the rounded one with the unit.
+* **Repair diff across a renumbering** (`pipeline/loop.py: match_tasks`, `graph_diff`). The
+  tasks of the graph a repair answered and of its answer are paired by (a) the same
+  normalised name and (robot type, zone, structure, unit) slot, a repeated name (the halves
+  of a split written twice, a hauler fleet's "Haul spoil") paired in graph order when the
+  answer renumbered its tasks and by id otherwise, (b) the same name in another slot when
+  both sides carry it equally often, (c) a unique slot (a renamed task that kept its place),
+  (d) a kept id (a rename plus a move), never across a split or a merge; the rest are
+  `added` / `removed`. The diff carries `renumbered` (`[{from, to}]`, the pairs whose ids
+  differ) and `changed[].from` (the before id of a renumbered task, next to `task`, the after
+  id). `changed` covers `name` (a rename, compared with case and punctuation ignored, so the
+  demo's dropped "borrow pit" is a row), `duration_h`, `energy_wh`, `quantity`, `robot_type`,
+  `zone`, `structure`, `unit` and `after`. Predecessor lists are compared through the
+  renumbering and both written in the answer's ids (`before` translated, a predecessor that
+  no longer exists marked `T2 (removed)`), so a shifted predecessor is not a change and a row
+  reads side by side; a dependent that re-points from a removed task to an added one (the
+  split's halves) is not a change, one that merely dropped its edge to a removed task is. An
+  answer that repeats an id gets no diff (the validate step names the duplicate). The
+  recorded tight_battery repair reads as the one-pass bowl `T2` removed, its halves `T2` /
+  `T3` added, `T3 -> T4 ... T10 -> T11` renumbered and the key trench (`T4`, from `T3`)
+  renamed from "... and borrow pit" to "... (shallow cut, berm fill from pad spoil)" and
+  re-scoped from 24 h / 4,000 Wh to 14 h / 2,100 Wh, instead of thirty-three per-id changes.
+  Scope, `missing:<task>` and `locked:<task>` verdicts stay id-based.
+* **Replan outcome message** (`sim/replan.py`). The closing `replan` step's sentence no longer
+  ends with the time-base flag (`... makespan 80 h -> 91 h`; `payload.time_base` still says
+  `absolute`), counts read as plurals (`3 tasks`, `1 repair`), and a refused repair says what
+  it redefined (`Replan refused: it redefined the running task T1; the previous plan stays in
+  force.`).
 
 ## Evaluation flags
 

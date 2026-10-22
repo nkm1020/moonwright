@@ -385,21 +385,21 @@
   "makespan_h": 68,
   "status": "optimal",
   "objective_bound_h": 68,
-  "solve_time_s": 0.0038840000000000003
+  "solve_time_s": 0.0034730000000000004
  },
- "explanation": "This short sortie digs the full 20 m pad bowl, cuts the berm key trench, strips the approach apron and compacts both the pad subgrade and the berm, with no sintering because no printer is on site. The first task graph gave each excavator a single 4000 Wh dig plus a 1900 Wh apron strip, a total that fits the combined 10000 Wh but no split across two 5000 Wh batteries; the solver rejected it with energy conflicts on EX1 and EX2, and the repaired graph splits the bowl in two and re-scopes the trench so one excavator carries 4200 Wh and the other 4000 Wh. SV1 surveys first, EX1 and EX2 dig in parallel from hour 5, HL1 hauls bowl spoil to the berm line and apron spoil to the stockpile, and CP1 compacts the pad and then the berm before SV1 inspects both. The verified schedule takes 68 hours of the 168-hour window, transit between zones included. Battery is the binding constraint: both excavators use at least 80 percent of their budgets. The solver verified precedence, one task per robot at a time, one robot per zone and every battery limit.",
+ "explanation": "This short sortie digs the full 20 m pad bowl, cuts the berm key trench, strips the approach apron and compacts both the pad subgrade and the berm, with no sintering because no printer is on site. The first task graph gave each excavator a single 4,000 Wh dig plus a 1,900 Wh apron strip, a total that fits the combined 10,000 Wh but no split across two 5,000 Wh batteries; the solver rejected it with energy conflicts on EX1 and EX2, and the repaired graph splits the bowl in two and re-scopes the trench so one excavator carries 4,200 Wh and the other 4,000 Wh. SV1 surveys first, EX1 and EX2 dig in parallel from hour 5, HL1 hauls bowl spoil to the berm line and apron spoil to the stockpile, and CP1 compacts the pad and then the berm before SV1 inspects both. The verified schedule takes 68 hours of the 168-hour window, transit between zones included. Battery is the binding constraint: both excavators use at least 80 percent of their budgets. The solver verified precedence, one task per robot at a time, one robot per zone and every battery limit.",
  "steps": [
   {
    "stage": "structure",
    "attempt": 1,
    "ok": true,
    "failure": null,
-   "duration_s": 0.0022832080721855164,
+   "duration_s": 0.002408374915830791,
    "usage": {
     "model": "fixture:structure.json",
     "input_tokens": 0,
     "output_tokens": 0,
-    "latency_s": 0.0004094999749213457
+    "latency_s": 0.0003032080130651593
    },
    "message": "3 structures, 5 robots, horizon 168h",
    "payload": {
@@ -420,12 +420,12 @@
    "attempt": 1,
    "ok": true,
    "failure": null,
-   "duration_s": 0.0015919170109555125,
+   "duration_s": 0.001254167058505118,
    "usage": {
     "model": "fixture:taskgraph_1.json",
     "input_tokens": 0,
     "output_tokens": 0,
-    "latency_s": 0.0003233329625800252
+    "latency_s": 0.00018633296713232994
    },
    "message": "10 tasks",
    "payload": {
@@ -441,7 +441,7 @@
    "attempt": 1,
    "ok": true,
    "failure": null,
-   "duration_s": 0.0004179159877821803,
+   "duration_s": 0.0004130000015720725,
    "usage": null,
    "message": "10 tasks valid",
    "payload": {
@@ -460,25 +460,39 @@
      "energy:EX1",
      "energy:EX2"
     ],
-    "hint": "EX1 has 5000 Wh, and the excavator tasks (9929.649 Wh in total (incl. ~30 Wh of travel)) cannot be split across the 2 excavator robot(s) (10000 Wh combined) without exceeding its budget. EX2 has 5000 Wh, and the excavator tasks (9929.649 Wh in total (incl. ~30 Wh of travel)) cannot be split across the 2 excavator robot(s) (10000 Wh combined) without exceeding its budget.",
+    "hint": "EX1 and EX2 each have 5,000 Wh; the excavator tasks need 9,930 Wh in total, about 30 Wh of it travel, and cannot be split across 2 excavators (10,000 Wh combined) without exceeding one budget.",
     "details": []
    },
-   "duration_s": 0.014569416991434991,
+   "duration_s": 0.012089875061064959,
    "usage": null,
    "message": null,
-   "payload": null
+   "payload": {
+    "budget": [
+     {
+      "kind": "type",
+      "subject": "excavator",
+      "robots": [
+       "EX1",
+       "EX2"
+      ],
+      "budget_wh": 10000.0,
+      "demanded_wh": 9929.649,
+      "travel_wh": 29.649
+     }
+    ]
+   }
   },
   {
    "stage": "repair",
    "attempt": 2,
    "ok": true,
    "failure": null,
-   "duration_s": 0.001632415922358632,
+   "duration_s": 0.0013823750196024776,
    "usage": {
     "model": "fixture:taskgraph_2.json",
     "input_tokens": 0,
     "output_tokens": 0,
-    "latency_s": 0.0004628748865798116
+    "latency_s": 0.0002883330453187227
    },
    "message": "11 tasks",
    "payload": {
@@ -489,237 +503,67 @@
     "grounded": 0,
     "diff": {
      "added": [
-      "T11"
+      "T2",
+      "T3"
      ],
-     "removed": [],
+     "removed": [
+      "T2"
+     ],
      "changed": [
       {
-       "task": "T2",
+       "task": "T4",
+       "from": "T3",
+       "field": "name",
+       "before": "Cut berm key trench and borrow pit",
+       "after": "Cut berm key trench (shallow cut, berm fill from pad spoil)"
+      },
+      {
+       "task": "T4",
+       "from": "T3",
        "field": "duration_h",
        "before": 24,
        "after": 14
       },
       {
-       "task": "T2",
+       "task": "T4",
+       "from": "T3",
        "field": "energy_wh",
        "before": 4000.0,
        "after": 2100.0
+      }
+     ],
+     "renumbered": [
+      {
+       "from": "T3",
+       "to": "T4"
       },
       {
-       "task": "T3",
-       "field": "duration_h",
-       "before": 24,
-       "after": 14
+       "from": "T4",
+       "to": "T5"
       },
       {
-       "task": "T3",
-       "field": "energy_wh",
-       "before": 4000.0,
-       "after": 2100.0
+       "from": "T5",
+       "to": "T6"
       },
       {
-       "task": "T3",
-       "field": "zone",
-       "before": "Z2",
-       "after": "Z1"
+       "from": "T6",
+       "to": "T7"
       },
       {
-       "task": "T3",
-       "field": "after",
-       "before": [
-        "T1"
-       ],
-       "after": [
-        "T2"
-       ]
+       "from": "T7",
+       "to": "T8"
       },
       {
-       "task": "T4",
-       "field": "duration_h",
-       "before": 12,
-       "after": 14
+       "from": "T8",
+       "to": "T9"
       },
       {
-       "task": "T4",
-       "field": "energy_wh",
-       "before": 1900.0,
-       "after": 2100.0
+       "from": "T9",
+       "to": "T10"
       },
       {
-       "task": "T4",
-       "field": "zone",
-       "before": "Z4",
-       "after": "Z2"
-      },
-      {
-       "task": "T5",
-       "field": "duration_h",
-       "before": 16,
-       "after": 12
-      },
-      {
-       "task": "T5",
-       "field": "energy_wh",
-       "before": 1300.0,
-       "after": 1900.0
-      },
-      {
-       "task": "T5",
-       "field": "robot_type",
-       "before": "hauler",
-       "after": "excavator"
-      },
-      {
-       "task": "T5",
-       "field": "zone",
-       "before": "Z2",
-       "after": "Z4"
-      },
-      {
-       "task": "T5",
-       "field": "after",
-       "before": [
-        "T2",
-        "T3"
-       ],
-       "after": [
-        "T1"
-       ]
-      },
-      {
-       "task": "T6",
-       "field": "duration_h",
-       "before": 8,
-       "after": 16
-      },
-      {
-       "task": "T6",
-       "field": "energy_wh",
-       "before": 700.0,
-       "after": 1300.0
-      },
-      {
-       "task": "T6",
-       "field": "zone",
-       "before": "Z3",
-       "after": "Z2"
-      },
-      {
-       "task": "T6",
-       "field": "after",
-       "before": [
-        "T4"
-       ],
-       "after": [
-        "T3",
-        "T4"
-       ]
-      },
-      {
-       "task": "T7",
-       "field": "duration_h",
-       "before": 14,
-       "after": 8
-      },
-      {
-       "task": "T7",
-       "field": "energy_wh",
-       "before": 1500.0,
-       "after": 700.0
-      },
-      {
-       "task": "T7",
-       "field": "robot_type",
-       "before": "compactor",
-       "after": "hauler"
-      },
-      {
-       "task": "T7",
-       "field": "zone",
-       "before": "Z1",
-       "after": "Z3"
-      },
-      {
-       "task": "T7",
-       "field": "after",
-       "before": [
-        "T2"
-       ],
-       "after": [
-        "T5"
-       ]
-      },
-      {
-       "task": "T8",
-       "field": "zone",
-       "before": "Z2",
-       "after": "Z1"
-      },
-      {
-       "task": "T8",
-       "field": "after",
-       "before": [
-        "T5"
-       ],
-       "after": [
-        "T3"
-       ]
-      },
-      {
-       "task": "T9",
-       "field": "duration_h",
-       "before": 3,
-       "after": 14
-      },
-      {
-       "task": "T9",
-       "field": "energy_wh",
-       "before": 200.0,
-       "after": 1500.0
-      },
-      {
-       "task": "T9",
-       "field": "robot_type",
-       "before": "surveyor",
-       "after": "compactor"
-      },
-      {
-       "task": "T9",
-       "field": "after",
-       "before": [
-        "T8"
-       ],
-       "after": [
-        "T6"
-       ]
-      },
-      {
-       "task": "T10",
-       "field": "duration_h",
-       "before": 4,
-       "after": 3
-      },
-      {
-       "task": "T10",
-       "field": "energy_wh",
-       "before": 300.0,
-       "after": 200.0
-      },
-      {
-       "task": "T10",
-       "field": "zone",
-       "before": "Z1",
-       "after": "Z2"
-      },
-      {
-       "task": "T10",
-       "field": "after",
-       "before": [
-        "T7"
-       ],
-       "after": [
-        "T9"
-       ]
+       "from": "T10",
+       "to": "T11"
       }
      ],
      "per_type_energy_before": {
@@ -747,7 +591,7 @@
    "attempt": 2,
    "ok": true,
    "failure": null,
-   "duration_s": 0.00043474999256432056,
+   "duration_s": 0.000380084034986794,
    "usage": null,
    "message": "11 tasks valid",
    "payload": {
@@ -761,7 +605,7 @@
    "attempt": 2,
    "ok": true,
    "failure": null,
-   "duration_s": 0.004757042042911053,
+   "duration_s": 0.004166750004515052,
    "usage": null,
    "message": "makespan 68h (optimal)",
    "payload": {
@@ -819,7 +663,7 @@
      "horizon_h": 168,
      "status": "optimal",
      "objective_bound_h": 68,
-     "solve_time_s": 0.004,
+     "solve_time_s": 0.003,
      "travel_allowance": true,
      "recheck": "independent check_schedule passed"
     }
@@ -830,12 +674,12 @@
    "attempt": 1,
    "ok": true,
    "failure": null,
-   "duration_s": 0.0004229999613016844,
+   "duration_s": 0.00036920898128300905,
    "usage": {
     "model": "fixture:explain.json",
     "input_tokens": 0,
     "output_tokens": 0,
-    "latency_s": 0.00035733403638005257
+    "latency_s": 0.0002841249806806445
    },
    "message": null,
    "payload": null

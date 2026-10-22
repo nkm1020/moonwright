@@ -32,7 +32,9 @@ guessing again.
    battery budgets including a transit allowance, the deadline, makespan minimised and proven.
 4. **Repair with reasons.** When the model's graph is infeasible, CP-SAT returns a minimal set of
    conflicting constraints (for example `energy:EX1`, `precedence:T4->T2`) with the numbers behind
-   them ("the excavator tasks need 9,900 Wh and cannot be split across two 5,000 Wh batteries").
+   them ("EX1 and EX2 each have 5,000 Wh; the excavator tasks need 9,930 Wh in total, about 30 Wh
+   of it travel, and cannot be split across 2 excavators (10,000 Wh combined) without exceeding
+   one budget").
    That goes back to Nemotron, up to three rounds; every change the model makes is shown as a
    diff, and scope reductions are flagged for the planner's approval. Only solver-verified
    schedules reach the Gantt chart, together with a Nemotron-written explanation.

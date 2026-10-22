@@ -69,8 +69,16 @@ Step payloads
 ``verification`` receipt is built by :func:`verification_receipt` (constraint counts, battery
 use per robot as work plus the travel of its sequence, tightest robot, horizon use, solver
 status / bound / time, whether travel was inside the model, and the independent re-check
-note). ``repair`` (an answer that validated): ``{"diff": {...}}`` from :func:`graph_diff`
-(added / removed / changed fields, energy per robot type before and after, scope drift).
+note). ``repair`` (an answer that parsed): ``{"diff": {...}}`` from :func:`graph_diff` (tasks
+paired across a renumbering by :func:`match_tasks`: ``renumbered`` id pairs, added / removed
+ids, changed fields under the after id with ``from`` when the task was renumbered, renames
+included, energy per robot type before and after, scope drift); an answer that repeats a task
+id gets no diff, the validate step names the duplicate.
+``schedule`` (failed, ``energy:<robot>`` in the core): ``{"budget": [...]}`` from
+:func:`moonwright.pipeline.schedule.budget_rows`, one row per robot type whose work no split
+across its batteries fits and one per robot whose own tasks exceed its battery (``kind``,
+``subject``, ``robots``, ``budget_wh``, ``demanded_wh``, ``travel_wh``, exact Wh): the figures
+the hint sentence quotes rounded, for the UI's budget table; the model never sees them.
 ``validate``: ``{"advisories": [...]}`` when the step that produced the graph carried
 advisories (the rate model's estimate warnings, or its note that nothing was grounded).
 The *final failed step* of a run that ends without a schedule (the verdict the repair budget
@@ -92,7 +100,7 @@ import hashlib
 import logging
 import re
 import time
-from collections.abc import Callable, Collection, Mapping
+from collections.abc import Callable, Collection, Iterable, Mapping
 from dataclasses import fields
 from typing import Any, Literal
 
@@ -101,6 +109,7 @@ from moonwright.pipeline.explain import explain_schedule
 from moonwright.pipeline.relax import suggest_relaxations
 from moonwright.pipeline.schedule import (
     SolveOptions,
+    budget_rows,
     check_schedule,
     sequence_travel,
     solve_schedule,
@@ -130,7 +139,8 @@ FeedbackMode = Literal["core", "verdict"]
 ScopeMode = Literal["strict", "repair"]
 Positions = Mapping[str, tuple[float, float]]
 
-DIFF_FIELDS = ("duration_h", "energy_wh", "quantity", "robot_type", "zone", "after")
+DIFF_FIELDS = ("name", "duration_h", "energy_wh", "quantity", "robot_type", "zone",
+               "structure", "unit", "after")
 RECHECK_NOTE = "independent check_schedule passed"
 log = logging.getLogger(__name__)
 
@@ -305,7 +315,7 @@ class Planner:
                     feedback=feedback, context=context, variant=variant, baseline=prior_graph,
                     locked=underway,
                 )
-                if new_graph is not None:
+                if new_graph is not None and len(set(new_graph.ids())) == len(new_graph.tasks):
                     _attach(step, "diff", graph_diff(graph, new_graph))
                 last = new_graph is None and (not _retryable(step)
                                               or retries >= self.max_answer_retries)
@@ -423,8 +433,10 @@ class Planner:
         t0 = time.perf_counter()
         out = solve_schedule(req, graph, opts, locked=locked)
         if isinstance(out, Failure):
+            budget = _budget(req, graph, out, opts, locked)
             step = LoopStep(stage="schedule", attempt=attempt, ok=False, failure=out,
-                            duration_s=time.perf_counter() - t0)
+                            duration_s=time.perf_counter() - t0,
+                            payload={"budget": budget} if budget else None)
             if final:
                 self._advise(step, req, graph, out, opts, locked, replan=replan,
                              reserved=reserved)
@@ -575,28 +587,60 @@ def verification_receipt(req: Requirements, graph: TaskGraph, schedule: Schedule
 
 def graph_diff(before: TaskGraph, after: TaskGraph) -> dict[str, Any]:
     """The ``diff`` payload of a repair step: what the model changed between ``before`` (the
-    graph it was given) and ``after`` (its answer). ``changed`` lists one entry per task and
-    field (:data:`DIFF_FIELDS`); ``scope_drift_pct`` is the signed change of the total
-    ``energy_wh`` (the physical work the graph asks for) in percent of ``before``."""
+    graph it was given) and ``after`` (its answer).
+
+    Tasks are paired by :func:`match_tasks` (a stable identity, not the id alone), so a repair
+    that splits one task and shifts every later id by one is reported as ``renumbered``
+    (``[{"from": "T4", "to": "T5"}, ...]``: the pairs whose ids differ) and not as a
+    re-scoping of every shifted task. ``added`` / ``removed`` are the after / before ids that
+    found no partner, each id once. ``changed`` lists one entry per pair and field
+    (:data:`DIFF_FIELDS`) under the *after* id, with ``from`` (the before id) when the pair
+    was renumbered. A ``name`` entry is a rename (names are compared with case, whitespace and
+    punctuation ignored and quoted as written), so a replacement or a scope cut that lives in
+    the wording ("... and borrow pit" dropped) is visible. The ``after`` (predecessor) lists
+    are compared through the renumbering and an entry's two lists are both written in the
+    answer's ids (``before`` is the old list translated, a predecessor that no longer exists
+    marked ``"T2 (removed)"``), so they read side by side. A dependent of a removed task that
+    now waits for an added task has re-pointed (the dependents of a split task necessarily
+    re-point to its halves): those edges belong to the removal / addition, not to the
+    dependent. A dependent that merely lost its edge to a removed task (a haul that no longer
+    waits for any excavation), or gained an edge to an added task without having lost one, has
+    changed and is reported. ``scope_drift_pct`` is the signed change of the total
+    ``energy_wh`` (the physical work the graph asks for) in percent of ``before``; it and the
+    per-type / total figures do not depend on the pairing."""
     was = {t.id: t for t in before.tasks}
     now = {t.id: t for t in after.tasks}
+    pairs = match_tasks(before, after)
+    renumbering = dict(pairs)                                   # before id -> after id
+    kept = set(renumbering.values())
+    removed = [t for t in dict.fromkeys(before.ids()) if t not in renumbering]
+    added = [t for t in dict.fromkeys(after.ids()) if t not in kept]
+    gone, fresh = set(removed), set(added)
     changed = []
-    for tid, new in now.items():
-        old = was.get(tid)
-        if old is None:
-            continue
+    for b_id, a_id in pairs:
+        old, new = was[b_id], now[a_id]
+        moved = {"from": b_id} if b_id != a_id else {}
         for field in DIFF_FIELDS:
-            a, b = _diff_value(old, field), _diff_value(new, field)
-            if a != b:
-                changed.append({"task": tid, "field": field, "before": a, "after": b})
+            if field == "after":
+                same = _same_edges(old, new, renumbering, gone, fresh)
+                a = sorted(_after_id(p, renumbering, gone) for p in old.after)
+                b = sorted(new.after)
+            elif field == "name":
+                same, a, b = _name_key(old) == _name_key(new), old.name, new.name
+            else:
+                a, b = _diff_value(old, field), _diff_value(new, field)
+                same = a == b
+            if not same:
+                changed.append({"task": a_id, **moved, "field": field, "before": a, "after": b})
     energy_before, energy_after = _energy_by_type(before), _energy_by_type(after)
     total_before = sum(to_mwh(t.energy_wh) for t in before.tasks)
     total_after = sum(to_mwh(t.energy_wh) for t in after.tasks)
     drift = round(100.0 * (total_after - total_before) / total_before, 1) if total_before else 0.0
     return {
-        "added": [t for t in after.ids() if t not in was],
-        "removed": [t for t in before.ids() if t not in now],
+        "added": added,
+        "removed": removed,
         "changed": changed,
+        "renumbered": [{"from": b, "to": a} for b, a in pairs if b != a],
         "per_type_energy_before": energy_before,
         "per_type_energy_after": energy_after,
         "scope_drift_pct": drift,
@@ -605,6 +649,129 @@ def graph_diff(before: TaskGraph, after: TaskGraph) -> dict[str, Any]:
         "total_duration_h_before": sum(t.duration_h for t in before.tasks),
         "total_duration_h_after": sum(t.duration_h for t in after.tasks),
     }
+
+
+def match_tasks(before: TaskGraph, after: TaskGraph) -> list[tuple[str, str]]:
+    """Pair the tasks of ``before`` with those of ``after`` on a stable identity: ``(before id,
+    after id)`` pairs in the order of ``after``, every task in at most one pair. Four rules,
+    each applied to the tasks the earlier ones left unpaired:
+
+    (a) the same normalised name (case, whitespace and punctuation ignored) and the same slot
+        ``(robot_type, zone, structure, unit)``. A name one task on each side carries pairs
+        the two whatever their ids. The tasks of a repeated name (the halves of a split
+        written as "Excavate pad bowl" twice, a hauler fleet's "Haul spoil" tasks) pair in
+        graph order when the answer renumbered its tasks (old T2, T3 -> new T3, T4 after an
+        insertion, the only pairing consistent with a renumbering) and by id otherwise; the
+        surplus of an uneven count is left over as added / removed.
+    (b) the same normalised name in another slot (a task moved to another zone or re-typed),
+        when both sides carry it equally often, paired like (a); an uneven count is a split
+        or a merge and pairs nothing.
+    (c) the same slot, when exactly one task on each side carries it: a task that was renamed
+        and renumbered but kept its place.
+    (d) the same id: the model kept an id on purpose through a rename and a move. Not when
+        the before task's slot is shared by two or more unpaired tasks of the answer (a split,
+        whichever half kept the id) or the after task's slot by two or more unpaired tasks of
+        the given graph (a merge).
+
+    Whatever remains unpaired was added or removed: two tasks that merely share a slot (the
+    halves of a split) never take the place of one task, and two before tasks never share
+    one after task."""
+    was = {t.id: t for t in before.tasks}
+    now = {t.id: t for t in after.tasks}
+    partner: dict[str, str] = {}                                # after id -> before id
+    free_before, free_after = dict.fromkeys(was), dict.fromkeys(now)   # in graph order
+
+    def pair(b_id: str, a_id: str) -> None:
+        partner[a_id] = b_id
+        del free_before[b_id], free_after[a_id]
+
+    shifted = False   # evidence of a renumbering: a unique name found under another id
+    for key_of, uneven in ((_identity_key, True), (_name_key, False)):
+        by_before = _grouped(key_of, [was[i] for i in free_before])
+        by_after = _grouped(key_of, [now[i] for i in free_after])
+        groups = [(b_ids, a_ids) for key, a_ids in by_after.items()
+                  if (b_ids := by_before.get(key)) and (uneven or len(b_ids) == len(a_ids))]
+        for b_ids, a_ids in groups:              # the unique names first: they show a shift
+            if len(b_ids) == 1 == len(a_ids):
+                pair(b_ids[0], a_ids[0])
+                shifted = shifted or b_ids[0] != a_ids[0]
+        for b_ids, a_ids in groups:
+            if len(b_ids) == 1 == len(a_ids):
+                continue
+            b_ids, a_ids = list(b_ids), list(a_ids)
+            if not shifted:
+                for tid in [a for a in a_ids if a in b_ids]:
+                    pair(tid, tid)
+                    b_ids.remove(tid)
+                    a_ids.remove(tid)
+            for b_id, a_id in zip(b_ids, a_ids, strict=False):
+                pair(b_id, a_id)
+    by_before = _unique_by(_slot_key, [was[i] for i in free_before])
+    by_after = _unique_by(_slot_key, [now[i] for i in free_after])
+    for key, a_id in by_after.items():
+        b_id = by_before.get(key)
+        if b_id is not None:
+            pair(b_id, a_id)
+    for tid in [a for a in free_after if a in free_before]:
+        halves = [a for a in free_after if _slot_key(now[a]) == _slot_key(was[tid])]
+        merged = [b for b in free_before if _slot_key(was[b]) == _slot_key(now[tid])]
+        if len(halves) < 2 and len(merged) < 2:
+            pair(tid, tid)
+    return [(partner[a_id], a_id) for a_id in now if a_id in partner]
+
+
+_NON_WORD_RE = re.compile(r"[\W_]+")
+
+
+def _name_key(task: Task) -> str | None:
+    """The task's name with case, whitespace and punctuation taken out; None when nothing is
+    left (a name that identifies nothing)."""
+    return " ".join(_NON_WORD_RE.sub(" ", task.name).casefold().split()) or None
+
+
+def _slot_key(task: Task) -> tuple[str, str, str | None, str | None]:
+    return (task.robot_type, task.zone, task.structure, task.unit)
+
+
+def _identity_key(task: Task) -> tuple[str, tuple[str, str, str | None, str | None]] | None:
+    name = _name_key(task)
+    return (name, _slot_key(task)) if name is not None else None
+
+
+def _grouped(key_of: Callable[[Task], Any], tasks: Iterable[Task]) -> dict[Any, list[str]]:
+    """``key -> task ids`` in the order given (None keys never count)."""
+    groups: dict[Any, list[str]] = {}
+    for task in tasks:
+        key = key_of(task)
+        if key is not None:
+            groups.setdefault(key, []).append(task.id)
+    return groups
+
+
+def _unique_by(key_of: Callable[[Task], Any], tasks: Iterable[Task]) -> dict[Any, str]:
+    """``key -> task id`` for the keys exactly one of ``tasks`` carries."""
+    return {key: ids[0] for key, ids in _grouped(key_of, tasks).items() if len(ids) == 1}
+
+
+def _after_id(pred: str, renumbering: Mapping[str, str], gone: Collection[str]) -> str:
+    """A predecessor named by the given graph, in the answer's ids: renumbered, or marked
+    when the task it names was removed; an id unknown to both graphs stays as written."""
+    if pred in renumbering:
+        return renumbering[pred]
+    return f"{pred} (removed)" if pred in gone else pred
+
+
+def _same_edges(old: Task, new: Task, renumbering: Mapping[str, str], gone: Collection[str],
+                fresh: Collection[str]) -> bool:
+    """Whether a pair's predecessor lists agree once read in the answer's ids. The edges of a
+    re-point (an edge to a removed task given up, an edge to an added task taken on) belong
+    to the removal / addition and are left out of the comparison, but only when the pair
+    carries both, so a dependency that was simply dropped, or simply added, is never
+    forgiven."""
+    repointed = any(p in gone for p in old.after) and any(p in fresh for p in new.after)
+    before = {_after_id(p, renumbering, gone) for p in old.after if not (repointed and p in gone)}
+    after = {p for p in new.after if not (repointed and p in fresh)}
+    return before == after
 
 
 def _diff_value(task: Task, field: str) -> Any:
@@ -626,6 +793,19 @@ def _energy_by_type(graph: TaskGraph) -> dict[str, float]:
 def _attach(step: LoopStep, key: str, value: Any) -> None:
     """Add ``key`` to a step's payload before it is reported."""
     step.payload = {**(step.payload or {}), key: value}
+
+
+def _budget(req: Requirements, graph: TaskGraph, verdict: Failure, opts: SolveOptions,
+            locked: list[ScheduleEntry] | None) -> list[dict[str, Any]]:
+    """The budget rows behind a solver verdict's ``energy:<robot>`` conflicts
+    (:func:`moonwright.pipeline.schedule.budget_rows`) for the failed ``schedule`` step's
+    payload: a UI-only channel, never part of what a repair round is told. ``[]`` when the
+    verdict has no energy conflict, and an error here never costs the verdict."""
+    try:
+        return budget_rows(req, graph, verdict, opts, locked)
+    except Exception:   # the table is a courtesy: the verdict stands whatever happens here
+        log.warning("budget rows failed; the verdict is reported without them", exc_info=True)
+        return []
 
 
 def _advisories(step: LoopStep) -> list[Any] | None:

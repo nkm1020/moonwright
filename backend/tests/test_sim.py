@@ -559,7 +559,7 @@ def test_replan_after_event_is_solver_first_and_shifts_the_schedule_to_absolute_
     outcome = record.after.steps[-1]
     assert outcome.stage == "replan" and outcome.ok and outcome.failure is None
     assert outcome.message == ("CP-SAT rescheduled 3 tasks in under 0.01 s, Nemotron not needed; "
-                               "makespan 7 h -> 12 h (absolute)")
+                               "makespan 7 h -> 12 h")   # the time base is payload, not prose
     assert outcome.payload == {"escalated": False, "offset_h": 2, "time_base": "absolute",
                                "remaining_tasks": 3, "before_makespan_h": 7,
                                "after_makespan_h": 12, "solve_time_s": 0.0}
@@ -798,7 +798,7 @@ def test_replan_escalates_to_the_model_only_when_the_solver_cannot_finish():
     outcome = after.steps[-1]
     assert outcome.ok and outcome.message == (
         "infeasible (horizon_path:T1->T2, horizon) -> escalated to Nemotron; "
-        "makespan 8 h -> 7 h (absolute), verified after 1 repair(s)")
+        "makespan 8 h -> 7 h, verified after 1 repair")
     assert outcome.payload["escalated"] is True and outcome.payload["after_makespan_h"] == 7
     assert res.completed and res.finished_at_h is not None
     assert res.finished_at_h <= plan.requirements.horizon_h
@@ -850,7 +850,8 @@ def test_solver_first_replan_with_the_real_planner_needs_no_model():
     assert outcome.message is not None
     assert outcome.message.startswith("CP-SAT rescheduled 3 tasks in ")
     assert ", Nemotron not needed; makespan 7 h -> " in outcome.message
-    assert outcome.message.endswith(f"{after.schedule.makespan_h} h (absolute)")
+    assert outcome.message.endswith(f"makespan 7 h -> {after.schedule.makespan_h} h")
+    assert "(absolute)" not in outcome.message and "(relative)" not in outcome.message
     assert outcome.payload["escalated"] is False and outcome.payload["offset_h"] == 2
     # the replan is sound in planner time and the mission completes on the new plan
     relative = shift_schedule(after.schedule, -2)
@@ -928,7 +929,7 @@ def test_replan_that_redefines_a_remaining_task_is_refused():
     after = res.replans[0].after
     assert not after.success and after.schedule is None and after.failure is not None
     assert after.failure.kind == "validation" and after.failure.conflicts == ["changed:T2"]
-    assert "redefined the remaining task(s) T2" in after.failure.hint
+    assert "redefined the remaining task T2" in after.failure.hint
     assert after.failure.details == ["T2 changed: duration_h 1 (needs 4); energy_wh 1 (needs 800)"]
     assert res.schedule is plan.schedule and not res.completed
 
@@ -965,7 +966,8 @@ def test_replan_that_moves_a_running_task_is_refused():
     res = run_with_replanning(MovingPlanner(), plan, [FailureInjection("EX2", 2.0)], key="k")
     after = res.replans[0].after
     assert not after.success and after.failure is not None
-    assert after.failure.conflicts == [] and "moved the running task(s) T1" in after.failure.hint
+    assert after.failure.conflicts == []
+    assert "moved the running task T1 off its robot or start" in after.failure.hint
     assert res.schedule is plan.schedule
 
 
