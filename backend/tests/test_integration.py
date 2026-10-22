@@ -1,0 +1,329 @@
+"""Cross-module integration tests for the offline demo flows (``FixtureClient``, no network).
+
+* CLI ``plan`` -> ``simulate`` on the landing_pad example with EX2 failing at 30 h: the
+  robot_failure event, a successful replan with before/after makespan, completion, and every
+  schedule the pipeline produced re-verified with :func:`check_schedule`.
+* API ``POST /plan`` -> ``POST /simulate`` on the same scenario, and the UI flow
+  ``GET /examples/{id}`` -> ``POST /structure`` -> ``POST /plan`` (user-corrected requirements)
+  -> ``POST /plan/stream`` -> ``POST /simulate`` with the API defaults.
+* CLI ``eval`` over the example briefs: the repair loop turns 2/3 feasible briefs into 3/3.
+* Monte Carlo (F9) over the landing_pad plan, CLI and API: solver-only replans, a reproducible
+  seed, and a sample's failures replayable through ``POST /simulate`` unchanged.
+* Offline replan repairs: the repair round carries ``variant="replan"`` and, without a canned
+  answer, ends with the solver's verdict instead of a stale fixture of the original run.
+* Replan triggers: a plain replay of every fixture plan raises no event at all (travel drift
+  is not an overrun) and never replans, and two robot failures are both replanned within the
+  default budget.
+"""
+
+from __future__ import annotations
+
+import json
+
+import pytest
+from fastapi.testclient import TestClient
+
+from moonwright.api import EXAMPLES_DIR, app
+from moonwright.cli import EXIT_OK, main
+from moonwright.llm.base import FixtureClient, FixtureMissing
+from moonwright.pipeline.loop import Planner
+from moonwright.pipeline.schedule import check_schedule
+from moonwright.schemas import (
+    PlanResult,
+    Requirements,
+    Robot,
+    SimResult,
+    Task,
+    TaskGraph,
+)
+from moonwright.sim.montecarlo import MonteCarloResult
+from moonwright.sim.replan import replan_offset_h, run_with_replanning, shift_schedule
+from moonwright.sim.simulator import FailureInjection
+from tests.test_cli_api import live_steps, stream_plan  # noqa: F401  (fixture + SSE reader)
+
+BRIEF = EXAMPLES_DIR / "landing_pad.md"
+
+
+# --------------------------------------------------------------------------- helpers
+def _assert_replans_verified(sim: SimResult) -> None:
+    """Every replan succeeded, and its schedule passes check_schedule in planner time."""
+    for record in sim.replans:
+        after = record.after
+        assert after.success and after.schedule is not None and after.task_graph is not None
+        relative = shift_schedule(after.schedule, -replan_offset_h(record.t_h))
+        assert check_schedule(after.requirements, after.task_graph, relative) == []
+        assert relative.makespan_h <= after.requirements.horizon_h
+        if record.event.kind == "robot_failure":
+            assert record.event.robot not in {r.id for r in after.requirements.robots}
+
+
+def _assert_ex2_failure_recovered(sim: SimResult, plan: PlanResult) -> None:
+    assert plan.task_graph is not None and plan.schedule is not None
+    assert sim.completed and sim.finished_at_h is not None
+    assert sim.finished_at_h <= plan.requirements.horizon_h
+    failure = sim.events[0]
+    assert (failure.kind, failure.robot, failure.t_h) == ("robot_failure", "EX2", 30.0)
+    first = sim.replans[0]
+    assert first.event.kind == "robot_failure" and first.t_h == 30.0
+    assert first.before.makespan_h == plan.schedule.makespan_h
+    assert first.after.schedule is not None
+    assert first.after.schedule.makespan_h >= first.before.makespan_h
+    assert first.after.steps[0].message is not None
+    assert first.after.steps[0].message.startswith("offline: reused prior graph")
+    # the trace reports the schedule in simulator hours, like the shifted schedule itself
+    scheduled = [s for s in first.after.steps if s.stage == "schedule" and s.ok][-1]
+    assert scheduled.payload is not None
+    assert scheduled.payload["makespan_h"] == first.after.schedule.makespan_h
+    assert scheduled.message == f"makespan {first.after.schedule.makespan_h}h (optimal)"
+    assert sim.schedule is not None and all(e.robot != "EX2" for e in sim.schedule.entries)
+    assert set(sim.frames[-1].done_tasks) == set(plan.task_graph.ids())
+    assert all(r.status == "failed" for f in sim.frames if f.t_h >= 30.0
+               for r in f.robots if r.id == "EX2")
+    _assert_replans_verified(sim)
+
+
+class _NoFixtures:
+    """LLM client stub that records every call and never has a canned answer."""
+
+    name = "stub"
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, int, str | None]] = []
+
+    def complete_json(self, *, role, system, user, schema, key=None, attempt=1, variant=None,
+                      max_attempts=2):
+        self.calls.append((role, attempt, variant))
+        raise FixtureMissing("stub has no fixtures")
+
+
+def _unpackable() -> tuple[Requirements, TaskGraph]:
+    """Passes the validator (9900 <= 10000 Wh) but no split fits two 5000 Wh batteries."""
+    req = Requirements(robots=[Robot(id="EX1", type="excavator", battery_wh=5000),
+                               Robot(id="EX2", type="excavator", battery_wh=5000)],
+                       horizon_h=100)
+    graph = TaskGraph(tasks=[
+        Task(id="T1", name="dig bowl", robot_type="excavator", duration_h=10, energy_wh=4000,
+             zone="Z1"),
+        Task(id="T2", name="cut trench", robot_type="excavator", duration_h=10, energy_wh=4000,
+             zone="Z2"),
+        Task(id="T3", name="strip apron", robot_type="excavator", duration_h=6, energy_wh=1900,
+             zone="Z3"),
+    ])
+    return req, graph
+
+
+@pytest.fixture(scope="module")
+def api():
+    with TestClient(app) as client:
+        yield client
+
+
+# --------------------------------------------------------------------------- CLI
+def test_cli_plan_then_simulate_landing_pad_with_ex2_failure(tmp_path, capsys):
+    plan_path = tmp_path / "landing_pad.plan.json"
+    sim_path = tmp_path / "landing_pad.sim.json"
+    code = main(["plan", str(BRIEF), "--llm", "fixture", "--out", str(plan_path), "-q"])
+    assert code == EXIT_OK
+    plan = PlanResult.model_validate_json(plan_path.read_text())
+    assert plan.success and plan.schedule is not None and plan.task_graph is not None
+    assert plan.schedule.makespan_h == 77 and plan.repairs == 0
+    assert check_schedule(plan.requirements, plan.task_graph, plan.schedule) == []
+    capsys.readouterr()
+
+    code = main(["simulate", str(plan_path), "--fail", "EX2@30", "--llm", "fixture",
+                 "--out", str(sim_path)])
+    out = capsys.readouterr().out
+    assert code == EXIT_OK, out
+    assert "t=  30.00h  robot_failure  EX2" in out
+    assert "#1 at t=30.00h after robot_failure EX2:" in out and "makespan 77h -> " in out
+    assert "completed at t=" in out
+
+    sim = SimResult.model_validate_json(sim_path.read_text())
+    _assert_ex2_failure_recovered(sim, plan)
+
+
+def test_cli_eval_over_example_briefs(tmp_path, capsys):
+    out_json, out_csv = tmp_path / "eval.json", tmp_path / "eval.csv"
+    code = main(["eval", "--briefs", str(EXAMPLES_DIR), "--llm", "fixture",
+                 "--out", str(out_json), "--csv", str(out_csv)])
+    assert code == EXIT_OK
+    report = json.loads(out_json.read_text())
+    summary = {s["condition"]: s for s in report["summary"]}
+    assert (summary["loop_off"]["feasible"], summary["loop_on"]["feasible"]) == (2, 3)
+    assert summary["loop_on"]["mean_repairs"] == pytest.approx(1 / 3)
+    rows = {(r["brief"], r["condition"]): r for r in report["rows"]}
+    assert rows["tight_battery", "loop_off"]["conflicts"] == ["energy:EX1", "energy:EX2"]
+    assert rows["tight_battery", "loop_on"]["repairs"] == 1
+    assert rows["tight_battery", "loop_on"]["makespan_h"] == 65
+    assert len(out_csv.read_text().splitlines()) == 1 + 6
+    assert "loop_on" in capsys.readouterr().out
+
+
+def test_cli_montecarlo_over_the_landing_pad_plan(tmp_path, capsys):
+    plan_path = tmp_path / "landing_pad.plan.json"
+    assert main(["plan", str(BRIEF), "--llm", "fixture", "--out", str(plan_path), "-q"]) == EXIT_OK
+    capsys.readouterr()
+    out = tmp_path / "landing_pad.mc.json"
+    code = main(["montecarlo", str(plan_path), "--runs", "10", "--seed", "1", "--out", str(out)])
+    captured = capsys.readouterr()
+    assert code == EXIT_OK, captured.err
+    assert captured.out.startswith("Monte Carlo robustness: 10 runs, horizon 336 h")
+    assert "replans via solver-only" in captured.err
+    result = MonteCarloResult.model_validate_json(out.read_text())
+    assert result.runs == 10 and [s.seed for s in result.samples] == list(range(1, 11))
+    assert result.horizon_h == 336 and 0 <= result.completed <= 10
+    assert result.within_horizon_rate <= result.completion_rate <= 1.0
+    assert sum(b.count for b in result.histogram) == result.completed
+    assert len(result.histogram) >= 12 and result.histogram[11].end_h == 336
+    if result.finish_h.min is not None:
+        assert result.finish_h.min >= 77   # nothing finishes before the nominal makespan
+    assert all(f.robot in {"EX1", "EX2", "HL1", "HL2", "CP1", "PR1", "SV1"}
+               for s in result.samples for f in s.failures)
+    assert all(0 <= f.t_h < 336 for s in result.samples for f in s.failures)
+
+
+# --------------------------------------------------------------------------- API
+def test_api_montecarlo_sample_failures_replay_through_simulate(api):
+    plan = api.post("/plan", json={"brief": BRIEF.read_text(), "brief_id": "landing_pad",
+                                   "llm": "fixture", "explain": False}).json()
+    assert plan["success"] is True
+    r = api.post("/montecarlo", json={"plan": plan, "runs": 10, "seed": 1})
+    assert r.status_code == 200, r.text
+    result = MonteCarloResult.model_validate(r.json())
+    assert result.runs == 10 and result.horizon_h == 336
+    assert [s.seed for s in result.samples] == list(range(1, 11))
+    assert result.replans_mean <= 2 and result.failures_mean <= 7
+    # the same seed through the CLI's module gives the same experiment
+    again = api.post("/montecarlo", json={"plan": plan, "runs": 10, "seed": 1}).json()
+    assert MonteCarloResult.model_validate(again).samples == result.samples
+    # a sample's failures are a /simulate body as they are ("replay this run" in the UI)
+    sample = next((s for s in result.samples if s.failures), None)
+    assert sample is not None
+    r = api.post("/simulate", json={"plan": plan, "brief_id": "landing_pad", "llm": "fixture",
+                                    "failures": [f.model_dump() for f in sample.failures]})
+    assert r.status_code == 200, r.text
+    sim = SimResult.model_validate(r.json())
+    end_h = sim.frames[-1].t_h
+    fired = [e for e in sim.events if e.kind == "robot_failure"]
+    for f in sample.failures:
+        if f.t_h > end_h:
+            continue   # nominal durations finish earlier than the jittered run did
+        # an injection fires at the next simulator step (dt 0.25 h) after its time
+        assert any(e.robot == f.robot and 0 <= e.t_h - f.t_h <= 0.25 for e in fired), (f, fired)
+
+
+def test_api_plan_then_simulate_landing_pad(api):
+    r = api.post("/plan", json={"brief": BRIEF.read_text(), "brief_id": "landing_pad",
+                                "llm": "fixture", "explain": False})
+    assert r.status_code == 200 and r.json()["success"] is True
+    plan = PlanResult.model_validate(r.json())
+
+    r = api.post("/simulate", json={"plan": r.json(), "failures": [{"robot": "EX2", "t_h": 30}],
+                                    "brief_id": "landing_pad", "llm": "fixture",
+                                    "frame_stride": 8, "dt_h": 0.5})
+    assert r.status_code == 200, r.text
+    sim = SimResult.model_validate(r.json())
+    _assert_ex2_failure_recovered(sim, plan)
+    assert all(f.t_h % 0.5 == 0 for f in sim.frames)  # dt_h honoured
+
+
+@pytest.mark.usefixtures("live_steps")
+def test_api_ui_flow_example_structure_corrected_plan_stream_simulate(api):
+    """The web UI's path: pick an example, structure it, correct the requirements, plan from
+    them (plain and streamed), then simulate with the API defaults."""
+    example = api.get("/examples/landing_pad").json()
+    assert example["text"] == BRIEF.read_text() and example["title"]
+
+    structured = api.post("/structure", json={"brief": example["text"],
+                                              "brief_id": example["id"], "llm": "fixture"})
+    assert structured.status_code == 200 and structured.json()["key"] == "landing_pad"
+    requirements = structured.json()["requirements"]
+    assert requirements is not None and structured.json()["step"]["ok"] is True
+
+    # the user tightens the horizon on the requirements card; the plan must honour it
+    requirements["horizon_h"] = 120
+    body = {"requirements": requirements, "brief_id": "landing_pad", "llm": "fixture"}
+    r = api.post("/plan", json=body)
+    assert r.status_code == 200, r.text
+    plan = PlanResult.model_validate(r.json())
+    assert plan.success and plan.schedule is not None and plan.task_graph is not None
+    assert plan.requirements.horizon_h == 120 and plan.schedule.makespan_h == 77
+    assert [s.stage for s in plan.steps] == ["structure", "taskgraph", "validate", "schedule",
+                                             "explain"]
+    assert plan.steps[0].message is not None
+    assert plan.steps[0].message.startswith("requirements provided by the user: ")
+    assert plan.explanation
+    assert check_schedule(plan.requirements, plan.task_graph, plan.schedule) == []
+
+    events = stream_plan(api, body)
+    assert [kind for kind, _ in events] == ["step"] * 5 + ["result"]
+    assert [data["stage"] for kind, data in events[:5]] == [s.stage for s in plan.steps]
+    streamed = PlanResult.model_validate(events[-1][1])
+    assert streamed.success and streamed.schedule is not None
+    assert streamed.schedule.entries == plan.schedule.entries
+    assert streamed.schedule.makespan_h == plan.schedule.makespan_h
+
+    r = api.post("/simulate", json={"plan": r.json(), "failures": [{"robot": "EX2", "t_h": 30}],
+                                    "brief_id": "landing_pad", "llm": "fixture"})
+    assert r.status_code == 200, r.text
+    sim = SimResult.model_validate(r.json())
+    _assert_ex2_failure_recovered(sim, plan)
+    assert all(round(f.t_h % 1.0, 9) in (0.0, 0.25, 0.5, 0.75) for f in sim.frames)
+    assert [f.t_h for f in sim.frames[:3]] == [0.0, 1.0, 2.0]   # default stride 4 at dt 0.25
+
+
+# --------------------------------------------------------------------------- offline replan repairs
+def test_offline_replan_repair_ends_with_the_solver_verdict():
+    req, graph = _unpackable()
+    client = _NoFixtures()
+    result = Planner(client, max_repairs=3, explain=False).plan_from_requirements(
+        req, key="k", prior_graph=graph, context="EX3 failed at 12 h", variant="replan")
+
+    assert client.calls == [("taskgraph", 1, "replan"), ("repair", 2, "replan")]
+    assert not result.success and result.repairs == 1 and result.task_graph == graph
+    assert result.failure is not None and result.failure.kind == "infeasible"
+    assert set(result.failure.conflicts) == {"energy:EX1", "energy:EX2"}
+    assert [s.stage for s in result.steps] == ["taskgraph", "validate", "schedule", "repair"]
+    assert result.steps[0].ok and result.steps[0].message is not None
+    assert result.steps[0].message.startswith("offline: reused prior graph")
+    assert not result.steps[-1].ok and result.steps[-1].failure == result.failure
+
+
+def test_fixture_client_without_a_fixture_directory_behaves_the_same(tmp_path):
+    req, graph = _unpackable()
+    result = Planner(FixtureClient(tmp_path), explain=False).plan_from_requirements(
+        req, key="nowhere", prior_graph=graph, variant="replan")
+    assert not result.success and result.repairs == 1
+    assert result.failure is not None and result.failure.kind == "infeasible"
+    assert set(result.failure.conflicts) == {"energy:EX1", "energy:EX2"}
+
+
+# --------------------------------------------------------------------------- replan triggers
+@pytest.mark.parametrize("brief_id", ["landing_pad", "access_road", "tight_battery"])
+def test_no_failure_replay_of_each_fixture_plan_raises_no_event(brief_id):
+    """A verified plan replayed as planned: travel and the step grain make every chain finish a
+    little after the makespan, but no task overruns and nothing is replanned."""
+    planner = Planner(FixtureClient(), explain=False)
+    plan = planner.plan((EXAMPLES_DIR / f"{brief_id}.md").read_text(), brief_id=brief_id)
+    assert plan.success and plan.task_graph is not None and plan.schedule is not None
+    sim = run_with_replanning(planner, plan, [], key=brief_id)
+    assert sim.completed and sim.replans == [] and sim.events == []
+    assert sim.finished_at_h is not None and sim.finished_at_h <= plan.requirements.horizon_h
+    assert plan.schedule.makespan_h <= sim.finished_at_h <= plan.schedule.makespan_h + 4
+    assert set(sim.frames[-1].done_tasks) == set(plan.task_graph.ids())
+    assert all(r.battery_wh >= 0 for f in sim.frames for r in f.robots)
+
+
+def test_two_robot_failures_are_both_replanned_within_the_default_budget():
+    plan = Planner(FixtureClient(), explain=False).plan(BRIEF.read_text(), brief_id="landing_pad")
+    assert plan.task_graph is not None
+    injections = [FailureInjection("EX2", 30), FailureInjection("HL2", 62)]
+    sim = run_with_replanning(Planner(FixtureClient(), explain=False), plan, injections,
+                              key="landing_pad", max_replans=2)
+    assert [(r.t_h, r.event.kind, r.event.robot) for r in sim.replans] == \
+        [(30.0, "robot_failure", "EX2"), (62.0, "robot_failure", "HL2")]
+    assert [e.kind for e in sim.events] == ["robot_failure", "robot_failure"]
+    assert sim.completed and sim.finished_at_h is not None
+    assert sim.finished_at_h <= plan.requirements.horizon_h
+    assert set(sim.frames[-1].done_tasks) == set(plan.task_graph.ids())
+    _assert_replans_verified(sim)

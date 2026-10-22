@@ -1,0 +1,108 @@
+{
+  "site": {
+    "name": "LS-1",
+    "grid": [
+      40,
+      40
+    ],
+    "depot": [
+      20,
+      8
+    ],
+    "zones": [
+      {
+        "id": "Z1",
+        "center": [
+          20,
+          18
+        ],
+        "radius": 5
+      },
+      {
+        "id": "Z2",
+        "center": [
+          8,
+          22
+        ],
+        "radius": 4
+      },
+      {
+        "id": "Z3",
+        "center": [
+          32,
+          22
+        ],
+        "radius": 3
+      },
+      {
+        "id": "Z4",
+        "center": [
+          28,
+          10
+        ],
+        "radius": 3
+      }
+    ]
+  },
+  "structures": [
+    {
+      "id": "S1",
+      "type": "landing_pad",
+      "zone": "Z1",
+      "diameter_m": 20,
+      "depth_m": 0.4,
+      "thickness_m": 0.3
+    },
+    {
+      "id": "S2",
+      "type": "blast_berm",
+      "zone": "Z2",
+      "length_m": 60,
+      "height_m": 2.5,
+      "width_m": 4
+    }
+  ],
+  "robots": [
+    {
+      "id": "EX1",
+      "type": "excavator",
+      "battery_wh": 5000
+    },
+    {
+      "id": "EX2",
+      "type": "excavator",
+      "battery_wh": 5000
+    },
+    {
+      "id": "HL1",
+      "type": "hauler",
+      "battery_wh": 3000
+    },
+    {
+      "id": "HL2",
+      "type": "hauler",
+      "battery_wh": 3000
+    },
+    {
+      "id": "CP1",
+      "type": "compactor",
+      "battery_wh": 3500
+    },
+    {
+      "id": "PR1",
+      "type": "printer",
+      "battery_wh": 4000
+    },
+    {
+      "id": "SV1",
+      "type": "surveyor",
+      "battery_wh": 1500
+    }
+  ],
+  "horizon_h": 336,
+  "constraints": [
+    "Only one robot may work inside a zone at a time (plume and dust safety).",
+    "No sintering starts until the surveyor has staked the site and the compactor has finished the pad subgrade.",
+    "The surveyor must inspect both structures before the pad is signed off."
+  ]
+}

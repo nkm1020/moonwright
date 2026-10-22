@@ -1,0 +1,29 @@
+# python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+backend/out/
+backend/eval.json
+backend/eval.csv
+
+# node / next.js
+node_modules/
+frontend/node_modules/
+frontend/.next/
+.next/
+frontend/out/
+*.tsbuildinfo
+next-env.d.ts
+
+# secrets: every .env variant except the committed examples
+.env
+.env.*
+!.env.example
+
+# os / editors
+.DS_Store

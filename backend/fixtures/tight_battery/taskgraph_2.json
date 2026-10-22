@@ -1,0 +1,136 @@
+{
+  "tasks": [
+    {
+      "id": "T1",
+      "name": "Survey and stake pad centre and berm arc",
+      "robot_type": "surveyor",
+      "duration_h": 4,
+      "energy_wh": 300,
+      "zone": "Z1",
+      "after": [],
+      "structure": "S1"
+    },
+    {
+      "id": "T2",
+      "name": "Excavate pad bowl, north half",
+      "robot_type": "excavator",
+      "duration_h": 14,
+      "energy_wh": 2100,
+      "zone": "Z1",
+      "after": [
+        "T1"
+      ],
+      "structure": "S1"
+    },
+    {
+      "id": "T3",
+      "name": "Excavate pad bowl, south half",
+      "robot_type": "excavator",
+      "duration_h": 14,
+      "energy_wh": 2100,
+      "zone": "Z1",
+      "after": [
+        "T2"
+      ],
+      "structure": "S1"
+    },
+    {
+      "id": "T4",
+      "name": "Cut berm key trench (shallow cut, berm fill from pad spoil)",
+      "robot_type": "excavator",
+      "duration_h": 14,
+      "energy_wh": 2100,
+      "zone": "Z2",
+      "after": [
+        "T1"
+      ],
+      "structure": "S2"
+    },
+    {
+      "id": "T5",
+      "name": "Strip approach apron",
+      "robot_type": "excavator",
+      "duration_h": 12,
+      "energy_wh": 1900,
+      "zone": "Z4",
+      "after": [
+        "T1"
+      ],
+      "structure": "S3"
+    },
+    {
+      "id": "T6",
+      "name": "Haul bowl spoil to berm line",
+      "robot_type": "hauler",
+      "duration_h": 16,
+      "energy_wh": 1300,
+      "zone": "Z2",
+      "after": [
+        "T3",
+        "T4"
+      ],
+      "structure": "S2"
+    },
+    {
+      "id": "T7",
+      "name": "Haul apron spoil to stockpile",
+      "robot_type": "hauler",
+      "duration_h": 8,
+      "energy_wh": 700,
+      "zone": "Z3",
+      "after": [
+        "T5"
+      ],
+      "structure": "S3"
+    },
+    {
+      "id": "T8",
+      "name": "Compact pad subgrade",
+      "robot_type": "compactor",
+      "duration_h": 14,
+      "energy_wh": 1500,
+      "zone": "Z1",
+      "after": [
+        "T3"
+      ],
+      "structure": "S1"
+    },
+    {
+      "id": "T9",
+      "name": "Shape and compact berm",
+      "robot_type": "compactor",
+      "duration_h": 14,
+      "energy_wh": 1500,
+      "zone": "Z2",
+      "after": [
+        "T6"
+      ],
+      "structure": "S2"
+    },
+    {
+      "id": "T10",
+      "name": "Inspect berm profile",
+      "robot_type": "surveyor",
+      "duration_h": 3,
+      "energy_wh": 200,
+      "zone": "Z2",
+      "after": [
+        "T9"
+      ],
+      "structure": "S2"
+    },
+    {
+      "id": "T11",
+      "name": "As-built survey of pad",
+      "robot_type": "surveyor",
+      "duration_h": 4,
+      "energy_wh": 300,
+      "zone": "Z1",
+      "after": [
+        "T8"
+      ],
+      "structure": "S1"
+    }
+  ],
+  "notes": "Repair: the two 4000 Wh digs were split into 14 h passes and the trench re-scoped so every excavator load fits a 5000 Wh battery (4200 Wh + 4000 Wh)."
+}

@@ -1,0 +1,17 @@
+graph LR
+  B[Brief<br/>natural-language job] -->|text| S[Structure<br/>Nemotron 3.5 Lightning<br/>via Nebius Token Factory]
+  S -->|Requirements JSON| G[Task graph<br/>Nemotron 3 Ultra, reasoning]
+  G -->|tasks: duration, energy,<br/>zone, precedence| V[Validator<br/>cycles, references,<br/>capacity, critical path]
+  V -->|valid graph| C[CP-SAT scheduler<br/>makespan, no-overlap per robot<br/>and per zone, battery, horizon]
+  C -->|verified schedule| E[Explanation<br/>Nemotron 3 Super]
+  E -->|plan summary| UI[UI<br/>Gantt + explanation]
+  C -->|verified schedule| SIM[2D simulator<br/>positions, battery, events]
+  V -. "repair, max 3 rounds:<br/>conflict ids + hint" .-> G
+  C -. "repair, max 3 rounds:<br/>infeasibility core, e.g.<br/>energy:EX1, precedence:T4->T2" .-> G
+  SIM -. "replan on robot_failure:<br/>finished and remaining tasks,<br/>failed robot" .-> G
+  classDef llm fill:#fde68a,stroke:#b45309,color:#111;
+  classDef det fill:#bfdbfe,stroke:#1d4ed8,color:#111;
+  classDef io fill:#f3f4f6,stroke:#6b7280,color:#111;
+  class S,G,E llm;
+  class V,C det;
+  class B,UI,SIM io;

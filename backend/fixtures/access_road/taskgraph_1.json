@@ -1,0 +1,150 @@
+{
+  "tasks": [
+    {
+      "id": "T1",
+      "name": "Survey road centreline and stake foundation corners",
+      "robot_type": "surveyor",
+      "duration_h": 5,
+      "energy_wh": 350,
+      "zone": "Z1",
+      "after": [],
+      "structure": "S1"
+    },
+    {
+      "id": "T2",
+      "name": "Grade road segment A (pad end)",
+      "robot_type": "excavator",
+      "duration_h": 10,
+      "energy_wh": 1200,
+      "zone": "Z1",
+      "after": [
+        "T1"
+      ],
+      "structure": "S1"
+    },
+    {
+      "id": "T3",
+      "name": "Grade road segment B (habitat end)",
+      "robot_type": "excavator",
+      "duration_h": 10,
+      "energy_wh": 1200,
+      "zone": "Z2",
+      "after": [
+        "T2"
+      ],
+      "structure": "S1"
+    },
+    {
+      "id": "T4",
+      "name": "Excavate habitat foundation pit",
+      "robot_type": "excavator",
+      "duration_h": 12,
+      "energy_wh": 1500,
+      "zone": "Z3",
+      "after": [
+        "T3"
+      ],
+      "structure": "S2"
+    },
+    {
+      "id": "T5",
+      "name": "Clear grading spoil to road shoulders",
+      "robot_type": "hauler",
+      "duration_h": 8,
+      "energy_wh": 700,
+      "zone": "Z1",
+      "after": [
+        "T2"
+      ],
+      "structure": "S1"
+    },
+    {
+      "id": "T6",
+      "name": "Haul foundation spoil to berm line",
+      "robot_type": "hauler",
+      "duration_h": 10,
+      "energy_wh": 900,
+      "zone": "Z4",
+      "after": [
+        "T4"
+      ],
+      "structure": "S3"
+    },
+    {
+      "id": "T7",
+      "name": "Compact road segment A",
+      "robot_type": "compactor",
+      "duration_h": 12,
+      "energy_wh": 1400,
+      "zone": "Z1",
+      "after": [
+        "T5"
+      ],
+      "structure": "S1"
+    },
+    {
+      "id": "T8",
+      "name": "Compact road segment B",
+      "robot_type": "compactor",
+      "duration_h": 12,
+      "energy_wh": 1400,
+      "zone": "Z2",
+      "after": [
+        "T3"
+      ],
+      "structure": "S1"
+    },
+    {
+      "id": "T9",
+      "name": "Compact foundation base",
+      "robot_type": "compactor",
+      "duration_h": 8,
+      "energy_wh": 800,
+      "zone": "Z3",
+      "after": [
+        "T4"
+      ],
+      "structure": "S2"
+    },
+    {
+      "id": "T10",
+      "name": "Shape and compact berm",
+      "robot_type": "compactor",
+      "duration_h": 8,
+      "energy_wh": 800,
+      "zone": "Z4",
+      "after": [
+        "T6"
+      ],
+      "structure": "S3"
+    },
+    {
+      "id": "T11",
+      "name": "Inspect road profile and bearing",
+      "robot_type": "surveyor",
+      "duration_h": 4,
+      "energy_wh": 300,
+      "zone": "Z1",
+      "after": [
+        "T7",
+        "T8"
+      ],
+      "structure": "S1"
+    },
+    {
+      "id": "T12",
+      "name": "As-built survey of foundation and berm",
+      "robot_type": "surveyor",
+      "duration_h": 4,
+      "energy_wh": 300,
+      "zone": "Z3",
+      "after": [
+        "T9",
+        "T10",
+        "T11"
+      ],
+      "structure": "S2"
+    }
+  ],
+  "notes": "Single excavator works west from the pad end; the two compactors follow segment by segment."
+}

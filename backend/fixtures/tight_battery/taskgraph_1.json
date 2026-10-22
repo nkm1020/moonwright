@@ -1,0 +1,124 @@
+{
+  "tasks": [
+    {
+      "id": "T1",
+      "name": "Survey and stake pad centre and berm arc",
+      "robot_type": "surveyor",
+      "duration_h": 4,
+      "energy_wh": 300,
+      "zone": "Z1",
+      "after": [],
+      "structure": "S1"
+    },
+    {
+      "id": "T2",
+      "name": "Excavate full pad bowl in one pass",
+      "robot_type": "excavator",
+      "duration_h": 24,
+      "energy_wh": 4000,
+      "zone": "Z1",
+      "after": [
+        "T1"
+      ],
+      "structure": "S1"
+    },
+    {
+      "id": "T3",
+      "name": "Cut berm key trench and borrow pit",
+      "robot_type": "excavator",
+      "duration_h": 24,
+      "energy_wh": 4000,
+      "zone": "Z2",
+      "after": [
+        "T1"
+      ],
+      "structure": "S2"
+    },
+    {
+      "id": "T4",
+      "name": "Strip approach apron",
+      "robot_type": "excavator",
+      "duration_h": 12,
+      "energy_wh": 1900,
+      "zone": "Z4",
+      "after": [
+        "T1"
+      ],
+      "structure": "S3"
+    },
+    {
+      "id": "T5",
+      "name": "Haul bowl spoil to berm line",
+      "robot_type": "hauler",
+      "duration_h": 16,
+      "energy_wh": 1300,
+      "zone": "Z2",
+      "after": [
+        "T2",
+        "T3"
+      ],
+      "structure": "S2"
+    },
+    {
+      "id": "T6",
+      "name": "Haul apron spoil to stockpile",
+      "robot_type": "hauler",
+      "duration_h": 8,
+      "energy_wh": 700,
+      "zone": "Z3",
+      "after": [
+        "T4"
+      ],
+      "structure": "S3"
+    },
+    {
+      "id": "T7",
+      "name": "Compact pad subgrade",
+      "robot_type": "compactor",
+      "duration_h": 14,
+      "energy_wh": 1500,
+      "zone": "Z1",
+      "after": [
+        "T2"
+      ],
+      "structure": "S1"
+    },
+    {
+      "id": "T8",
+      "name": "Shape and compact berm",
+      "robot_type": "compactor",
+      "duration_h": 14,
+      "energy_wh": 1500,
+      "zone": "Z2",
+      "after": [
+        "T5"
+      ],
+      "structure": "S2"
+    },
+    {
+      "id": "T9",
+      "name": "Inspect berm profile",
+      "robot_type": "surveyor",
+      "duration_h": 3,
+      "energy_wh": 200,
+      "zone": "Z2",
+      "after": [
+        "T8"
+      ],
+      "structure": "S2"
+    },
+    {
+      "id": "T10",
+      "name": "As-built survey of pad",
+      "robot_type": "surveyor",
+      "duration_h": 4,
+      "energy_wh": 300,
+      "zone": "Z1",
+      "after": [
+        "T7"
+      ],
+      "structure": "S1"
+    }
+  ],
+  "notes": "Single-pass excavation: each excavator takes one large dig plus the apron strip."
+}

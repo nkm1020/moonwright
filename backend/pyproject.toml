@@ -1,0 +1,37 @@
+[project]
+name = "moonwright"
+version = "0.1.0"
+description = "Natural-language construction briefs -> solver-verified multi-robot schedules (Nemotron on Nebius Token Factory + OR-Tools CP-SAT)"
+readme = "README.md"
+requires-python = ">=3.13"
+license = { text = "MIT" }
+dependencies = [
+  "pydantic>=2.11",
+  "ortools>=9.15",
+  "openai>=1.100",
+  "httpx>=0.28",
+  "fastapi>=0.118",
+  "uvicorn[standard]>=0.36",
+  "python-dotenv>=1.1",
+]
+
+[project.scripts]
+moonwright = "moonwright.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8.4", "ruff>=0.13"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["moonwright"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"

@@ -1,0 +1,105 @@
+{
+  "site": {
+    "name": "LS-1",
+    "grid": [
+      40,
+      40
+    ],
+    "depot": [
+      18,
+      8
+    ],
+    "zones": [
+      {
+        "id": "Z1",
+        "center": [
+          28,
+          18
+        ],
+        "radius": 4
+      },
+      {
+        "id": "Z2",
+        "center": [
+          18,
+          18
+        ],
+        "radius": 4
+      },
+      {
+        "id": "Z3",
+        "center": [
+          9,
+          18
+        ],
+        "radius": 3
+      },
+      {
+        "id": "Z4",
+        "center": [
+          9,
+          26
+        ],
+        "radius": 3
+      }
+    ]
+  },
+  "structures": [
+    {
+      "id": "S1",
+      "type": "access_road",
+      "zone": "Z1",
+      "length_m": 120,
+      "width_m": 4,
+      "thickness_m": 0.2
+    },
+    {
+      "id": "S2",
+      "type": "habitat_foundation",
+      "zone": "Z3",
+      "length_m": 8,
+      "width_m": 8,
+      "depth_m": 0.5
+    },
+    {
+      "id": "S3",
+      "type": "protective_berm",
+      "zone": "Z4",
+      "length_m": 20,
+      "height_m": 1.5
+    }
+  ],
+  "robots": [
+    {
+      "id": "EX1",
+      "type": "excavator",
+      "battery_wh": 5000
+    },
+    {
+      "id": "HL1",
+      "type": "hauler",
+      "battery_wh": 3000
+    },
+    {
+      "id": "CP1",
+      "type": "compactor",
+      "battery_wh": 3500
+    },
+    {
+      "id": "CP2",
+      "type": "compactor",
+      "battery_wh": 3500
+    },
+    {
+      "id": "SV1",
+      "type": "surveyor",
+      "battery_wh": 1500
+    }
+  ],
+  "horizon_h": 240,
+  "constraints": [
+    "Grade the road from the pad end towards the habitat so haulers always have a finished surface behind them.",
+    "Only one robot may work inside a zone at a time.",
+    "The surveyor inspects the road before the foundation is signed off."
+  ]
+}

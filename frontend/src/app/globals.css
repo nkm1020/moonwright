@@ -1,0 +1,88 @@
+@import "tailwindcss";
+
+/* Mission-console tokens. Semantic colours (ok/fail/warn/info) mirror src/lib/palette.ts
+   (STATUS_COLORS.working/failed, EVENT_COLORS.task_overrun, STATUS_COLORS.moving) so the
+   shell agrees with the Gantt, the replay and the event list. */
+:root {
+  color-scheme: dark;
+  --surface: #0b0f14;
+  --raised: #121821;
+  --raised-2: #182130;
+  --line: rgb(255 255 255 / 0.1);
+  --fg: #e6edf3;
+  --fg-muted: #9aa7b4;
+  --fg-dim: #66727f;
+  --accent: #f59e0b;
+  --ok: #22c55e;
+  --fail: #ef4444;
+  --warn: #eab308;
+  --info: #38bdf8;
+}
+
+@theme inline {
+  --color-surface: var(--surface);
+  --color-raised: var(--raised);
+  --color-raised-2: var(--raised-2);
+  --color-line: var(--line);
+  --color-fg: var(--fg);
+  --color-muted: var(--fg-muted);
+  --color-dim: var(--fg-dim);
+  --color-accent: var(--accent);
+  --color-ok: var(--ok);
+  --color-fail: var(--fail);
+  --color-warn: var(--warn);
+  --color-info: var(--info);
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+html {
+  background: var(--surface);
+  scroll-behavior: smooth;
+}
+
+body {
+  background: var(--surface);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: color-mix(in oklab, var(--accent) 35%, transparent);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(255 255 255 / 0.15) transparent;
+}
+
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  opacity: 0.35;
+}
+
+@keyframes mw-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
+
+.mw-pulse {
+  animation: mw-pulse 1.2s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  .mw-pulse {
+    animation: none;
+  }
+}
