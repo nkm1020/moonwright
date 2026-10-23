@@ -43,7 +43,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def req_with(*structures: dict) -> Requirements:
-    base = Requirements.model_validate_json((ROOT / "fixtures/landing_pad/structure.json").read_text())
+    base = Requirements.model_validate_json(
+        (ROOT / "fixtures/landing_pad_v1/structure.json").read_text())
     data = {**base.model_dump(), "structures": list(structures)}
     return Requirements.model_validate(data)
 
@@ -200,8 +201,10 @@ def test_in_range_dimensionless_and_untasked_structures_say_nothing() -> None:
 
 
 def test_the_recorded_fixtures_carry_no_volume_advisory() -> None:
-    for brief in ("landing_pad", "access_road", "tight_battery"):
-        text = (ROOT / "examples/briefs" / f"{brief}.md").read_text()
+    """The hand-made fixtures; the live landing_pad's double haul is pinned by its replay."""
+    for brief in ("landing_pad_v1", "access_road", "tight_battery"):
+        folder = "tests/data" if brief == "landing_pad_v1" else "examples/briefs"
+        text = (ROOT / folder / f"{brief}.md").read_text()
         result = Planner(FixtureClient(), explain=False).plan(text, brief_id=brief)
         assert result.success
         advisories = [a for s in result.steps for a in ((s.payload or {}).get("advisories") or [])]

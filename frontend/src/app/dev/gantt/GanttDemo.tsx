@@ -1,26 +1,22 @@
 "use client";
 /**
- * Dev harness for the Gantt and TaskTable components: loads the recorded sample plans from
- * public/samples and renders the full chart, the compact side-by-side form, the "now + marker"
- * form used during replay, and a set of edge cases (missing task, empty schedule, 12 robots,
- * deadline in / off plot).
+ * Dev harness for the Gantt and TaskTable components: loads the recorded landing-pad plan and
+ * its simulation from public/samples and renders the full chart, the compact side-by-side form
+ * (the plan beside the schedule after the recorded replan), the "now + marker" form used during
+ * replay, and a set of edge cases (missing task, empty schedule, 12 robots, deadline in / off
+ * plot). The hours in the captions are read from the recording.
  */
 import { useEffect, useState } from "react";
 import { Gantt } from "@/components/Gantt";
 import { TaskTable } from "@/components/TaskTable";
+import { sampleUrl } from "@/lib/api";
+import { fmtNum } from "@/lib/format";
 import { EVENT_COLORS } from "@/lib/palette";
 import { allTasks, zoneOrder } from "@/lib/tasks";
 import type { PlanResult, Requirements, Schedule, SimResult } from "@/lib/types";
 
-const PLAN_URLS = {
-  landing_pad: "/samples/landing_pad.plan.json",
-  tight_battery: "/samples/tight_battery.plan.json",
-} as const;
-const SIM_URL = "/samples/landing_pad.sim.json";
-
 interface Loaded {
   landing_pad: PlanResult;
-  tight_battery: PlanResult;
   sim: SimResult | null;
 }
 
@@ -72,12 +68,11 @@ export function GanttDemo() {
   useEffect(() => {
     let cancelled = false;
     Promise.all([
-      fetchJson<PlanResult>(PLAN_URLS.landing_pad),
-      fetchJson<PlanResult>(PLAN_URLS.tight_battery),
-      fetchJson<SimResult>(SIM_URL).catch(() => null),
+      fetchJson<PlanResult>(sampleUrl("landing_pad", "plan")),
+      fetchJson<SimResult>(sampleUrl("landing_pad", "sim")).catch(() => null),
     ])
-      .then(([landing_pad, tight_battery, sim]) => {
-        if (!cancelled) setData({ landing_pad, tight_battery, sim });
+      .then(([landing_pad, sim]) => {
+        if (!cancelled) setData({ landing_pad, sim });
       })
       .catch((err: unknown) => {
         if (!cancelled) setError(err instanceof Error ? err.message : String(err));
@@ -106,7 +101,7 @@ export function GanttDemo() {
         ) : null}
         {!data && !error ? <div className="text-sm text-slate-400">Loading sample plans…</div> : null}
 
-        {data && data.landing_pad.schedule && data.tight_battery.schedule ? (
+        {data && data.landing_pad.schedule ? (
           <LoadedSections
             data={data}
             selA={selA}
@@ -140,15 +135,21 @@ function LoadedSections({
   setSelEdge: (id: string | null) => void;
 }) {
   const lp = data.landing_pad;
-  const tb = data.tight_battery;
-  // the original graph for the plan views; the replan view merges the re-scoped tasks of the sim
+  // the original graph for the plan views; the replan views merge the re-scoped tasks of the sim
   const lpTasks = allTasks(lp);
   const lpSimTasks = allTasks(lp, data.sim);
-  const tbTasks = allTasks(tb);
   const lpZones = zoneOrder(lp, lpSimTasks);
   const lpSchedule = lp.schedule as Schedule;
-  const tbSchedule = tb.schedule as Schedule;
   const replan = data.sim?.replans[0] ?? null;
+  // the schedule the recorded run finished on: the replan's, else the plan's own
+  const finalSchedule = data.sim?.schedule ?? lpSchedule;
+  // the recorded failure marks the replay views (else a failure 40 % into the plan)
+  const failure = data.sim?.events.find((e) => e.kind === "robot_failure") ?? null;
+  const failAt = failure?.t_h ?? Math.round(lpSchedule.makespan_h * 0.4);
+  const failLabel = `${failure?.robot ?? "EX2"} failed`;
+  const horizonRatio = lpSchedule.makespan_h > 0 ? lp.requirements.horizon_h / lpSchedule.makespan_h : 0;
+  // a deadline 1.2x the makespan: inside the plot
+  const nearHorizon = Math.round(lpSchedule.makespan_h * 1.2);
   const many = manyRobots(lp);
   const withMissing: Schedule = {
     ...lpSchedule,
@@ -163,7 +164,7 @@ function LoadedSections({
     <>
       <Section
         title="Landing pad - verified plan"
-        hint="Full Gantt + table, shared selection. The 336 h horizon is 4.4x the makespan, so the deadline is a badge, not a line."
+        hint={`Full Gantt + table, shared selection. The ${fmtNum(lp.requirements.horizon_h, 0)} h horizon is ${fmtNum(horizonRatio, 1)}x the makespan, so the deadline is a badge, not a line.`}
       >
         <Gantt
           schedule={lpSchedule}
@@ -187,16 +188,16 @@ function LoadedSections({
       </Section>
 
       <Section
-        title="Replay view: now = 30 h, marker at 30 h"
+        title={`Replay view: now = ${fmtNum(failAt, 1)} h, marker at ${fmtNum(failAt, 1)} h`}
         hint="The white now line and a robot failure marker share the same hour; labels are nudged apart."
       >
         <Gantt
           schedule={lpSchedule}
           tasks={lpTasks}
           requirements={lp.requirements}
-          title="Landing pad · simulated to 30 h"
-          nowH={30}
-          markers={[{ t_h: 30, label: "EX2 failed", color: EVENT_COLORS.robot_failure }]}
+          title={`Landing pad · simulated to ${fmtNum(failAt, 1)} h`}
+          nowH={failAt}
+          markers={[{ t_h: failAt, label: failLabel, color: EVENT_COLORS.robot_failure }]}
           selectedTask={selA}
           onSelectTask={setSelA}
           zoneIds={lpZones}
@@ -205,7 +206,7 @@ function LoadedSections({
 
       <Section
         title="Compact, side by side"
-        hint="compact=true: shorter rows, no in-bar type labels, tooltips on one line. Left: landing pad, right: tight battery."
+        hint="compact=true: shorter rows, no in-bar type labels, tooltips on one line. Left: the verified plan, right: the schedule the recorded simulation finished on."
       >
         <div className="grid gap-4 md:grid-cols-2">
           <div className="min-w-0 rounded-md border border-white/10 p-2">
@@ -223,13 +224,14 @@ function LoadedSections({
           </div>
           <div className="min-w-0 rounded-md border border-white/10 p-2">
             <Gantt
-              schedule={tbSchedule}
-              tasks={tbTasks}
-              requirements={tb.requirements}
-              title="Tight battery"
+              schedule={finalSchedule}
+              tasks={lpSimTasks}
+              requirements={lp.requirements}
+              title="After the replan"
               compact
               selectedTask={selB}
               onSelectTask={setSelB}
+              zoneIds={lpZones}
             />
           </div>
         </div>
@@ -238,7 +240,7 @@ function LoadedSections({
       {replan && replan.after.schedule ? (
         <Section
           title="Replan #1 before / after (the recorded landing-pad simulation)"
-          hint="Both charts share the scale through minSpanH; the remaining tasks are highlighted; the failed robot EX2 keeps an empty row on the right because it is gone from the replanned requirements."
+          hint={`Both charts share the scale through minSpanH; the remaining tasks are highlighted; the failed robot ${replan.event.robot ?? ""} keeps an empty row on the right because it is gone from the replanned requirements.`}
         >
           <div className="grid gap-4 md:grid-cols-2">
             <div className="min-w-0 rounded-md border border-white/10 p-2">
@@ -278,24 +280,27 @@ function LoadedSections({
       ) : null}
 
       <Section
-        title="Tight battery - plan after one repair"
-        hint="168 h horizon is 2.6x the makespan, so the dashed deadline line is in the plot."
+        title="After the replan - the schedule the simulation finished on"
+        hint={`Horizon pinned to ${fmtNum(nearHorizon, 0)} h (1.2x the plan's makespan), so the dashed deadline line is in the plot.`}
       >
         <Gantt
-          schedule={tbSchedule}
-          tasks={tbTasks}
-          requirements={tb.requirements}
-          title={`${tb.requirements.site.name} · tight battery`}
+          schedule={finalSchedule}
+          tasks={lpSimTasks}
+          requirements={lp.requirements}
+          title={`${lp.requirements.site.name} · after the replan`}
+          horizonH={nearHorizon}
           selectedTask={selB}
           onSelectTask={setSelB}
+          zoneIds={lpZones}
         />
         <div className="mt-4">
           <TaskTable
-            tasks={tbTasks}
-            schedule={tbSchedule}
-            requirements={tb.requirements}
+            tasks={lpSimTasks}
+            schedule={finalSchedule}
+            requirements={lp.requirements}
             selectedTask={selB}
             onSelectTask={setSelB}
+            zoneIds={lpZones}
           />
         </div>
       </Section>
@@ -307,7 +312,7 @@ function LoadedSections({
             tasks={lpTasks}
             requirements={lp.requirements}
             title="Entry T99 missing from the task graph (grey) + robot HL9 missing from requirements (extra row)"
-            horizonH={96}
+            horizonH={nearHorizon}
             selectedTask={selEdge}
             onSelectTask={setSelEdge}
             zoneIds={lpZones}
@@ -315,7 +320,7 @@ function LoadedSections({
           <Gantt
             schedule={EMPTY_SCHEDULE}
             tasks={[]}
-            requirements={tb.requirements}
+            requirements={lp.requirements}
             title="Makespan 0, no entries, no tasks"
             selectedTask={selEdge}
             onSelectTask={setSelEdge}
@@ -333,8 +338,8 @@ function LoadedSections({
             schedule={lpSchedule}
             tasks={lpTasks}
             requirements={lp.requirements}
-            title="Deadline inside the plot (horizonH = 96 h, 1.2x makespan)"
-            horizonH={96}
+            title={`Deadline inside the plot (horizonH = ${fmtNum(nearHorizon, 0)} h, 1.2x makespan)`}
+            horizonH={nearHorizon}
             selectedTask={selEdge}
             onSelectTask={setSelEdge}
             zoneIds={lpZones}
@@ -346,8 +351,8 @@ function LoadedSections({
               requirements={lp.requirements}
               title="Narrow container (24 rem)"
               compact
-              nowH={30}
-              markers={[{ t_h: 30, label: "EX2 failed", color: EVENT_COLORS.robot_failure }]}
+              nowH={failAt}
+              markers={[{ t_h: failAt, label: failLabel, color: EVENT_COLORS.robot_failure }]}
               selectedTask={selEdge}
               onSelectTask={setSelEdge}
               zoneIds={lpZones}

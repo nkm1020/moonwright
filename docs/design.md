@@ -99,7 +99,10 @@ Schedule + F6 explanation ──► F7 2D simulator ──► event (robot failu
   assumption literal; on infeasibility the solver's sufficient-assumption core is shrunk by deletion
   to a minimal set and returned as machine-readable conflict ids such as `energy:EX1` or
   `precedence:T4->T2`, and an independent checker re-verifies every schedule (the verification
-  receipt in the trace).
+  receipt in the trace). Among several optimal schedules the solve returns the same one on every
+  call (one worker first; the 8-worker portfolio only for an instance one worker does not settle
+  in 2 s), so an offline replay of a recorded run gets the recorded schedule, and the simulation
+  and Monte Carlo numbers that follow from it.
 * **Repair loop.** Conflict ids plus a human hint go back to Nemotron with the previous graph,
   together with the advisories on that graph (a 200 % double haul is cut in the same round as
   the energy verdict), and the repair prompt says what each conflict kind needs (an energy

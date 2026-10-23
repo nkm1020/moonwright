@@ -5,7 +5,7 @@
 **Structures.**
 
 1. Landing pad: circular, 20 m diameter. Excavate a bowl 0.4 m deep to firm regolith, level to plus or minus 5 cm, compact the subgrade, then sinter a 30 cm regolith surface.
-2. Blast berm: a 60 m arc on the north side of the pad, 2.5 m high and 4 m wide at the base, built from pad spoil, compacted, with a sintered crest to resist plume erosion.
+2. Blast berm: a 40 m arc on the north side of the pad, 1.5 m high and 4 m wide at the base, built from pad spoil, compacted, with a sintered crest to resist plume erosion.
 
 **Fleet.** EX1 and EX2 (excavators, 5000 Wh each), HL1 and HL2 (haulers, 3000 Wh each), CP1 (compactor, 3500 Wh), PR1 (printer, 4000 Wh) and SV1 (surveyor, 1500 Wh). Each battery is the robot's budget for the whole job.
 

@@ -51,7 +51,7 @@ export function withAlpha(hex: string, alpha: number): string {
 
 /**
  * One short clause per event, built from the simulator's detail string:
- * "EX2 failed on T4 (79% done)", "HL2 ran out of battery heading to T8",
+ * "EX2 failed on T5 (44% done)", "HL2 ran out of battery heading to T8",
  * "HL2 battery low: 400 Wh left, 650 Wh needed", "T7 overran by 3 h on HL1".
  */
 export function eventPhrase(e: SimEvent): string {
@@ -140,9 +140,9 @@ export function escalationText(o: ReplanOutcome): string {
 }
 
 /** The clauses that follow the event in the replay banner, in order; the last one carries the
- *  verdict: ["CP-SAT rescheduled 11 tasks in <0.01 s", "verified, 80 h → 91 h"] or
- *  ["CP-SAT could not finish 11 tasks", "escalated to Nemotron 3 Ultra (1 repair)",
- *  "verified, 80 h → 95 h"] or [..., "no verified replan: infeasible energy:EX1"]. */
+ *  verdict: ["CP-SAT rescheduled 13 tasks in <0.01 s", "verified, 89 h → 91 h"] or
+ *  ["CP-SAT could not finish 13 tasks", "escalated to Nemotron 3 Ultra (1 repair)",
+ *  "verified, 89 h → 95 h"] or [..., "no verified replan: infeasible energy:EX1"]. */
 export function replanSegments(o: ReplanOutcome): string[] {
   const n = `${o.remaining} task${o.remaining === 1 ? "" : "s"}`;
   const out: string[] = [];

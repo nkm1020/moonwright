@@ -1,0 +1,72 @@
+# The public demo on GitHub Pages: the frontend as a static export in sample mode (no backend),
+# replaying the recorded live runs under frontend/public/samples, served at
+# https://nkm1020.github.io/moonwright/. Build and serve it locally: docs/deploy.md.
+name: Pages
+
+on:
+  workflow_dispatch:
+  # Once the repo is public, add the push trigger so every merge to main redeploys the demo:
+  # push:
+  #   branches: [main]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time: a newer run waits for the one in progress (a deploy is never cut
+# off half way) and replaces any run still queued.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # the pnpm version is the "packageManager" field of frontend/package.json
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          package_json_file: frontend/package.json
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - run: pnpm install --frozen-lockfile
+
+      # MOONWRIGHT_STATIC switches next.config.ts to output: export under the base path;
+      # NEXT_PUBLIC_STATIC_DEMO and NEXT_PUBLIC_BASE_PATH are inlined into the browser bundle
+      - name: Build the static demo
+        run: pnpm build
+        env:
+          MOONWRIGHT_STATIC: "1"
+          NEXT_PUBLIC_STATIC_DEMO: "1"
+          NEXT_PUBLIC_BASE_PATH: /moonwright
+          NEXT_TELEMETRY_DISABLED: "1"
+
+      # /dev/gantt and /dev/sim are component galleries for development, not part of the demo
+      - name: Leave the dev pages out
+        run: rm -rf out/dev
+
+      # the export has no dotfiles, which v4 and later leave out of the artifact
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: frontend/out
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

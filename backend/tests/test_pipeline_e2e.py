@@ -1,12 +1,19 @@
 """End-to-end test of the Moonwright planner in offline fixture mode (no API key needed).
 
-``Planner(FixtureClient())`` is run over the three example briefs in ``examples/briefs`` with the
-canned LLM answers in ``fixtures/<brief_id>/`` (``brief_key("...", "landing_pad") == "landing_pad"``):
+``Planner(FixtureClient())`` replays the canned LLM answers in ``fixtures/<brief_id>/``
+(``brief_key("...", "landing_pad") == "landing_pad"``). The hand-made fixtures of Oct 22 carry no
+quantities and are checked against the arithmetic below:
 
-* ``landing_pad``    feasible at the first attempt (repairs == 0)
+* ``landing_pad_v1`` feasible at the first attempt (repairs == 0); its brief is the demo brief as
+                     it was before the berm was cut to 120 m3 (``tests/data/landing_pad_v1.md``)
 * ``access_road``    feasible at the first attempt (repairs == 0)
 * ``tight_battery``  ``taskgraph_1.json`` passes the validator but the CP-SAT energy constraints
                      reject it; the ``taskgraph_2.json`` repair is feasible (repairs == 1)
+
+The fixtures of the demo briefs ``landing_pad`` and ``front_loaded`` are live runs recorded on
+Nebius Token Factory on Oct 23 with the final prompts; each replay is pinned to its run's story
+(two tests near the end), and the UI's samples (``frontend/public/samples``) are checked to be
+those live runs themselves, which the fixtures replay step for step (the last test).
 
 Hand-verified feasibility arithmetic for the fixtures
 -----------------------------------------------------
@@ -14,7 +21,7 @@ Per robot type: summed task duration / robot count (must leave slack against the
 energy against the summed batteries (the validator's aggregate check), and the largest load any
 one robot carries in a budget-respecting split (the bin packing CP-SAT has to find).
 
-landing_pad   horizon 336 h; EX1 EX2 5000, HL1 HL2 3000, CP1 3500, PR1 4000, SV1 1500 Wh
+landing_pad_v1 horizon 336 h; EX1 EX2 5000, HL1 HL2 3000, CP1 3500, PR1 4000, SV1 1500 Wh
   excavator  T2 12h/1500 + T3 18h/2000 + T4 14h/1600 + T5 6h/600  = 50 h -> 25 h per robot
              energy 5700 / 10000 Wh; no 3-task subset containing T2, T3 and T4 fits
              (1500+2000+1600 = 5100 > 5000), so one excavator carries at most 2000+1600+600 = 4200
@@ -80,20 +87,23 @@ import pytest
 
 from moonwright.llm.base import FIXTURES_DIR, ExplainText, FixtureClient, Usage, validate_into
 from moonwright.pipeline.loop import Planner, brief_key
-from moonwright.pipeline.rates import UNGROUNDED_ADVISORY, apply_rates
+from moonwright.pipeline.rates import UNGROUNDED_ADVISORY, apply_rates, scope_gaps
 from moonwright.pipeline.schedule import SolveOptions, check_schedule, solve_schedule
 from moonwright.pipeline.taskgraph import generate_task_graph
 from moonwright.pipeline.validate import validate_graph
 from moonwright.schemas import Failure, PlanResult, Requirements, TaskGraph
 
 BRIEFS_DIR = Path(__file__).resolve().parents[1] / "examples" / "briefs"
-BRIEF_IDS = ["landing_pad", "access_road", "tight_battery"]
-HORIZONS_H = {"landing_pad": 14 * 24, "access_road": 10 * 24, "tight_battery": 7 * 24}
-MAKESPANS_H = {"landing_pad": 77, "access_road": 59, "tight_battery": 65}  # work only, no transit
-TRAVEL_MAKESPANS_H = {"landing_pad": 80, "access_road": 64, "tight_battery": 68}  # phase 3
+SAMPLES_DIR = Path(__file__).resolve().parents[2] / "frontend" / "public" / "samples"
+MODEL_STAGES = ("structure", "taskgraph", "repair", "explain")
+V1_BRIEF = Path(__file__).resolve().parent / "data" / "landing_pad_v1.md"
+BRIEF_IDS = ["landing_pad_v1", "access_road", "tight_battery"]   # the hand-made fixtures
+HORIZONS_H = {"landing_pad_v1": 14 * 24, "access_road": 10 * 24, "tight_battery": 7 * 24}
+MAKESPANS_H = {"landing_pad_v1": 77, "access_road": 59, "tight_battery": 65}  # work, no transit
+TRAVEL_MAKESPANS_H = {"landing_pad_v1": 80, "access_road": 64, "tight_battery": 68}  # phase 3
 # (brief id, task-graph fixture, whether a budget-respecting robot assignment exists)
 GRAPH_FIXTURES = [
-    ("landing_pad", "taskgraph_1.json", True),
+    ("landing_pad_v1", "taskgraph_1.json", True),
     ("access_road", "taskgraph_1.json", True),
     ("tight_battery", "taskgraph_1.json", False),
     ("tight_battery", "taskgraph_2.json", True),
@@ -102,7 +112,7 @@ GRAPH_FIXTURES = [
 
 # --------------------------------------------------------------------------- helpers
 def _brief(brief_id: str) -> str:
-    return (BRIEFS_DIR / f"{brief_id}.md").read_text()
+    return (V1_BRIEF if brief_id == "landing_pad_v1" else BRIEFS_DIR / f"{brief_id}.md").read_text()
 
 
 def _requirements(brief_id: str) -> Requirements:
@@ -224,7 +234,7 @@ def test_graph_fixture_hand_arithmetic(brief_id: str, filename: str, packable: b
 
 
 # --------------------------------------------------------------------------- end to end
-@pytest.mark.parametrize("brief_id", ["landing_pad", "access_road"])
+@pytest.mark.parametrize("brief_id", ["landing_pad_v1", "access_road"])
 def test_feasible_brief_plans_without_repair(brief_id: str) -> None:
     plan = _plan(brief_id)
 
@@ -331,7 +341,7 @@ class _Answer:
         return validate_into(schema, self.payload), Usage(model="stub")
 
 
-# quantity + unit per physical task of the landing_pad fixture graph, sized so that the rate
+# quantity + unit per physical task of the landing_pad_v1 fixture graph, sized so that the rate
 # table lands near the hand-made figures (T3, the bowl, is deliberately under-estimated below)
 LANDING_PAD_SCOPE = {
     "T2": (300, "m2"), "T3": (190, "m3"), "T4": (98, "m3"), "T5": (150, "m2"), "T6": (120, "m3"),
@@ -345,8 +355,8 @@ def test_quantities_ground_the_graph_before_it_is_scheduled() -> None:
     live model does) is re-sized by the rate table on its way out of the task-graph stage,
     the advisory names the gap, and CP-SAT schedules the computed hours. An answer that states
     quantities for some physical tasks but not for others is rejected by the validator."""
-    req = _requirements("landing_pad")
-    data = json.loads((FIXTURES_DIR / "landing_pad" / "taskgraph_1.json").read_text())
+    req = _requirements("landing_pad_v1")
+    data = json.loads((FIXTURES_DIR / "landing_pad_v1" / "taskgraph_1.json").read_text())
     for t in data["tasks"]:
         if t["id"] == "T3":   # excavate pad bowl: the model's guess is far too small
             t.update(basis="pi*(10 m)^2*0.6 m = 188 m3 (+1%)", duration_h=10, energy_wh=1000)
@@ -390,10 +400,129 @@ def test_quantities_ground_the_graph_before_it_is_scheduled() -> None:
     assert plan.task_graph.task("T3").duration_h == 28
     entry = plan.schedule.entry("T3")
     assert entry.end_h - entry.start_h == 28
-    raw = solve_schedule(req, _graph("landing_pad", "taskgraph_1.json"),
+    raw = solve_schedule(req, _graph("landing_pad_v1", "taskgraph_1.json"),
                          SolveOptions(time_limit_s=10.0))
     assert not isinstance(raw, Failure)
     assert plan.schedule.makespan_h > raw.makespan_h  # the bowl really takes longer
     assert check_schedule(plan.requirements, plan.task_graph, plan.schedule) == []
     assert plan.steps[0].payload is not None
     assert plan.steps[0].payload["advisories"][0].startswith("estimate:T3:")
+
+
+# --------------------------------------------------------------------------- live recordings
+def test_landing_pad_replays_its_live_run() -> None:
+    """Oct 23: Nemotron 3 Ultra's first graph needs 4,112 Wh of the printer's 4,000 and hauls
+    the 120 m3 berm twice over; the validator refuses it on the printer alone (the double haul
+    and the supply balance are advisories, which reach the repair). The one repair trims the
+    crest sintering from 160 to 146 m2, halves the hauls to 2 x 60 m3, each after the dig part
+    that feeds it, and CP-SAT proves 89 h: in scope, never a supply conflict."""
+    plan = _plan("landing_pad")
+
+    assert [(s.stage, s.ok) for s in plan.steps] == [
+        ("structure", True), ("taskgraph", True), ("validate", False), ("repair", True),
+        ("validate", True), ("schedule", True), ("explain", True)]
+    # Lightning placed the three zones 4 cells apart with radius 3: a soft warning, kept
+    assert (plan.steps[0].payload or {})["warnings"] == [
+        "zones Z1 and Z2 overlap (centres 4.0 cells apart, radii 3 + 3)",
+        "zones Z2 and Z3 overlap (centres 4.0 cells apart, radii 3 + 3)"]
+    assert (plan.steps[1].payload or {})["advisories"] == [
+        ("volume:S2: its dimensions give 120 m3 (40 m long, 1.5 m high, 4 m wide at the base, "
+         "triangular section) but its haul tasks (T13 120 m3, T14 120 m3) total 240 m3 (200 %): "
+         "hauled twice over"),
+        ("supply:S2: its hauls (T13 120 m3, T14 120 m3) move 240 m3, more than the 125.7 m3 the "
+         "digs before them remove (S1 landing pad: T5, T6)")]
+    refused = plan.steps[2].failure
+    assert refused is not None and refused.kind == "validation"
+    assert refused.conflicts == ["energy:printer"]
+    assert ("printer tasks need 4,112 Wh, 4,078 Wh of work and about 34 Wh of travel, but its "
+            "1 robot carries only 4,000 Wh combined") in refused.hint
+
+    repair = plan.steps[3]
+    assert repair.attempt == 2 and repair.usage is not None
+    assert repair.usage.model == "fixture:taskgraph_2.json"
+    assert (repair.payload or {})["advisories"] == []
+    graph = plan.task_graph
+    assert graph is not None and graph.ids() == _graph("landing_pad", "taskgraph_2.json").ids()
+    assert [graph.task(i).quantity for i in ("T12", "T13", "T14")] == [146.0, 60.0, 60.0]
+    assert "T5" in graph.task("T13").after and "T6" in graph.task("T14").after
+    assert plan.repairs == 1 and plan.schedule is not None
+    assert (plan.schedule.makespan_h, plan.schedule.status) == (89, "optimal")
+    assert not [c for s in plan.steps if s.failure is not None for c in s.failure.conflicts
+                if c.startswith("supply:")]
+    assert validate_graph(plan.requirements, graph, coverage=True, supply=True) is None
+    assert scope_gaps(plan.requirements, graph) == []
+    _assert_verified_plan(plan)
+
+
+def test_front_loaded_replays_its_live_run() -> None:
+    """Designed impossible: a 30 m pad dug and compacted in one zone, which admits one robot at
+    a time, and a 60 h window. Ultra's first graph is refused on an 82 h chain; repair 1
+    validates and CP-SAT proves ``horizon, zone:Z1``; repair 2 drops the pad compaction (scope
+    drift -26 %) and the validator refuses it (``scope:S1``); repair 3 restores it and CP-SAT
+    proves the same core. No plan after three repairs; the advice is CP-SAT-verified. The last
+    graph's notes claim a relaxed zone rule: the solver does not read notes."""
+    plan = _plan("front_loaded")
+
+    assert [s.stage for s in plan.steps] == [
+        "structure", "taskgraph", "validate", "repair", "validate", "schedule", "repair",
+        "validate", "repair", "validate", "schedule"]
+    verdicts = [(s.stage, s.attempt, s.failure.kind, s.failure.conflicts)
+                for s in plan.steps if s.failure is not None]
+    assert verdicts == [
+        ("validate", 1, "validation", ["horizon_path:T1->T2->T3->T6->T7->T8"]),
+        ("schedule", 2, "infeasible", ["horizon", "zone:Z1"]),
+        ("validate", 3, "validation", ["scope:S1", "horizon_path:T1->T2->T3->T6->T7->T9"]),
+        ("schedule", 4, "infeasible", ["horizon", "zone:Z1"])]
+    assert plan.steps[7].failure is not None
+    assert plan.steps[7].failure.details[0] == "S1 (pad) lacks compact task"
+    assert [(s.payload or {})["diff"]["scope_drift_pct"] for s in plan.steps
+            if s.stage == "repair"] == [0.0, -26.0, 35.4]
+
+    assert not plan.success and plan.repairs == 3 and plan.schedule is None
+    assert plan.failure is not None and plan.failure == plan.steps[-1].failure
+    assert plan.explanation is None
+    assert ("Zone Z1 admits one robot at a time, so its 4 tasks (75 h in total) cannot "
+            "overlap.") in plan.failure.hint
+    [advice] = plan.suggestions
+    assert (advice.kind, advice.horizon_h, advice.makespan_h, advice.verified) == (
+        "extend_horizon", 85, 85, True)
+    assert advice.detail == "finishing needs 85 h, 25 h past the 60 h deadline (CP-SAT optimal)"
+    assert (plan.steps[-1].payload or {})["suggestions"] == [advice.model_dump()]
+    assert plan.task_graph is not None
+    assert "Relaxed 'one robot per zone'" in (plan.task_graph.notes or "")
+
+
+# --------------------------------------------------------------------------- the UI's samples
+def _verdicts(plan: PlanResult) -> list[tuple[str, int, str, list[str]]]:
+    return [(s.stage, s.attempt, s.failure.kind, s.failure.conflicts)
+            for s in plan.steps if s.failure is not None]
+
+
+@pytest.mark.parametrize("path", sorted(SAMPLES_DIR.glob("*.plan.json")), ids=lambda p: p.name)
+def test_ui_samples_are_the_live_runs_their_fixtures_replay(path: Path) -> None:
+    """A sample is a take's own PlanResult, never a replay of it: every model step names a
+    Token Factory model (a replay's steps say ``fixture:<file>``, and the page would lose its
+    "recorded live run" labels). The take's fixtures replay it step for step: the same stages,
+    verdicts, repairs, task ids, advice and schedule (the solve breaks ties between optima the
+    same way every time), so the CLI's offline numbers are the demo's."""
+    sample = PlanResult.model_validate_json(path.read_text())
+    brief_id = path.name.removesuffix(".plan.json")
+    model_steps = [s for s in sample.steps if s.stage in MODEL_STAGES]
+    assert model_steps and all(s.usage is not None for s in model_steps)
+    assert not [s.usage.model for s in model_steps
+                if s.usage is not None and s.usage.model.startswith("fixture:")]
+
+    replay = _plan(brief_id)
+    assert [(s.stage, s.ok) for s in replay.steps] == [(s.stage, s.ok) for s in sample.steps]
+    assert _verdicts(replay) == _verdicts(sample)
+    assert (replay.success, replay.repairs) == (sample.success, sample.repairs)
+    assert replay.task_graph is not None and sample.task_graph is not None
+    assert replay.task_graph.ids() == sample.task_graph.ids()
+    assert replay.suggestions == sample.suggestions
+    if sample.schedule is None:
+        assert replay.schedule is None
+    else:
+        assert replay.schedule is not None
+        assert (replay.schedule.makespan_h, replay.schedule.status) == (
+            sample.schedule.makespan_h, sample.schedule.status)
+        assert replay.schedule.entries == sample.schedule.entries

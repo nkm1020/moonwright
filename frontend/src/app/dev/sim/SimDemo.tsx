@@ -1,13 +1,15 @@
 "use client";
 /**
  * Dev harness for the simulation components, fed by the recorded landing_pad sample payloads.
- * The replay autoplays from 25 h so the 30 h failure, its banner and the hold come up within
- * seconds; two synthetic variants of the recorded replan (escalated to Nemotron, no verified
- * replan) exercise the other banner and event-list wordings without a backend. SimControls
- * keeps local state only (no backend call); the Run button fakes a 1.5 s run.
+ * The replay autoplays from LEAD_IN_H before the recorded failure, so the failure, its banner
+ * and the hold come up within seconds; two synthetic variants of the recorded replan (escalated
+ * to Nemotron, no verified replan) exercise the other banner and event-list wordings without a
+ * backend. SimControls keeps local state only (no backend call); the Run button fakes a 1.5 s
+ * run.
  */
 import { useEffect, useRef, useState } from "react";
 import type { Failure, LoopStep, PlanResult, ReplanRecord, SimResult } from "@/lib/types";
+import { sampleUrl } from "@/lib/api";
 import { allTasks } from "@/lib/tasks";
 import { BeforeAfter } from "@/components/BeforeAfter";
 import { EventList, formatHours } from "@/components/EventList";
@@ -21,13 +23,27 @@ interface Loaded {
 
 type Variant = "recorded" | "escalated" | "failed";
 
-const VARIANTS: { id: Variant; label: string; blurb: string }[] = [
-  { id: "recorded", label: "Recorded", blurb: "the recorded landing-pad simulation as served: CP-SAT only, 80 h → 91 h" },
-  { id: "escalated", label: "Escalated (synthetic)", blurb: "same run, replan marked as escalated to Nemotron with one repair, 80 h → 95 h" },
-  { id: "failed", label: "No verified replan (synthetic)", blurb: "same run, replan fails with an infeasibility core" },
+/** Hours the synthetic escalation adds to the recorded replan's makespan. */
+const ESCALATION_EXTRA_H = 4;
+
+/** "89 h → 91 h": the recorded replan's makespans, `extraH` added to the new one. */
+function makespans(r: ReplanRecord | undefined, extraH = 0): string {
+  const after = r?.after.schedule?.makespan_h;
+  return r && after !== undefined ? `${r.before.makespan_h} h → ${after + extraH} h` : "no replan recorded";
+}
+
+const VARIANTS: { id: Variant; label: string; blurb: (r: ReplanRecord | undefined) => string }[] = [
+  { id: "recorded", label: "Recorded", blurb: (r) => `the recorded landing-pad simulation as served: CP-SAT only, ${makespans(r)}` },
+  {
+    id: "escalated",
+    label: "Escalated (synthetic)",
+    blurb: (r) => `same run, replan marked as escalated to Nemotron with one repair, ${makespans(r, ESCALATION_EXTRA_H)}`,
+  },
+  { id: "failed", label: "No verified replan (synthetic)", blurb: () => "same run, replan fails with an infeasibility core" },
 ];
 
-const START_AT_H = 25;
+/** Autoplay starts this many hours before the recorded failure. */
+const LEAD_IN_H = 5;
 const cardClass = "rounded-xl border border-line bg-raised p-4";
 
 async function fetchJson<T>(url: string, signal: AbortSignal): Promise<T> {
@@ -43,7 +59,9 @@ async function fetchJson<T>(url: string, signal: AbortSignal): Promise<T> {
  *  words it: no time-base flag, real plurals). Frames are left as recorded. */
 function escalatedVariant(sim: SimResult): SimResult {
   const replans: ReplanRecord[] = sim.replans.map((r) => {
-    const schedule = r.after.schedule ? { ...r.after.schedule, makespan_h: r.after.schedule.makespan_h + 4 } : null;
+    const schedule = r.after.schedule
+      ? { ...r.after.schedule, makespan_h: r.after.schedule.makespan_h + ESCALATION_EXTRA_H }
+      : null;
     const core: Failure = {
       kind: "infeasible",
       conflicts: ["energy:EX1"],
@@ -170,8 +188,8 @@ export function SimDemo() {
   useEffect(() => {
     const ac = new AbortController();
     Promise.all([
-      fetchJson<PlanResult>("/samples/landing_pad.plan.json", ac.signal),
-      fetchJson<SimResult>("/samples/landing_pad.sim.json", ac.signal),
+      fetchJson<PlanResult>(sampleUrl("landing_pad", "plan"), ac.signal),
+      fetchJson<SimResult>(sampleUrl("landing_pad", "sim"), ac.signal),
     ])
       .then(([plan, sim]) => {
         setData({ plan, sim });
@@ -215,6 +233,8 @@ export function SimDemo() {
   const tasks = allTasks(plan, sim);
   const requirements = plan.requirements;
   const firstEvent = sim.events[0]?.t_h ?? null;
+  const startAtH = Math.max(0, (firstEvent ?? LEAD_IN_H) - LEAD_IN_H);
+  const blurb = VARIANTS.find((v) => v.id === variant)?.blurb(sims.recorded.replans[0]);
 
   const onSeek = (t_h: number) => {
     setSeek({ t_h });
@@ -251,7 +271,7 @@ export function SimDemo() {
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-xs font-semibold uppercase tracking-wide text-muted">Replan variant</span>
           {VARIANTS.map((v) => (
-            <button key={v.id} type="button" aria-pressed={variant === v.id} onClick={() => setVariant(v.id)} className={chip(variant === v.id)} title={v.blurb}>
+            <button key={v.id} type="button" aria-pressed={variant === v.id} onClick={() => setVariant(v.id)} className={chip(variant === v.id)} title={v.blurb(sims.recorded.replans[0])}>
               {v.label}
             </button>
           ))}
@@ -261,7 +281,7 @@ export function SimDemo() {
             hold on events ({(HOLD_MS / 1000).toFixed(1)} s)
           </label>
           <span className="mx-1 h-4 w-px bg-white/15" aria-hidden />
-          <button type="button" className={chip(false)} onClick={() => onSeek(Math.max(0, (firstEvent ?? START_AT_H) - PULSE_H - 0.5))}>
+          <button type="button" className={chip(false)} onClick={() => onSeek(Math.max(0, (firstEvent ?? startAtH) - PULSE_H - 0.5))}>
             Seek just before the banner
           </button>
           <button type="button" className={chip(false)} onClick={() => firstEvent !== null && onSeek(firstEvent)}>
@@ -272,7 +292,7 @@ export function SimDemo() {
           </button>
         </div>
         <p className="text-xs text-muted">
-          {VARIANTS.find((v) => v.id === variant)?.blurb}. Autoplay starts at {formatHours(START_AT_H)}; the banner shows for ±{PULSE_H} h
+          {blurb}. Autoplay starts at {formatHours(startAtH)}; the banner shows for ±{PULSE_H} h
           of simulated time around each event. Space continues a hold (or plays / pauses when the map has focus); ← → step 1 h, shift for 6 h.
         </p>
       </section>
@@ -285,7 +305,7 @@ export function SimDemo() {
             plan={plan}
             tasks={tasks}
             autoPlay
-            startAtH={START_AT_H}
+            startAtH={startAtH}
             holdOnEvents={holdOnEvents}
             seekRequest={seek}
             onTimeChange={setNowH}

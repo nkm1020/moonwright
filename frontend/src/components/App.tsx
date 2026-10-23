@@ -2,7 +2,9 @@
 /**
  * The Moonwright console: a single scrolling page whose state machine runs the PRD flow
  * brief -> requirements -> plan (streamed trace) -> simulate -> robustness. All backend calls
- * happen here; the stage components are presentational.
+ * happen here; the stage components are presentational. The static demo build (STATIC_DEMO)
+ * has no backend: each stage's primary action replays the recorded live run of the sample on
+ * screen instead, and the controls that would need a new request are locked with the reason.
  */
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type ReactNode } from "react";
 import type {
@@ -26,16 +28,22 @@ import { conflictPrefix, lastReceipt, scheduleReceipt, taskGraphPayload } from "
 import {
   API_BASE,
   ApiError,
+  RECORDED_ON,
   SAMPLE_IDS,
+  STATIC_DEMO,
   errorMessage,
   getExamples,
   getHealth,
   isAbortError,
+  isSampleId,
   loadSampleBundle,
   loadSamplePlan,
   postMonteCarlo,
   postSimulate,
   postStructure,
+  sampleSpec,
+  type SampleBundle,
+  type SampleFile,
   type SampleId,
 } from "@/lib/api";
 import { planStream } from "@/lib/sse";
@@ -45,19 +53,22 @@ import {
   answerFailure,
   fmtHours,
   fmtPercent,
+  fmtRunOutcome,
   fmtSeconds,
   fmtSuggestion,
   fmtWh,
+  isFixtureModel,
   isResourceFailure,
   lastFailedStep,
   planSuggestions,
   plural,
   repairRounds,
+  runOutcome,
   stepSuggestions,
   tidyHint,
   titleFromBrief,
 } from "@/lib/format";
-import { TopBar, type FlowStage, type HealthStatus } from "./TopBar";
+import { FLOW_STAGES, TopBar, type FlowStage, type HealthStatus } from "./TopBar";
 import { BriefForm, stripMarkdown } from "./BriefForm";
 import { RequirementsCard } from "./RequirementsCard";
 import { ProgressTrace, expectedNextStage, isVerdict, roundsPhrase } from "./ProgressTrace";
@@ -178,6 +189,15 @@ interface State {
   sim: Async<SimResult>;
   mc: Async<MonteCarloResult>;
   sample: { loading: boolean; note: string | null; error: string | null };
+  /** The PlanResult of each bundled sample: the demo buttons and the example cards read the
+   *  run's outcome from it. */
+  recordings: Partial<Record<SampleId, PlanResult>>;
+  /** The recorded what-if of the sample on screen (one spare of each single-point type), which
+   *  the static demo offers in place of a new Monte Carlo request. */
+  recordedWhatIf: MonteCarloResult | null;
+  /** The sample's companion files that did not load (SampleBundle.missing): the static demo
+   *  shows why in place of their panels. */
+  sampleMissing: Partial<Record<SampleFile, string>>;
 }
 
 const initialState: State = {
@@ -202,6 +222,9 @@ const initialState: State = {
   sim: idle(),
   mc: idle(),
   sample: { loading: false, note: null, error: null },
+  recordings: {},
+  recordedWhatIf: null,
+  sampleMissing: {},
 };
 
 type Action =
@@ -216,7 +239,9 @@ type Action =
   /** Requirements handed in from outside the editor (the Monte Carlo what-if fleet). */
   | { type: "adoptRequirements"; value: Requirements }
   | { type: "maxRepairs"; value: number }
-  | { type: "planStart"; startedAt: number; briefId: string | null; maxRepairs: number }
+  /** startedAt and maxRepairs are null for the static demo's replay of a recorded trace (no
+   *  clock to show; the trace says its rounds by itself) */
+  | { type: "planStart"; startedAt: number | null; briefId: string | null; maxRepairs: number | null }
   | { type: "planStep"; step: LoopStep }
   | { type: "planDone"; result: PlanResult }
   | { type: "planError"; message: string }
@@ -229,8 +254,14 @@ type Action =
   | { type: "mcDone"; result: MonteCarloResult }
   | { type: "mcError"; message: string }
   | { type: "sampleStart" }
-  | { type: "sampleDone"; plan: PlanResult; sim: SimResult | null; mc: MonteCarloResult | null; id: SampleId }
-  | { type: "sampleError"; message: string };
+  /** A recorded run on screen up to `stage`: "robustness" shows all it ships (a demo button),
+   *  an earlier stage is one step of the static demo's walk through it. */
+  | { type: "sampleDone"; bundle: SampleBundle; stage: FlowStage }
+  /** A recording's brief on the brief step with nothing after it: where the static demo's
+   *  walk starts. */
+  | { type: "sampleBrief"; example: ExampleBrief }
+  | { type: "sampleError"; message: string }
+  | { type: "recordings"; plans: Partial<Record<SampleId, PlanResult>> };
 
 function reducer(state: State, action: Action): State {
   switch (action.type) {
@@ -353,61 +384,101 @@ function reducer(state: State, action: Action): State {
     case "mcError":
       return { ...state, mc: { status: "error", result: state.mc.result, error: action.message } };
     case "sampleStart":
-      return { ...state, sample: { loading: true, note: null, error: null } };
+      return { ...state, sample: { ...state.sample, loading: true, error: null } };
     case "sampleDone": {
-      const { plan, sim, mc, id } = action;
+      const { bundle, stage } = action;
+      const { id, plan, sim, mc } = bundle;
+      const shown = (s: FlowStage) => stageIndex(s) <= stageIndex(stage);
       const failures = (sim?.events ?? [])
         .filter((e) => e.kind === "robot_failure" && e.robot !== null)
         .map((e) => ({ robot: e.robot as string, t_h: e.t_h }));
-      // "plan only", "plan and simulation", "plan, simulation and Monte Carlo"
-      const names = ["plan", sim ? "simulation" : null, mc ? "Monte Carlo" : null].filter((f): f is string => f !== null);
-      const parts =
-        names.length === 1 ? "plan only" : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
-      // a verified recording is a demo of the whole flow; a failed one is replayed for its
-      // trace, its cores and the solver-proven advice that ends it
+      // a recording of Nemotron on Token Factory is a live run (its steps name the models); a
+      // verified one is a demo of the whole flow, a failed one is replayed for its trace, its
+      // cores and the solver-proven advice that ends it
+      const recorded = plan.steps.some((s) => s.usage && !isFixtureModel(s.usage.model))
+        ? "Recorded live run"
+        : "Recorded demo";
       const note = plan.success
-        ? `Recorded demo · ${parts}`
+        ? recorded
         : planSuggestions(plan).length > 0
-          ? "Recorded live run · plan could not be verified; here is what would make it feasible"
-          : "Recorded live run · plan could not be verified";
+          ? `${recorded} · plan could not be verified; here is what would make it feasible`
+          : `${recorded} · plan could not be verified`;
       // the textarea holds plain prose: the example's text when the backend sent it, else the
       // recorded brief, markdown markers stripped either way
       const example = state.examples.find((ex) => ex.id === id);
       const rawBrief = example?.text ?? plan.requirements.source_brief ?? null;
       const brief = rawBrief ? stripMarkdown(rawBrief) : state.brief;
+      // the requirements came out of the recorded structure step: the card shows its model,
+      // tokens and latency like a structuring answer of its own
+      const structureStep = plan.steps.find((s) => s.stage === "structure" && s.ok) ?? null;
+      const requirements = shown("requirements") ? plan.requirements : null;
       return {
         ...state,
         brief,
         briefId: id,
-        structure: idle(),
-        requirements: plan.requirements,
-        requirementsOriginal: plan.requirements,
-        requirementsSource: "sample",
-        requirementsVersion: state.requirementsVersion + 1,
-        requirementsBrief: { id, text: brief },
-        plan: {
-          status: "done",
-          result: plan,
-          error: null,
-          steps: plan.steps,
-          startedAt: null,
-          briefId: id,
-          maxRepairs: null,
-          kept: null,
-          notice: null,
-        },
-        selectedTask: null,
+        structure:
+          requirements && structureStep
+            ? { status: "done", result: { requirements, step: structureStep, key: id }, error: null }
+            : idle(),
+        requirements,
+        requirementsOriginal: requirements,
+        requirementsSource: requirements ? "sample" : null,
+        // the same recording shown one stage further keeps its card (and its open details)
+        requirementsVersion:
+          requirements === state.requirements ? state.requirementsVersion : state.requirementsVersion + 1,
+        requirementsBrief: requirements ? { id, text: brief } : null,
+        plan: shown("plan")
+          ? {
+              status: "done",
+              result: plan,
+              error: null,
+              steps: plan.steps,
+              startedAt: null,
+              briefId: id,
+              maxRepairs: null,
+              kept: null,
+              notice: null,
+            }
+          : idlePlan(),
+        selectedTask: state.plan.result === plan ? state.selectedTask : null,
         simOptions: { ...DEFAULT_SIMULATE_OPTIONS, failures },
-        sim: sim ? { status: "done", result: sim, error: null } : idle(),
-        mc: mc ? { status: "done", result: mc, error: null } : idle(),
-        sample: { loading: false, note, error: null },
+        sim: shown("simulate") && sim ? { status: "done", result: sim, error: null } : idle(),
+        mc: shown("robustness") && mc ? { status: "done", result: mc, error: null } : idle(),
+        sample: { loading: false, note: shown("plan") ? note : null, error: null },
+        recordedWhatIf: bundle.whatIf,
+        sampleMissing: bundle.missing,
       };
     }
+    case "sampleBrief":
+      return {
+        ...state,
+        brief: action.example.text,
+        briefId: action.example.id,
+        structure: idle(),
+        requirements: null,
+        requirementsOriginal: null,
+        requirementsSource: null,
+        requirementsBrief: null,
+        plan: idlePlan(),
+        selectedTask: null,
+        simOptions: DEFAULT_SIMULATE_OPTIONS,
+        sim: idle(),
+        mc: idle(),
+        sample: { loading: false, note: null, error: null },
+        recordedWhatIf: null,
+        sampleMissing: {},
+      };
     case "sampleError":
-      return { ...state, sample: { loading: false, note: null, error: action.message } };
+      return { ...state, sample: { loading: false, note: state.sample.note, error: action.message } };
+    case "recordings":
+      return { ...state, recordings: action.plans };
     default:
       return state;
   }
+}
+
+function stageIndex(stage: FlowStage): number {
+  return FLOW_STAGES.findIndex((s) => s.id === stage);
 }
 
 function deriveStage(s: State): { stage: FlowStage; busy: boolean } {
@@ -488,9 +559,62 @@ function useElapsed(since: number | null, active: boolean): number | null {
 }
 
 /** The bundled recordings that double as example briefs when the backend is unreachable: the
- *  briefs the backend itself ships, so the strip reads the same online and offline (the
- *  impossible-deadline recording is reached from its demo button instead). */
-const OFFLINE_EXAMPLE_IDS: readonly SampleId[] = SAMPLE_IDS.filter((id) => id !== "front_loaded");
+ *  briefs the backend itself ships (SampleSpec.example), so the strip reads the same online and
+ *  offline (any other recording is reached from its demo button). */
+const OFFLINE_EXAMPLE_IDS: readonly SampleId[] = SAMPLE_IDS.filter((id) => sampleSpec(id).example);
+
+// ------------------------------------------------------------------ static demo
+/** What each control the static demo locks says instead: the request it would make has no
+ *  server here (the banner points to the README for a live setup). */
+const STATIC_LOCKS = {
+  brief: "Structuring a brief of your own needs the backend.",
+  requirements: "Read-only here: editing the card and planning it again need the backend.",
+  advice: "Applying a proven change and planning it again need the backend.",
+  simulate: "Simulated offline from the recorded plan: injecting another failure needs the backend.",
+  robustness:
+    "Computed offline from the recorded plan (CP-SAT only, no model call): another run or another fleet needs the backend.",
+} as const;
+
+/** Pause between the recorded steps when the static demo replays a plan: the loop reads a step
+ *  at a time (the graph, the verdict, the repair round, the proof) instead of landing at once. */
+const REPLAY_STEP_MS = 450;
+
+/** A pause that an abort cuts short: resolves true when it ran out, false when `signal` fired. */
+function pause(ms: number, signal: AbortSignal): Promise<boolean> {
+  return new Promise((resolve) => {
+    if (signal.aborted) return resolve(false);
+    let timer = 0;
+    const stop = () => {
+      window.clearTimeout(timer);
+      resolve(false);
+    };
+    timer = window.setTimeout(() => {
+      signal.removeEventListener("abort", stop);
+      resolve(true);
+    }, ms);
+    signal.addEventListener("abort", stop, { once: true });
+  });
+}
+
+/** The PlanResult of every bundled sample that loads: a file that fails costs its card and its
+ *  tooltip line, not the page. */
+async function loadRecordings(): Promise<Partial<Record<SampleId, PlanResult>>> {
+  const settled = await Promise.allSettled(SAMPLE_IDS.map((id) => loadSamplePlan(id)));
+  const plans: Partial<Record<SampleId, PlanResult>> = {};
+  settled.forEach((r, i) => {
+    if (r.status === "fulfilled") plans[SAMPLE_IDS[i]] = r.value;
+  });
+  return plans;
+}
+
+/** The static demo's example cards: the recordings themselves, under their short titles. */
+function recordingExamples(plans: Partial<Record<SampleId, PlanResult>>): ExampleBrief[] {
+  return SAMPLE_IDS.flatMap((id) => {
+    const source = plans[id]?.requirements.source_brief ?? "";
+    const text = stripMarkdown(source);
+    return text ? [{ id, title: sampleSpec(id).title, text, text_markdown: source }] : [];
+  });
+}
 
 // ------------------------------------------------------------------ solver-proven advice
 /** The hours an extend_horizon suggestion asks for (its horizon_h, else the makespan it
@@ -650,6 +774,19 @@ function failedPlanGuidance(
   if (isOfflineMiss(plan.failure, steps)) {
     return { note: `${OFFLINE_MISS} ${OFFLINE_HELP}`, next: "connect a live backend to plan this brief." };
   }
+  if (STATIC_DEMO) {
+    // the static demo replays the recording: the advice stands as the solver proved it, and
+    // acting on it is a new request
+    return suggestions.length > 0
+      ? {
+          note: "CP-SAT proved this on the run's last task graph. Writing a change into the requirements card and planning again need the backend; this page replays the recorded run.",
+          next: "with the backend, apply a proven change and plan again.",
+        }
+      : {
+          note: "The verdict above names what kept the plan from being verified. Editing the requirements and planning again need the backend; this page replays the recorded run.",
+          next: "with the backend, edit the requirements and plan again.",
+        };
+  }
   if (suggestions.length > 0) {
     // one proven change is enough: once the card holds one, planning again is the next step
     if (actions.some((a) => a.label !== null && a.satisfied)) {
@@ -799,8 +936,28 @@ export function App() {
 
   useEffect(() => {
     const ctrl = new AbortController();
-    void refreshHealth(ctrl.signal);
-    void loadExamples(ctrl.signal);
+    // the bundled recordings: the demo buttons and the example cards read each run's outcome
+    // from them, and in the static demo they are the example cards
+    void loadRecordings().then((plans) => {
+      if (ctrl.signal.aborted) return;
+      dispatch({ type: "recordings", plans });
+      if (STATIC_DEMO) {
+        const examples = recordingExamples(plans);
+        dispatch({
+          type: "examples",
+          examples,
+          note:
+            examples.length === SAMPLE_IDS.length
+              ? "recorded live runs: pick one to walk through it"
+              : "some recorded runs could not be loaded",
+        });
+      }
+    });
+    // the static demo has no backend to ask
+    if (!STATIC_DEMO) {
+      void refreshHealth(ctrl.signal);
+      void loadExamples(ctrl.signal);
+    }
     return () => ctrl.abort();
   }, [refreshHealth, loadExamples]);
 
@@ -814,7 +971,41 @@ export function App() {
     planAbort.current = null;
   };
 
+  /** The recording the static demo replays: the sample whose brief is on screen. */
+  const replayId = [state.requirementsBrief?.id, state.briefId].find(isSampleId) ?? null;
+
+  /** The static demo's stand-in for a request: the recording on screen, shown up to `stage`
+   *  (each stage's primary action shows the next one); false when nothing could be shown. */
+  const replayTo = async (stage: FlowStage, id: SampleId | null = replayId): Promise<boolean> => {
+    if (!id) return false;
+    cancelPlan();
+    dispatch({ type: "sampleStart" });
+    try {
+      dispatch({ type: "sampleDone", bundle: await loadSampleBundle(id), stage });
+      return true;
+    } catch (e) {
+      dispatch({ type: "sampleError", message: errorMessage(e) });
+      return false;
+    }
+  };
+
+  /** An example card: its brief into the textarea. In the static demo a card is a recording,
+   *  so its walk starts over from the brief step, and the rest of it is fetched meanwhile. */
+  const pickExample = (example: ExampleBrief) => {
+    if (STATIC_DEMO && isSampleId(example.id)) {
+      cancelPlan();
+      dispatch({ type: "sampleBrief", example });
+      void loadSampleBundle(example.id).catch(() => undefined);
+      return;
+    }
+    dispatch({ type: "useExample", example });
+  };
+
   const structureBrief = async () => {
+    if (STATIC_DEMO) {
+      if (await replayTo("requirements")) scrollToSection("requirements");
+      return;
+    }
     cancelPlan();
     dispatch({ type: "structureStart", startedAt: Date.now() });
     try {
@@ -829,9 +1020,41 @@ export function App() {
     }
   };
 
+  /** The static demo's planning: the recorded trace streams in a step at a time through the
+   *  states a live run goes through, then the recorded result lands. */
+  const replayPlan = async () => {
+    const id = replayId;
+    if (!id) return;
+    let bundle: SampleBundle;
+    try {
+      bundle = await loadSampleBundle(id);
+    } catch (e) {
+      dispatch({ type: "sampleError", message: errorMessage(e) });
+      return;
+    }
+    cancelPlan();
+    const ctrl = new AbortController();
+    planAbort.current = ctrl;
+    dispatch({ type: "planStart", startedAt: null, briefId: id, maxRepairs: null });
+    scrollToSection("plan");
+    for (const step of bundle.plan.steps) {
+      if (!(await pause(REPLAY_STEP_MS, ctrl.signal))) return;
+      dispatch({ type: "planStep", step });
+    }
+    if (!(await pause(REPLAY_STEP_MS, ctrl.signal))) return;
+    if (planAbort.current === ctrl) planAbort.current = null;
+    dispatch({ type: "sampleDone", bundle, stage: "plan" });
+    // the section was short while the trace streamed: land on the outcome now that it is there
+    scrollToSection("plan");
+  };
+
   const planWithRequirements = async () => {
     const requirements = state.requirements;
     if (!requirements || requirementsStale) return;
+    if (STATIC_DEMO) {
+      await replayPlan();
+      return;
+    }
     cancelPlan();
     const ctrl = new AbortController();
     planAbort.current = ctrl;
@@ -872,6 +1095,10 @@ export function App() {
   const runSimulation = async () => {
     const plan = state.plan.result;
     if (!plan?.schedule) return;
+    if (STATIC_DEMO) {
+      if (await replayTo("simulate")) scrollToSection("simulate");
+      return;
+    }
     dispatch({ type: "simStart" });
     try {
       // frame_stride follows the step so that about one frame per hour is kept whatever
@@ -887,6 +1114,10 @@ export function App() {
   };
 
   const runMonteCarlo = async (req: MonteCarloRequest) => {
+    if (STATIC_DEMO) {
+      await replayTo("robustness");
+      return;
+    }
     dispatch({ type: "mcStart" });
     try {
       const result = await postMonteCarlo(req);
@@ -896,25 +1127,17 @@ export function App() {
     }
   };
 
-  /** Load a recorded run from /samples into the normal state: the plan always, the simulation
-   *  and Monte Carlo result when the sample ships them (landing_pad does; tight_battery is a
-   *  plan with one repair round and no simulation; front_loaded is a failed live run whose
-   *  trace ends with solver-proven advice, so there is nothing to simulate). */
-  const loadSample = async (id: SampleId = "landing_pad") => {
-    cancelPlan();
-    dispatch({ type: "sampleStart" });
-    try {
-      const { plan, sim, mc } = await loadSampleBundle(id);
-      dispatch({ type: "sampleDone", plan, sim, mc, id });
-      scrollToSection("plan");
-    } catch (e) {
-      dispatch({ type: "sampleError", message: errorMessage(e) });
-    }
+  /** A demo button: a recorded run from /samples into the normal state, all it ships at once
+   *  (landing_pad: the plan, its simulation and Monte Carlo; front_loaded is a failed live run
+   *  whose trace ends with solver-proven advice, so there is nothing to simulate). */
+  const loadSample = async (id: SampleId) => {
+    if (await replayTo("robustness", id)) scrollToSection("plan");
   };
 
   /** One solver-proven change written into the requirements card (the editor remounts on the
    *  new version and marks the card as edited); the user checks it there and plans again. */
   const adoptSuggestion = (s: Suggestion) => {
+    if (STATIC_DEMO) return;
     const base = state.requirements ?? state.plan.result?.requirements ?? null;
     const next = base ? applySuggestion(base, s) : null;
     if (!next) return;
@@ -966,7 +1189,7 @@ export function App() {
    *  unknown backend counts as live, since only a fixture backend says otherwise */
   const live = state.health?.llm !== "fixture";
   // a recorded-answers backend replays only the briefs it has recordings of, which are the
-  // example briefs it lists: the card of any other brief (the impossible-deadline recording, a
+  // example briefs it lists: the card of any other brief (a demo recording it does not list, a
   // brief of its own) can be edited but not planned there. A run that came back with no
   // recorded answer at all (state.plan.notice) says the same of this backend.
   const recordedBriefs = useMemo(() => new Set(state.examples.map((ex) => ex.id)), [state.examples]);
@@ -1001,6 +1224,14 @@ export function App() {
   const requirementsEdited =
     state.requirements !== null &&
     JSON.stringify(state.requirements) !== JSON.stringify(state.requirementsOriginal);
+  /** each sample's outcome in one line, as its PlanResult tells it (the demo buttons' tooltips) */
+  const sampleOutcomes = useMemo(
+    () =>
+      Object.fromEntries(
+        Object.entries(state.recordings).map(([id, plan]) => [id, fmtRunOutcome(runOutcome(plan))]),
+      ) as Partial<Record<SampleId, string>>,
+    [state.recordings],
+  );
 
   return (
     <CurrentStageContext.Provider value={stage}>
@@ -1014,7 +1245,10 @@ export function App() {
         onLoadSample={(id) => void loadSample(id)}
         sampleLoading={state.sample.loading}
         onRetryHealth={retryHealth}
+        sampleOutcomes={sampleOutcomes}
+        staticDemo={STATIC_DEMO}
       />
+      {STATIC_DEMO && <StaticBanner />}
 
       <main className="mx-auto w-full max-w-[1400px] flex-1 px-4 md:px-6 lg:px-8">
         {state.sample.error && (
@@ -1030,11 +1264,14 @@ export function App() {
           examples={state.examples}
           examplesLoading={state.examplesLoading}
           examplesNote={state.examplesNote}
-          onUseExample={(example) => dispatch({ type: "useExample", example })}
+          onUseExample={pickExample}
           onStructure={structureBrief}
           structuring={state.structure.status === "running"}
           error={state.structure.error}
           disabled={state.plan.status === "running"}
+          recordings={state.recordings}
+          recorded={STATIC_DEMO ? STATIC_LOCKS.brief : null}
+          restartable={STATIC_DEMO && (state.requirements !== null || state.plan.status !== "idle")}
         />
 
         {state.structure.status === "running" && !state.requirements && (
@@ -1061,6 +1298,7 @@ export function App() {
             tasks={planResult?.task_graph?.tasks ?? null}
             staleBrief={requirementsStale}
             planBlocked={unrecorded ? UNRECORDED_CARD : null}
+            recorded={STATIC_DEMO ? STATIC_LOCKS.requirements : null}
           />
         )}
 
@@ -1151,6 +1389,7 @@ export function App() {
                       startedAt={state.plan.startedAt}
                       maxRepairs={state.plan.maxRepairs}
                       live={live}
+                      replay={STATIC_DEMO}
                     />
                     {planResult && <PreviousPlanLine plan={planResult} verified={verified} proven={provenAdvice} />}
                   </div>
@@ -1179,6 +1418,7 @@ export function App() {
                       planning={planBusy}
                       onApply={adoptSuggestion}
                       onEditRequirements={() => scrollToSection("requirements")}
+                      recorded={STATIC_DEMO ? STATIC_LOCKS.advice : null}
                     />
                   </div>
                 )}
@@ -1244,19 +1484,30 @@ export function App() {
             id="simulate"
             step="04"
             title="Simulate"
-            subtitle="Replay the verified schedule in the 2D simulator with robot positions and batteries. Inject robot failures; on each event the agent replans the remaining work from the task-graph stage and the solver re-verifies it."
+            subtitle={
+              STATIC_DEMO
+                ? "The verified schedule in the 2D simulator with robot positions and batteries, under the recorded failure: the agent replans the remaining work and the solver re-verifies it. Simulated offline from the recorded live plan."
+                : "Replay the verified schedule in the 2D simulator with robot positions and batteries. Inject robot failures; on each event the agent replans the remaining work from the task-graph stage and the solver re-verifies it."
+            }
           >
             <div className="space-y-5">
               <Card title="Scenario" bodyClassName="p-4">
-                <SimControls
-                  requirements={planResult.requirements}
-                  horizonH={planResult.requirements.horizon_h}
-                  makespanH={planResult.schedule.makespan_h}
-                  value={state.simOptions}
-                  onChange={(value) => dispatch({ type: "simOptions", value })}
-                  onRun={runSimulation}
-                  running={state.sim.status === "running"}
-                />
+                {STATIC_DEMO && state.sampleMissing.sim ? (
+                  <Notice tone="warn" title="The recorded simulation did not load">
+                    This page {state.sampleMissing.sim}; the rest of the recorded run is shown.
+                  </Notice>
+                ) : (
+                  <SimControls
+                    requirements={planResult.requirements}
+                    horizonH={planResult.requirements.horizon_h}
+                    makespanH={planResult.schedule.makespan_h}
+                    value={state.simOptions}
+                    onChange={(value) => dispatch({ type: "simOptions", value })}
+                    onRun={runSimulation}
+                    running={state.sim.status === "running"}
+                    recorded={STATIC_DEMO ? STATIC_LOCKS.simulate : null}
+                  />
+                )}
                 {state.sim.error && (
                   <Notice tone="fail" title="Simulation failed" className="mt-3">
                     {state.sim.error}
@@ -1284,7 +1535,15 @@ export function App() {
           </Section>
         )}
 
-        {planResult && verified && (
+        {planResult && verified && STATIC_DEMO && state.sampleMissing.mc && (
+          <Section id="robustness" step="05" title="Robustness">
+            <Notice tone="warn" title="The recorded Monte Carlo did not load">
+              This page {state.sampleMissing.mc}; the rest of the recorded run is shown.
+            </Notice>
+          </Section>
+        )}
+
+        {planResult && verified && !(STATIC_DEMO && state.sampleMissing.mc) && (
           <MonteCarloPanel
             plan={planResult}
             briefId={state.plan.briefId}
@@ -1292,10 +1551,17 @@ export function App() {
             running={state.mc.status === "running"}
             error={state.mc.error}
             onRun={runMonteCarlo}
-            onAdoptRequirements={(requirements) => {
-              dispatch({ type: "adoptRequirements", value: requirements });
-              scrollToSection("requirements");
-            }}
+            onAdoptRequirements={
+              STATIC_DEMO
+                ? undefined
+                : (requirements) => {
+                    dispatch({ type: "adoptRequirements", value: requirements });
+                    scrollToSection("requirements");
+                  }
+            }
+            recorded={STATIC_DEMO ? STATIC_LOCKS.robustness : null}
+            recordedWhatIf={STATIC_DEMO ? state.recordedWhatIf : null}
+            recordedWhatIfError={STATIC_DEMO ? (state.sampleMissing.whatif ?? null) : null}
           />
         )}
       </main>
@@ -1315,7 +1581,7 @@ export function App() {
 }
 
 // ------------------------------------------------------------------ task table disclosure
-/** The task table folded under one row: "Show task table · 14 tasks · 123 h · 15,700 Wh". */
+/** The task table folded under one row: "Show task table · 14 tasks · 103 h · 10,600 Wh". */
 function TaskTableDisclosure({
   tasks,
   label = "task table",
@@ -1350,7 +1616,8 @@ function TaskTableDisclosure({
  *  under it, the best one primary: each writes its change into the requirements card above,
  *  where "Plan with these requirements" runs the planner again), then the red verification
  *  receipt with the core. Without advice the receipt leads and a "Plan again" box says what to
- *  edit; an offline backend without a recording of the brief gets one plain card instead. */
+ *  edit; an offline backend without a recording of the brief gets one plain card instead. The
+ *  static demo shows the apply buttons locked, with `recorded` as the reason. */
 function FailedOutcome({
   plan,
   steps,
@@ -1361,6 +1628,7 @@ function FailedOutcome({
   planning,
   onApply,
   onEditRequirements,
+  recorded = null,
 }: {
   plan: PlanResult;
   steps: LoopStep[];
@@ -1374,6 +1642,9 @@ function FailedOutcome({
   planning: boolean;
   onApply: (s: Suggestion) => void;
   onEditRequirements: () => void;
+  /** the static demo replays this run: applying a change is a new request, locked with this
+   *  reason */
+  recorded?: string | null;
 }) {
   if (offline) {
     return (
@@ -1399,7 +1670,7 @@ function FailedOutcome({
       onClick={onEditRequirements}
       className={pending ? "text-fg" : undefined}
     >
-      {applied && !pending ? "Back to the requirements" : "Edit the requirements"}
+      {(applied && !pending) || recorded ? "Back to the requirements" : "Edit the requirements"}
       <span aria-hidden="true">↑</span>
     </Button>
   );
@@ -1436,9 +1707,10 @@ function FailedOutcome({
           <Button
             key={i}
             size="sm"
-            variant={i === primary ? "primary" : "secondary"}
-            disabled={planning}
-            title={`${fmtSuggestion(suggestion)} · writes the change into the requirements card`}
+            // a locked change is no next step: it keeps the figure, not the accent
+            variant={i === primary && recorded === null ? "primary" : "secondary"}
+            disabled={planning || recorded !== null}
+            title={`${fmtSuggestion(suggestion)} · ${recorded ?? "writes the change into the requirements card"}`}
             onClick={() => onApply(suggestion)}
           >
             {label}
@@ -1479,6 +1751,28 @@ function DownstreamNote({ next }: { next: string }) {
       <span className="font-mono text-[11px] font-medium tracking-[0.16em] text-dim">04 · 05</span>
       <span className="font-medium text-fg/80">Explanation, simulation and robustness wait for a verified schedule</span>
       <span>Next: {next}</span>
+    </div>
+  );
+}
+
+/** The static demo says once, under the top bar, what the page is and where a live setup is
+ *  described. */
+function StaticBanner() {
+  return (
+    <div role="note" className="border-b border-line bg-raised">
+      <p className="mx-auto w-full max-w-[1400px] px-4 py-2 text-[12.5px] leading-relaxed text-muted md:px-6 lg:px-8">
+        <span className="font-medium text-fg/90">Static demo:</span> replays live runs recorded on Nebius Token
+        Factory ({RECORDED_ON}). Live planning needs the backend,{" "}
+        <a
+          href="https://github.com/nkm1020/moonwright"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-fg underline decoration-white/30 underline-offset-2 hover:decoration-fg"
+        >
+          see the README
+        </a>
+        .
+      </p>
     </div>
   );
 }
@@ -1562,6 +1856,7 @@ function PlanningPlaceholder({
   startedAt,
   maxRepairs,
   live,
+  replay = false,
 }: {
   steps: LoopStep[];
   startedAt: number | null;
@@ -1569,6 +1864,8 @@ function PlanningPlaceholder({
   maxRepairs: number | null;
   /** the backend calls Nemotron live (else it replays recorded answers) */
   live: boolean;
+  /** the static demo streams a recorded trace: no clock, and the copy says so */
+  replay?: boolean;
 }) {
   const elapsed = useElapsed(startedAt, true);
   const next = expectedNextStage(steps);
@@ -1648,10 +1945,14 @@ function PlanningPlaceholder({
     <Card
       title="Plan summary"
       aside={
-        <span className="text-xs text-muted">
-          elapsed{" "}
-          <span className="font-mono tabular-nums text-fg/80">{elapsed === null ? "" : fmtSeconds(elapsed)}</span>
-        </span>
+        replay ? (
+          <span className="text-xs text-muted">recorded run</span>
+        ) : (
+          <span className="text-xs text-muted">
+            elapsed{" "}
+            <span className="font-mono tabular-nums text-fg/80">{elapsed === null ? "" : fmtSeconds(elapsed)}</span>
+          </span>
+        )
       }
     >
       <ol className="flex flex-wrap items-center gap-y-1.5" aria-label="Planning stages">
@@ -1696,9 +1997,11 @@ function PlanningPlaceholder({
       </div>
       <div className="mt-4 space-y-1 border-t border-line pt-3 text-[13px] leading-relaxed">
         <p className="text-fg/90">
-          {live
-            ? "Nemotron 3 Ultra reasons for about a minute per task graph; a repair round adds about a minute."
-            : "This backend replays recorded Nemotron answers, so the plan lands in seconds; CP-SAT still solves it live."}
+          {replay
+            ? "Replaying the recorded live run a step at a time; each model step in the trace shows the time it took on Token Factory."
+            : live
+              ? "Nemotron 3 Ultra reasons for about a minute per task graph; a repair round adds about a minute."
+              : "This backend replays recorded Nemotron answers, so the plan lands in seconds; CP-SAT still solves it live."}
         </p>
         <p className="text-muted">The verified schedule, or the solver-proven way to make it feasible, lands here.</p>
       </div>
@@ -1707,7 +2010,7 @@ function PlanningPlaceholder({
 }
 
 /** One line under the planning placeholder while a new run streams: the plan it will replace,
- *  whose outcome gives way to the run in progress ("Previous plan · verified, 80 h of the 336 h
+ *  whose outcome gives way to the run in progress ("Previous plan · verified, 89 h of the 336 h
  *  horizon · stays below, dimmed, until this run lands"). */
 function PreviousPlanLine({ plan, verified, proven }: { plan: PlanResult; verified: boolean; proven: number }) {
   const what =

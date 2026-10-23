@@ -6,7 +6,7 @@
  * several `data:` lines join with "\n", and chunk boundaries may fall anywhere, including
  * inside a line or between "\r" and "\n".
  */
-import { ApiError, API_BASE, isAbortError, networkMessage, postPlan, readDetail } from "./api";
+import { ApiError, API_BASE, NO_BACKEND, STATIC_DEMO, isAbortError, networkMessage, postPlan, readDetail } from "./api";
 import type { LoopStep, PlanRequest, PlanResult } from "./types";
 
 export interface SseMessage {
@@ -112,6 +112,7 @@ export async function planStream(
   onStep: (step: LoopStep) => void,
   signal?: AbortSignal,
 ): Promise<PlanResult> {
+  if (STATIC_DEMO) throw new ApiError(0, NO_BACKEND);
   let res: Response;
   try {
     res = await fetch(`${API_BASE}/plan/stream`, {

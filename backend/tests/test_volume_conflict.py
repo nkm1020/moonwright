@@ -467,12 +467,13 @@ def test_spoil_moved_is_no_dig() -> None:
 
 
 def test_a_berm_built_from_another_structures_spoil_is_judged_against_that_spoil() -> None:
-    """landing_pad: "Blast berm ... built from pad spoil". The 300 m3 prism holds more than
-    the 125.7 m3 the pad yields, so hauling ALL the spoil was a 42 % shortfall and only a plan
-    hauling more "pad spoil" than the pad produces passed. A placed body whose hauls wait for
-    another structure's dig is judged against the smaller of its own volume and that dig's;
-    without such a wait the hint says where the fill has to come from."""
-    req = Requirements.model_validate_json((ROOT / "fixtures/landing_pad/structure.json").read_text())
+    """landing_pad_v1 (and the eval twin): "Blast berm ... built from pad spoil". The 300 m3
+    prism holds more than the 125.7 m3 the pad yields, so hauling ALL the spoil was a 42 %
+    shortfall and only a plan hauling more "pad spoil" than the pad produces passed. A placed
+    body whose hauls wait for another structure's dig is judged against the smaller of its own
+    volume and that dig's; without such a wait the hint says where the fill has to come from."""
+    req = Requirements.model_validate_json(
+        (ROOT / "fixtures/landing_pad_v1/structure.json").read_text())
     digs = [task("T2", "excavator", 62.83, "m3", "S1", "Z1", "Excavate pad bowl north half"),
             task("T3", "excavator", 62.83, "m3", "S1", "Z1", "Excavate pad bowl south half")]
     hauls = [after(task("T4", "hauler", 62.83, "m3", "S2", "Z2", "Haul bowl spoil to berm"), "T2"),

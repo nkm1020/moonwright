@@ -153,12 +153,12 @@ types that matter).
 | `crater_ramp` | A | 2 EX 5000, 1 HL 3000, 1 CP 3500, 1 SV 1500 | 192 h | strict top-down segment chain (cut, check, compact, next), 240 m3 cut hauled as fill | EX 4627/10000 (+116 %), HL 1680/3000 (+79 %), CP 1456/3500; LB 65 h, serial 79 h | feasible: lazy 69 h, split 70 h |
 | `depleted_excavators` (**video B**) | B | 2 EX 1750 rem., 1 HL 2000, 1 CP 2000, 1 SV 1000 | 120 h | three digs of 905 / 922 / 922 Wh on two 1750 Wh batteries: any two on one robot overflow it (1827-1844 Wh) | EX 2748/3500 (+27 %) but one task per dig does not pack (heaviest robot 1826.4 Wh = 104 % even in the best pairing; 1844 Wh in the worst); HL 756/2000, CP 1172/2000; LB 29 h, serial 54 h | **infeasible** when the key trench is in the requirements (see the caveat below): lazy and split (nothing is over 60 m3, so the prompt's split rule does not fire) both end in the CP-SAT core `energy:EX1, energy:EX2`; `fine` (bowl and pits halved) is feasible at 44 h |
 | `four_mast_pads` | A | 2 EX 5000, 1 HL 3000, 2 CP 3500, 1 SV 1500 | 144 h | four independent structures, a 20-task graph, 20 cm of fines stripped in m2 and a 1 m anchor hole dug in m3 per pad | EX 1280/10000, CP 1024/7000; LB 9 h, serial 36 h | feasible: lazy 34 h, split 34 h |
-| `front_loaded_excavation` | D (horizon) | 2 EX 5000, 2 HL 3000, 2 CP 3500, 1 SV 1500 | 60 h | a 30 m bowl in one zone: 41 h of digging and 28 h of compaction cannot overlap; the window is 60 h and the brief forbids sectors and a smaller pad | energy fine (EX 4524/10000, CP 3947/7000); LB 81 h vs 60 h: **horizon short by 21 h (35 %)**; serial 114 h | **infeasible**: lazy fails the validator (`horizon_path`, 81 h); split fails CP-SAT with the core `horizon, zone:Z1` ("Zone Z1 admits one robot at a time, so its 6 tasks (80 h in total) cannot overlap"); advice: extend the window to ~85 h or allow two sectors |
+| `front_loaded_excavation` (demo twin `front_loaded`) | D (horizon) | 2 EX 5000, 2 HL 3000, 2 CP 3500, 1 SV 1500 | 60 h | a 30 m bowl in one zone: 41 h of digging and 28 h of compaction cannot overlap; the window is 60 h and the brief forbids sectors and a smaller pad | energy fine (EX 4524/10000, CP 3947/7000); LB 81 h vs 60 h: **horizon short by 21 h (35 %)**; serial 114 h | **infeasible**: lazy fails the validator (`horizon_path`, 81 h); split fails CP-SAT with the core `horizon, zone:Z1` ("Zone Z1 admits one robot at a time, so its 6 tasks (80 h in total) cannot overlap"); advice: extend the window to ~85 h or allow two sectors (the demo's recorded live run: no plan after three repairs, CP-SAT-verified 85 h) |
 | `habitat_berm_tight_horizon` | C | 2 EX 5000, 2 HL 3000, 2 CP 3500, 1 SV 1500 | 72 h | pit and borrow strip dug in parallel to feed a 280 m3 berm; the brief voices a one-at-a-time preference that yields to the deadline | EX 4224/10000, HL 1960/6000, CP 1696/7000 (all comfortable); LB 59 h, serial 86 h vs 72 h | feasible only in parallel: lazy 63 h, split 65 h; the serial graph fails `horizon_path` (86 h) |
 | `habitat_foundation` | A | 2 EX 5000, 1 HL 3000, 1 CP 3500, 1 PR 4000, 1 SV 1500 | 288 h | slab after compaction and check, trench after the pit, 144 m3 pit split across two excavators | EX 2519/10000, PR 1238/4000, HL 1008/3000; LB 51 h, serial 55 h | feasible: lazy 55 h, split 56 h |
 | `instrument_pad` | A | 1 EX 5000, 1 CP 3500, 1 SV 1500 | 72 h | the smallest brief: one structure, four tasks, surveyor before and after; 15 cm of fines stripped in m2 (the live volume false positive of phase 3e) | EX 480/5000, CP 400/3500; LB 10 h | feasible: lazy 14 h |
 | `isru_stockpile` | A | 1 EX 5000, 2 HL 3000, 1 CP 3500, 1 SV 1500 | 192 h | 210 m3 of borrow hauled by two haulers to a stockpile (receiving structure), survey per strip | EX 3360/5000 (+49 %), HL 1470/6000; LB 57 h, serial 61 h | feasible: lazy 61 h, split 61 h |
-| `landing_pad` (demo twin) | A | 2 EX 5000, 2 HL 3000, 1 CP 3500, 1 PR 4000, 1 SV 1500 | 336 h | the canonical pad + berm with sintered crest: the coverage contract's reference case | PR 3476/4000 (+15 %, the tightest single battery), CP 2217/3500, HL 2100/6000, EX 2011/10000; LB 65 h, serial 104 h | feasible: lazy 73 h, split 73 h (fixture plan 80 h) |
+| `landing_pad` (demo twin, 300 m3 berm) | A | 2 EX 5000, 2 HL 3000, 1 CP 3500, 1 PR 4000, 1 SV 1500 | 336 h | the canonical pad + berm with sintered crest: the coverage contract's reference case | PR 3476/4000 (+15 %, the tightest single battery), CP 2217/3500, HL 2100/6000, EX 2011/10000; LB 65 h, serial 104 h | feasible: lazy 73 h, split 73 h (hand-made `landing_pad_v1` fixture plan 80 h) |
 | `large_fleet_pad_berm_road` | B | 3 EX 5000, 3 HL 3000, 2 CP 3500, 2 PR 4000, 1 SV 1500 | 288 h | eleven robots, three structures, a 22-task split graph; compaction fits only balanced within 6 %, sintering within 17 %, the 562 m3 berm haul must be split | CP 6627/7000 (+6 %), PR 6853/8000 (+17 %), HL 3938/9000 (one 3938 Wh haul > 3000), EX 6924/15000; LB 130 h, serial 249 h | lazy fails the validator (`energy_task`: 6080 Wh pad sinter, 3938 Wh haul); split is feasible at 136 h with compactors at 95 %; an uneven compactor split ends in an `energy:CPx` core |
 | `low_battery_pad` | E | 1 EX 1800 rem., 1 HL 2000, 1 CP 2000, 1 SV 1000 | 168 h | the full 20 m bowl is 2513 Wh on an 1800 Wh excavator; the brief allows any diameter from 12 m up (`min_diameter_m: 12`, the volume check's floor: 56.5 of 157.1 m3) | EX 2513/1800 (**short by 713 Wh, 40 %**); at 16 m: 1608/1800 (+12 %), at 12 m: 905/1800 (+99 %) | **infeasible as written** (validator `energy_task:T2`: the one dig is the whole shortfall, so it is one verdict whose hint says splitting cannot fit it); re-scoped to 16 m feasible at 36 h, to 12 m at 26 h; a dig below 70 % of the 12 m floor is a `volume:S1` conflict, and so is a strip of the whole 20 m pad over a token dig |
 | `one_surveyor_three_structures` | A | 2 EX 5000, 1 HL 3000, 1 CP 3500, 1 PR 4000, 1 SV 1200 | 216 h | six surveyor visits on 1200 Wh, an apron sintered and a hardstand that is not | SV 464/1200, CP 1856/3500, PR 1720/4000; LB 35 h, serial 64 h | feasible: lazy 42 h, split 42 h |
@@ -171,8 +171,8 @@ types that matter).
 | `tight_battery` (demo twin) | B by fixture, A by the table | 2 EX 5000, 1 HL 3000, 1 CP 3500, 1 SV 1500 | 168 h | the offline demo of the repair loop: the recorded first graph (digs of 4000 + 4000 + 1900 Wh) is rejected by CP-SAT with `energy:EX1, energy:EX2` and the recorded repair halves the bowl | by the rate table the quantities (189 + 120 m3, 240 m2; the script prices the width-less key trench at the 4 m base, which the volume check no longer judges) are 6088/10000 Wh (+64 %), HL 2100/3000, CP 2217/3500; LB 65 h, serial 109 h | live: feasible first try is likely (lazy 69 h, split 70 h); the fixture run shows 1 repair, 68 h |
 | `two_pads_one_printer` | A | 2 EX 5000, 2 HL 3000, 2 CP 3500, 1 PR 4000, 1 SV 1500 | 384 h | one printer serialising pad A, pad B and the crest; two pads feeding one berm | PR 3555/4000 (+12 %, single), EX 2262/10000, CP 2054/7000; LB 39 h, serial 96 h | feasible: lazy 61 h, split 62 h |
 
-Count per kind: A 13 (including the three demo twins), B 3 (+ `tight_battery` by fixture),
-C 2, D 3 (two energy, one horizon), E 1.
+Count per kind: A 13 (including three of the four demo twins), B 3 (+ `tight_battery` by
+fixture), C 2, D 3 (two energy, one horizon: `front_loaded_excavation`, the fourth twin), E 1.
 
 ## The two video candidates
 
@@ -221,7 +221,8 @@ preference handling (does the model drop a stated preference when the deadline r
 and does it say so), not the repair loop; the `horizon_path` -> repair -> advice beat the loop
 is meant to show comes from the D brief `front_loaded_excavation` (live: `horizon_path` in
 round 1, three repairs, then `finishing needs 86 h, 26 h past the 60 h deadline`), which is
-the horizon beat to use in the video.
+the horizon beat to use in the video. It ships as the demo brief `front_loaded`, whose
+recorded run (final prompts) ends the same way at 85 h, with a `scope:S1` refusal on the way.
 
 ## Commands
 
@@ -279,9 +280,12 @@ outcomes); `--no-solve` skips the graphs; `--time-limit` bounds each CP-SAT solv
 * The registry holds only the structures (dimensions, the operations the brief asks for, the
   spoil source); fleet and deadline are parsed from the brief text, so a battery or deadline
   edit in the `.md` changes the budget without touching the script.
-* The three demo twins (`landing_pad`, `access_road`, `tight_battery`) are byte-identical to
-  `examples/briefs/`, whose recorded fixtures drive the offline demo and the e2e tests; they
-  were not edited.
+* Four briefs have a demo twin in `examples/briefs/`, whose recorded fixtures drive the
+  offline demo and the e2e tests. `access_road`, `tight_battery` and `front_loaded_excavation`
+  (the demo's `front_loaded`) are byte-identical to theirs. `landing_pad` differs on purpose:
+  the demo's berm is 40 m x 1.5 m x 4 m = 120 m3, so the pad's 125.7 m3 of spoil builds it,
+  while this brief keeps the 300 m3 berm so live runs 1-3 stay comparable
+  (`scripts/brief_budget.py` prices the demo brief from its own entry in `DEMO_STRUCTURES`).
 * Measured outcomes (feasible-plan rate, repairs, scope drift per kind) belong in the README
   once the live eval has run; nothing here is a measurement, every number is the rate table's
   arithmetic.

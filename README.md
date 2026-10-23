@@ -131,12 +131,13 @@ Runs: [run 1](docs/eval/2026-10-23-live-eval-run1.md) (before the volume check),
 
 ## Run it
 
-Offline, no API key (recorded Nemotron answers):
+Offline, no API key: the demo briefs replay live Nemotron runs recorded on Token Factory.
 
 ```bash
 cd backend && uv sync
-uv run moonwright plan examples/briefs/landing_pad.md --llm fixture
-uv run moonwright simulate out/landing_pad.plan.json --fail EX2@30        # a robot fails at hour 30
+uv run moonwright plan examples/briefs/landing_pad.md --llm fixture       # one repair, verified at 89 h
+uv run moonwright plan examples/briefs/front_loaded.md --llm fixture      # no plan; CP-SAT-proven advice: 85 h
+uv run moonwright simulate out/landing_pad.plan.json --fail EX2@10        # a robot fails at hour 10
 uv run moonwright montecarlo out/landing_pad.plan.json --runs 200 --seed 1
 uv run moonwright serve                                                   # API on :8000
 cd ../frontend && pnpm install && pnpm dev                                # UI on :3000

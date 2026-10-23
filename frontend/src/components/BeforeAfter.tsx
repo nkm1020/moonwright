@@ -122,9 +122,9 @@ function repairModel(steps: LoopStep[]): string {
 }
 
 /** The one-line story of the replan, built from the closing step's payload when it parses
- *  ("CP-SAT rescheduled 11 tasks in <0.01 s, Nemotron not needed · makespan 80 h → 91 h");
- *  for older recordings and failed replans the backend message, tidied ("80 h -> 91 h" reads
- *  "80 h → 91 h"). Recordings made before phase 3d end the message in a time-base flag,
+ *  ("CP-SAT rescheduled 13 tasks in <0.01 s, Nemotron not needed · makespan 89 h → 91 h");
+ *  for older recordings and failed replans the backend message, tidied ("89 h -> 91 h" reads
+ *  "89 h → 91 h"). Recordings made before phase 3d end the message in a time-base flag,
  *  "(absolute)", which is dropped; current ones carry none, so the strip is a no-op. */
 function outcomeHeadline(
   outcome: { step: LoopStep; payload: ReplanOutcomePayload | null } | null,

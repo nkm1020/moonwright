@@ -42,15 +42,16 @@ from moonwright.sim.simulator import Simulator, zone_positions
 from moonwright.sim.simulator import depot_position as sim_depot
 
 BRIEFS_DIR = Path(__file__).resolve().parents[1] / "examples" / "briefs"
-BRIEF_IDS = ["landing_pad", "access_road", "tight_battery"]
+V1_BRIEF = Path(__file__).resolve().parent / "data" / "landing_pad_v1.md"
+BRIEF_IDS = ["landing_pad_v1", "access_road", "tight_battery"]   # the hand-made fixtures
 FAST = SolveOptions(time_limit_s=5.0, num_workers=4, core_time_limit_s=3.0)
 DT_H = 0.25
 
 
 # --------------------------------------------------------------------------- helpers
 def fixture_plan(brief_id: str) -> PlanResult:
-    plan = Planner(FixtureClient(), explain=False).plan((BRIEFS_DIR / f"{brief_id}.md").read_text(),
-                                                        brief_id=brief_id)
+    brief = V1_BRIEF if brief_id == "landing_pad_v1" else BRIEFS_DIR / f"{brief_id}.md"
+    plan = Planner(FixtureClient(), explain=False).plan(brief.read_text(), brief_id=brief_id)
     assert plan.success and plan.schedule is not None and plan.task_graph is not None
     return plan
 
@@ -117,7 +118,7 @@ def test_simulator_layout_is_the_shared_geometry():
 
 
 # --------------------------------------------------------------------------- fixtures replay
-@pytest.mark.parametrize("brief_id", BRIEF_IDS)
+@pytest.mark.parametrize("brief_id", [*BRIEF_IDS, "landing_pad"])   # and the live demo plan
 def test_fixture_plan_replays_without_any_event(brief_id):
     plan = fixture_plan(brief_id)
     assert check_schedule(plan.requirements, plan.task_graph, plan.schedule, SolveOptions()) == []
@@ -128,8 +129,9 @@ def test_fixture_plan_replays_without_any_event(brief_id):
 
 def test_fixture_plans_reserve_more_than_the_simulator_spends():
     """The solver budgets the longest leg a robot could drive before each task; the replay
-    pays the actual one, so every robot ends with at least the battery the checker promised."""
-    for brief_id in BRIEF_IDS:
+    pays the actual one, so every robot ends with at least the battery the checker promised.
+    The live demo plan runs its printer down to 23 of its 4,000 Wh, and no further."""
+    for brief_id in [*BRIEF_IDS, "landing_pad"]:
         plan = fixture_plan(brief_id)
         req, graph, schedule = plan.requirements, plan.task_graph, plan.schedule
         res = Simulator(req, graph, schedule).run(stop_on_event=False)
@@ -144,7 +146,8 @@ def test_fixture_plans_reserve_more_than_the_simulator_spends():
             work = sum(graph.task(e.task).energy_wh for e in entries)
             left = next(r.battery_wh for r in res.frames[-1].robots if r.id == robot_id)
             assert left == pytest.approx(robot.battery_wh - work - travel_wh(cells), abs=0.05)
-            assert left >= 0.10 * robot.battery_wh        # every demo robot keeps a tenth in hand
+            # every robot of the hand-made plans keeps a tenth in hand
+            assert left >= (0.10 * robot.battery_wh if brief_id in BRIEF_IDS else 0.0)
 
 
 # --------------------------------------------------------------------------- random geometry

@@ -118,13 +118,14 @@ its material.
 
 Calibration
 -----------
-Illustrative "lunar-rated low-power robot" units, chosen so the three example briefs come out
-at the hand-made fixture figures (126 m3 pad bowl -> 18 h / ~2000 Wh; 314 m2 strip -> 13 h /
-~1500 Wh; 188 m3 spoil haul -> 16 h / ~1300 Wh; 314 m2 compaction -> 13 h / ~1300 Wh; 314 m2
-sinter -> 23 h / ~2700 Wh). The regolith-excavation literature (NASA's RASSOR bucket-drum
-excavator and Chariot/LANCE blade tests, ISRU excavation surveys) is the inspiration for the
-ORDER of magnitude (tens of kilograms per scoop, kilowatt-hour-class budgets per shift), but
-every number here is an assumption, not a measurement, and the table says so row by row.
+Illustrative "lunar-rated low-power robot" units, chosen so the briefs of the hand-made fixtures
+(landing_pad_v1, access_road, tight_battery) come out at their figures (126 m3 pad bowl -> 18 h
+/ ~2000 Wh; 314 m2 strip -> 13 h / ~1500 Wh; 188 m3 spoil haul -> 16 h / ~1300 Wh; 314 m2
+compaction -> 13 h / ~1300 Wh; 314 m2 sinter -> 23 h / ~2700 Wh). The regolith-excavation
+literature (NASA's RASSOR bucket-drum excavator and Chariot/LANCE blade tests, ISRU excavation
+surveys) is the inspiration for the ORDER of magnitude (tens of kilograms per scoop,
+kilowatt-hour-class budgets per shift), but every number here is an assumption, not a
+measurement, and the table says so row by row.
 """
 
 from __future__ import annotations
@@ -184,7 +185,7 @@ class Rate:
 # magnitude only.
 RATES: tuple[Rate, ...] = (
     Rate("excavator", "m3", 7.0, 16.0, "bulk excavation (bowls, pits, trenches)",
-         "assumption calibrated to the landing_pad fixture: 126 m3 bowl = 18 h / ~2000 Wh; a "
+         "assumption calibrated to the landing_pad_v1 fixture: 126 m3 bowl = 18 h / ~2000 Wh; a "
          "RASSOR-class bucket drum moves ~0.1 m3 per pass, so 7 m3/h is a lunar-rated "
          "low-power figure, not a terrestrial one"),
     Rate("excavator", "m2", 25.0, 4.8,

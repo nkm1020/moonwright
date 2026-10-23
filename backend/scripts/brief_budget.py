@@ -34,7 +34,8 @@ Inputs
 ------
 ``SOURCE`` is one of: a brief ``.md`` (the fleet and the deadline are parsed from its text;
 the structures come from :data:`BRIEF_STRUCTURES`, keyed by the file stem, because the prose
-dimensions are the model's job to read), a Requirements JSON (``fixtures/<brief>/
+dimensions are the model's job to read; a demo brief that differs from its eval twin has its
+own entry in :data:`DEMO_STRUCTURES`), a Requirements JSON (``fixtures/<brief>/
 structure.json``) or a plan JSON (its ``requirements``), or ``-`` with ``--spec``. ``--spec``
 takes the same shape as Requirements (``structures`` with dims and optional ``operations``,
 ``robots``, ``horizon_h``) inline or as ``@path``; ``--set S1.depth_m=0.5`` edits a value
@@ -172,7 +173,8 @@ _DIM_KEYS = ("diameter_m", "length_m", "width_m", "height_m", "depth_m", "thickn
 
 
 # ----------------------------------------------------------------------------- brief registry
-# Structures of the briefs under examples/eval and examples/briefs, keyed by file stem: the
+# Structures of the briefs under examples/eval, keyed by file stem (a demo brief under
+# examples/briefs that is byte-identical to its eval twin uses the twin's entry): the
 # dimensions the brief states (the model's job to read), the operations it asks for in the
 # validator's vocabulary, ``fill_from`` where the brief names the spoil source, and flags
 # where the kind default would not match the brief. The fleet and the deadline are parsed
@@ -341,6 +343,21 @@ BRIEF_STRUCTURES: dict[str, list[dict[str, Any]]] = {
          "operations": ["survey", "excavate", "compact"]}
         for i, c in enumerate("abc", start=1)
     ],
+}
+
+# The demo briefs under examples/briefs that do not share an entry with their eval twin by
+# stem: the demo landing_pad's berm is a 40 m arc 1.5 m high (120 m3, which the pad's 125.7 m3
+# of spoil builds) while its twin keeps the 300 m3 berm so live runs 1-3 stay comparable, and
+# front_loaded is front_loaded_excavation under the demo's shorter name.
+DEMO_DIR = Path(__file__).resolve().parents[1] / "examples" / "briefs"
+DEMO_STRUCTURES: dict[str, list[dict[str, Any]]] = {
+    "landing_pad": [
+        {"id": "S1", "type": "landing_pad", "diameter_m": 20, "depth_m": 0.4, "thickness_m": 0.3,
+         "operations": ["survey", "excavate", "compact", "sinter"]},
+        {"id": "S2", "type": "blast_berm", "length_m": 40, "height_m": 1.5, "width_m": 4,
+         "fill_from": "S1", "operations": ["haul", "compact", "sinter", "survey"]},
+    ],
+    "front_loaded": BRIEF_STRUCTURES["front_loaded_excavation"],
 }
 
 
@@ -1096,12 +1113,20 @@ def _paragraph(text: str, heading: str) -> str | None:
     return m.group(1) if m else None
 
 
+def registered_structures(path: Path) -> list[dict[str, Any]]:
+    """A brief's registry entry: :data:`DEMO_STRUCTURES` for a demo brief listed there, else
+    :data:`BRIEF_STRUCTURES` by file stem."""
+    if path.resolve().parent == DEMO_DIR and path.stem in DEMO_STRUCTURES:
+        return DEMO_STRUCTURES[path.stem]
+    if path.stem not in BRIEF_STRUCTURES:
+        raise ValueError(f"{path.name}: no structures registered under BRIEF_STRUCTURES[{path.stem!r}]")
+    return BRIEF_STRUCTURES[path.stem]
+
+
 def spec_from_brief(path: Path) -> dict[str, Any]:
     text = path.read_text(encoding="utf-8")
     robots, horizon_h = parse_brief(text)
-    if path.stem not in BRIEF_STRUCTURES:
-        raise ValueError(f"{path.name}: no structures registered under BRIEF_STRUCTURES[{path.stem!r}]")
-    return {"structures": [dict(s) for s in BRIEF_STRUCTURES[path.stem]], "robots": robots,
+    return {"structures": [dict(s) for s in registered_structures(path)], "robots": robots,
             "horizon_h": horizon_h, "source_brief": text}
 
 

@@ -4,9 +4,9 @@ reported as ``renumbered`` and not as a re-scoping of every shifted task.
 
 Covered: the recorded tight_battery repair pair, each matching rule (a name and slot, unique
 or repeated; a name in another slot; a unique slot; a kept id), the no-double-match rule, an
-unchanged graph, renames, predecessor lists compared through the renumbering and written in
-the answer's ids, a dropped dependency, and a replan's diff (the scope guards that read ids
-are not loosened by the pairing).
+unchanged graph, quantities compared to two decimals, renames, predecessor lists compared
+through the renumbering and written in the answer's ids, a dropped dependency, and a replan's
+diff (the scope guards that read ids are not loosened by the pairing).
 """
 
 from __future__ import annotations
@@ -294,6 +294,20 @@ def test_an_unchanged_graph_is_an_empty_diff():
         assert diff["per_type_energy_before"] == diff["per_type_energy_after"]
         assert diff["total_energy_wh_before"] == diff["total_energy_wh_after"]
         assert diff["total_duration_h_before"] == diff["total_duration_h_after"]
+
+
+def test_a_quantity_written_with_more_decimals_is_no_change():
+    """Quantities are compared and reported to two decimals: the front_loaded take's third
+    repair wrote the pad's 706.86 m2 as 706.858347 m2 and the dig's 141.37 m3 as 141.371669 m3,
+    the same work. A change in the second decimal is still reported, rounded."""
+    before = graph(task("T1", "Compact pad", "compactor", unit="m2", quantity=706.86),
+                   task("T2", "Excavate bowl", unit="m3", quantity=141.37))
+    noisy = graph(task("T1", "Compact pad", "compactor", unit="m2", quantity=706.858347),
+                  task("T2", "Excavate bowl", unit="m3", quantity=141.371669))
+    assert lists(graph_diff(before, noisy)) == EMPTY
+    moved = graph(noisy.tasks[0], task("T2", "Excavate bowl", unit="m3", quantity=141.382))
+    assert graph_diff(before, moved)["changed"] == [
+        {"task": "T2", "field": "quantity", "before": 141.37, "after": 141.38}]
 
 
 # --------------------------------------------------------------------------- predecessor lists

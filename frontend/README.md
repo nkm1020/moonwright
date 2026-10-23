@@ -19,9 +19,11 @@ surface. A single scrolling page walks through the PRD flow:
    finish-time histogram.
 
 The sticky top bar shows the stage stepper and the backend mode from `GET /health`
-(*offline fixtures* vs *Nemotron live*). **Load sample result** loads the recorded
-`public/samples/landing_pad.plan.json` and `landing_pad.sim.json`, so the whole page can be
-reviewed without a backend.
+(*recorded answers* vs *Nemotron live*). **Landing pad** and **Impossible deadline** load the
+recorded live runs under `public/samples` (`SAMPLES` in `src/lib/api.ts`: the plan, and for the
+landing pad the simulation, Monte Carlo and spare what-if computed from it), so the whole page
+can be reviewed without a backend. The static demo build (GitHub Pages) replays only those
+recordings, one stage at a time: [docs/deploy.md](../docs/deploy.md).
 
 ## Running it
 
@@ -43,9 +45,12 @@ Nebius Token Factory; the top-bar badge reflects which client the server uses.
 
 ## Environment
 
-| Variable              | Default                 | Meaning                                              |
-| --------------------- | ----------------------- | ---------------------------------------------------- |
-| `NEXT_PUBLIC_API_URL` | `http://localhost:8000` | Base URL of the FastAPI backend (CORS allows localhost) |
+| Variable                  | Default                 | Meaning                                              |
+| ------------------------- | ----------------------- | ---------------------------------------------------- |
+| `NEXT_PUBLIC_API_URL`     | `http://localhost:8000` | Base URL of the FastAPI backend (CORS allows localhost) |
+| `MOONWRIGHT_STATIC`       | unset                   | `1`: `next.config.ts` builds a static export (`out/`) under the base path |
+| `NEXT_PUBLIC_STATIC_DEMO` | unset                   | `1`: the console replays the samples and never calls a backend |
+| `NEXT_PUBLIC_BASE_PATH`   | empty                   | Path the static export is served under (`/moonwright` on GitHub Pages) |
 
 `NEXT_PUBLIC_*` values are inlined into the browser bundle at build time: restart `pnpm dev`
 or rebuild after changing them.

@@ -366,9 +366,10 @@ def test_budget_rows_ignore_failures_without_energy_conflicts_or_with_unknown_ro
 
 def test_recorded_fixtures_other_than_tight_battery_still_schedule():
     """The copy changes touch hints only: the accepted graphs still solve."""
-    for brief, graph_file in (("landing_pad", "taskgraph_1.json"),
+    for brief, graph_file in (("landing_pad_v1", "taskgraph_1.json"),
                               ("access_road", "taskgraph_1.json"),
-                              ("tight_battery", "taskgraph_2.json")):
+                              ("tight_battery", "taskgraph_2.json"),
+                              ("landing_pad", "taskgraph_2.json")):   # the live repair
         req, graph = fixture(brief, graph_file)
         out = solve_schedule(req, graph, FAST)
         assert not isinstance(out, Failure), (brief, out)
@@ -376,6 +377,6 @@ def test_recorded_fixtures_other_than_tight_battery_still_schedule():
 
 # ----------------------------------------------------------------------------- fixtures
 def test_landing_pad_explanation_names_battery_as_the_tighter_constraint():
-    text = json.loads((FIXTURES / "landing_pad" / "explain.json").read_text())["text"]
+    text = json.loads((FIXTURES / "landing_pad_v1" / "explain.json").read_text())["text"]
     assert "Battery is the tighter constraint: PR1 spends about 3,400 of its 4,000 Wh" in text
     assert "Battery is:" not in text

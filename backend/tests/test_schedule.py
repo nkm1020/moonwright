@@ -333,6 +333,34 @@ def test_core_extraction_timeout_yields_empty_core(monkeypatch):
     assert "could not isolate" in failure.hint
 
 
+def test_equally_good_schedules_break_the_same_way_on_every_call():
+    """Two identical excavators and four equal, independent digs: every pairing is optimal.
+    The production solve starts on one worker, so every call returns the same schedule (what
+    lets an offline replay reproduce a recorded run's schedule, and its simulation)."""
+    req = reqs([robot("EX1", "excavator", 5000), robot("EX2", "excavator", 5000)], horizon_h=40)
+    graph = TaskGraph(tasks=[task(f"T{i}", "excavator", 4, 500, f"Z{i}") for i in range(1, 5)])
+    first = assert_schedule(solve_schedule(req, graph, FAST))
+    for _ in range(4):
+        assert assert_schedule(solve_schedule(req, graph, FAST)).entries == first.entries
+
+
+def test_the_portfolio_takes_over_when_one_worker_does_not_settle_it(monkeypatch):
+    """A one-worker solve that proves nothing in its slice (SINGLE_WORKER_S set to 0) hands the
+    rest of the time limit to the portfolio, which still proves the optimum."""
+    calls: list[int] = []
+    run = schedule_module._run
+
+    def recording(built, *, workers, time_limit_s):
+        calls.append(workers)
+        return run(built, workers=workers, time_limit_s=time_limit_s)
+
+    monkeypatch.setattr(schedule_module, "_run", recording)
+    monkeypatch.setattr(schedule_module, "SINGLE_WORKER_S", 0.0)
+    out = assert_schedule(solve_schedule(two_excavators(), hand_solvable_graph(), FAST))
+    assert calls == [1, FAST.num_workers]
+    assert out.status == "optimal"
+
+
 # ----------------------------------------------------------------------------- check_schedule
 def test_check_schedule_reports_every_kind_of_violation():
     req = reqs([robot("EX1", "excavator", 5000), robot("EX2", "excavator", 5000),

@@ -1,7 +1,7 @@
 # Moonwright backend: FastAPI + OR-Tools CP-SAT, served by uvicorn.
 # Build:  docker build -t moonwright-backend .
 # Run:    docker run --rm -p 8000:8000 -e NEBIUS_API_KEY=... moonwright-backend
-# Without NEBIUS_API_KEY the server runs in offline fixture mode (the three example briefs).
+# Without NEBIUS_API_KEY the server runs in offline fixture mode (the example briefs).
 FROM python:3.13-slim AS base
 
 ENV PYTHONDONTWRITEBYTECODE=1 \

@@ -5,8 +5,8 @@
 task of the right robot type for each one the fleet can staff, on top of the structure-type
 heuristic; the ``scope:<structure>`` hint names the operation, quotes the brief where it can
 and says which robot task to add; an operation no robot of the fleet can perform is a site
-warning, never a conflict; the prompts state the rules the validator checks; and the three demo
-fixtures declare operations their briefs ask for and their recorded graphs serve.
+warning, never a conflict; the prompts state the rules the validator checks; and the three
+hand-made fixtures declare operations their briefs ask for and their recorded graphs serve.
 """
 
 from __future__ import annotations
@@ -42,11 +42,12 @@ from moonwright.pipeline.validate import (
 from moonwright.schemas import Failure, Requirements, Robot, Site, Structure, Task, TaskGraph, Zone
 
 BRIEFS_DIR = Path(__file__).resolve().parents[1] / "examples" / "briefs"
+V1_BRIEF = Path(__file__).resolve().parent / "data" / "landing_pad_v1.md"
 OPERATIONS = ["survey", "excavate", "grade", "haul", "compact", "sinter"]
-# what the three fixture briefs ask for per structure (and their recorded graphs serve)
+# what the three hand-made fixtures' briefs ask for per structure (and their graphs serve)
 FIXTURE_OPERATIONS = {
-    "landing_pad": {"S1": ["survey", "excavate", "compact", "sinter"],
-                    "S2": ["haul", "compact", "sinter", "survey"]},
+    "landing_pad_v1": {"S1": ["survey", "excavate", "compact", "sinter"],
+                       "S2": ["haul", "compact", "sinter", "survey"]},
     "access_road": {"S1": ["grade", "compact", "survey"],
                     "S2": ["excavate", "compact", "survey"],
                     "S3": ["haul"]},
@@ -148,7 +149,8 @@ def drop(g: TaskGraph, *ids: str) -> TaskGraph:
 
 def fixture(brief_id: str, filename: str = "taskgraph_1.json") -> tuple[Requirements, TaskGraph]:
     r = Requirements.model_validate_json((FIXTURES_DIR / brief_id / "structure.json").read_text())
-    r.source_brief = (BRIEFS_DIR / f"{brief_id}.md").read_text()
+    brief = V1_BRIEF if brief_id == "landing_pad_v1" else BRIEFS_DIR / f"{brief_id}.md"
+    r.source_brief = brief.read_text()
     return r, TaskGraph.model_validate_json((FIXTURES_DIR / brief_id / filename).read_text())
 
 
@@ -410,7 +412,7 @@ def test_brief_evidence_on_the_demo_briefs(brief_id: str, structure_id: str, pha
 def test_dropping_a_brief_asked_task_from_a_demo_graph_is_caught_and_explained() -> None:
     """The live omissions of phase 3a, replayed on the fixtures: no berm-crest sintering, no
     key trench, no inspection. Each is a scope conflict whose hint quotes the brief."""
-    r, g = fixture("landing_pad")
+    r, g = fixture("landing_pad_v1")
     failure = must_fail(r, drop(g, "T12"))
     assert failure.conflicts == ["scope:S2"]
     assert failure.details == ["S2 (blast_berm) lacks sinter task (its operations list sinter)"]

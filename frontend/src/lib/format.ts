@@ -389,7 +389,7 @@ export function humanizeFields(text: string): string {
     .replace(/\bbattery_wh\b/g, "battery");
 }
 
-/** Backend step messages print "horizon 336h" / "makespan 80h": space the unit like the rest
+/** Backend step messages print "horizon 336h" / "makespan 89h": space the unit like the rest
  *  of the console ("336 h"). */
 export function tidyUnits(text: string): string {
   return text.replace(/(\d)(Wh|h)\b/g, "$1 $2");
@@ -454,7 +454,7 @@ function resolvePlurals(s: string): string {
 
 /** Machine words inside backend prose read as words: a structure's type id in its label ("S2
  *  (blast_berm)" -> "S2 (blast berm)"), a chain of ids drawn with the console's arrow
- *  ("T1->T2->T7" -> "T1→T2→T7", "80 h -> 91 h" -> "80 h → 91 h"), the Token Factory's request
+ *  ("T1->T2->T7" -> "T1→T2→T7", "89 h -> 91 h" -> "89 h → 91 h"), the Token Factory's request
  *  formats ("json_schema, json_object and plain text were all refused" -> "every request format
  *  (JSON schema, JSON object, plain text) was refused") and the API's finish reasons ("empty
  *  completion (finish_reason=stop)" -> "empty answer", "(finish_reason=length)" -> "(cut off at
@@ -556,7 +556,7 @@ export function tidyDetail(text: string): string {
 }
 
 /** A step message as the trace prints it: "makespan 68h (optimal)" -> "makespan 68 h
- *  (optimal)", a replan's "80 h -> 91 h" -> "80 h → 91 h"; an offline backend's miss
+ *  (optimal)", a replan's "89 h -> 91 h" -> "89 h → 91 h"; an offline backend's miss
  *  ("offline: missing fixture taskgraph_3.json for brief 'x'", "offline: This backend is
  *  running offline ...") reads as one short clause, since the step's failure carries the rest
  *  and recording file names never reach the page. */
@@ -759,6 +759,51 @@ export function planSuggestions(plan: Pick<PlanResult, "success" | "steps"> & { 
   if (own.length > 0) return own;
   const failed = lastFailedStep(plan.steps);
   return failed ? stepSuggestions(failed) : [];
+}
+
+/** What a recorded run shows, read from its PlanResult so a card or a tooltip can never
+ *  disagree with the file. */
+export interface RunOutcome {
+  /** conflict ids of the first verdict (validate or schedule) that rejected a graph; [] when
+   *  none did */
+  rejected: string[];
+  /** repair rounds, as PlanResult.repairs counts them */
+  repairs: number;
+  /** "89 h of 336 h" for a verified plan, else null */
+  verified: string | null;
+  /** the top solver-proven suggestion of a plan that was not verified, as the console prints
+   *  it ("finishing needs 85 h, 25 h past the 60 h deadline (CP-SAT optimal)"), else null */
+  advice: string | null;
+}
+
+export function runOutcome(plan: PlanResult): RunOutcome {
+  const first = plan.steps.find((s) => !s.ok && (s.stage === "validate" || s.stage === "schedule"));
+  const verified =
+    plan.success && plan.schedule
+      ? `${fmtHours(plan.schedule.makespan_h, 0)} of ${fmtHours(plan.requirements.horizon_h, 0)}`
+      : null;
+  const top = verified === null ? planSuggestions(plan)[0] : undefined;
+  return {
+    rejected: first?.failure?.conflicts ?? [],
+    repairs: plan.repairs,
+    verified,
+    advice: top ? fmtSuggestion(top) : null,
+  };
+}
+
+/** A conflict id with the console's arrow: "horizon_path:T1->T2" -> "horizon_path:T1→T2". */
+export function fmtConflictId(conflict: string): string {
+  return conflict.replace(/->/g, "→");
+}
+
+/** The outcome in one line, for a tooltip: "rejected energy:printer → 1 repair round →
+ *  verified, 89 h of 336 h". */
+export function fmtRunOutcome(o: RunOutcome): string {
+  return [
+    o.rejected.length > 0 ? `rejected ${o.rejected.map(fmtConflictId).join(", ")}` : "first graph accepted",
+    plural(o.repairs, "repair round"),
+    o.verified ? `verified, ${o.verified}` : `not verified${o.advice ? `: ${o.advice}` : ""}`,
+  ].join(" → ");
 }
 
 /** "extend_horizon" -> "later deadline"; an unknown kind prints as words. */
@@ -1118,6 +1163,36 @@ function groupChanges(diff: RepairDiff): Map<string, { from: string | null; fiel
   return out;
 }
 
+/** A quantity change under this share of the larger figure, or one the chips would print as the
+ *  same number, is not shown: a repair that writes 706.86 m² as 706.858347 m² re-derived the
+ *  same work. Recordings made before the backend compared quantities to two decimals (loop.py
+ *  _diff_value) carry such rows. */
+const QUANTITY_NOISE = 0.005;
+/** A quantity that fell by more than this share was cut: the "scope changed" flag. */
+const QUANTITY_CUT = 0.01;
+
+function quantityNoise(before: unknown, after: unknown): boolean {
+  if (typeof before !== "number" || typeof after !== "number") return false;
+  return (
+    fmtNum(before, 1) === fmtNum(after, 1) ||
+    Math.abs(after - before) < QUANTITY_NOISE * Math.max(Math.abs(before), Math.abs(after))
+  );
+}
+
+/** The changed rows the chips show: groupChanges without quantity noise (quantityNoise), a row
+ *  left with no change dropped, so a task whose only change was noise reads as unchanged (or
+ *  as renumbered, work unchanged). graphBefore keeps every row, so a rebuilt graph still fits
+ *  the earlier diffs exactly. */
+function shownChanges(diff: RepairDiff): Map<string, { from: string | null; fields: FieldChanges }> {
+  const rows = groupChanges(diff);
+  for (const [id, row] of rows) {
+    const q = row.fields.get("quantity");
+    if (q && quantityNoise(q.before, q.after)) row.fields.delete("quantity");
+    if (row.fields.size === 0) rows.delete(id);
+  }
+  return rows;
+}
+
 function fmtDiffValue(field: DiffField, v: unknown, unit: string): string {
   if (v === null || v === undefined) return "none";
   if (field === "after") return Array.isArray(v) && v.length ? v.map(String).join(" + ") : "none";
@@ -1158,6 +1233,12 @@ function sameNumber(a: number, b: number, tolerance = SAME): boolean {
   return Math.abs(a - b) <= tolerance * Math.max(1, Math.abs(a), Math.abs(b));
 }
 
+/** A diff reports a quantity to two decimals (backend loop.py _diff_value): a task's own figure
+ *  fits it within half a hundredth. */
+function sameQuantity(a: number, b: number): boolean {
+  return Math.abs(a - b) <= 0.005 + SAME * Math.max(1, Math.abs(a), Math.abs(b));
+}
+
 /** Whether `tasks` is the graph this repair produced, as far as the diff can tell: every added
  *  id is in it (and, in a per-id diff, no removed one), every changed row's `after` value is
  *  the task's own, and its energy per robot type, total energy and total hours are the
@@ -1175,7 +1256,7 @@ export function graphFitsDiff(diff: RepairDiff, tasks: readonly Task[]): boolean
     if (c.field === "after") continue; // edge lists are compared through the renumbering
     const now = (t as unknown as Record<string, unknown>)[c.field];
     if (typeof c.after === "number" && typeof now === "number") {
-      if (!sameNumber(c.after, now)) return false;
+      if (!(c.field === "quantity" ? sameQuantity(c.after, now) : sameNumber(c.after, now))) return false;
     } else if (c.field === "name") {
       if (typeof c.after !== "string" || typeof now !== "string" || nameKey(c.after) !== nameKey(now)) return false;
     } else if ((c.after ?? null) !== (now ?? null)) {
@@ -1307,8 +1388,8 @@ function renumberLabel(pairs: readonly DiffRenumbering[]): string {
 /** The clauses of one changed task, in reading order: "renamed", "moved to excavator", "zone
  *  Z2 → Z4", "quantity 141.4 → 280 m³", "duration 24 → 14 h", "energy 4,000 → 2,100 Wh",
  *  "after T2 (removed) + T4 → T4". `unitBefore` / `unitAfter` are the quantity's units when
- *  known ("" when not). `quantityDropped` says the same work shrank: a smaller quantity in the
- *  same unit, robot type, zone and structure. */
+ *  known ("" when not). `quantityDropped` says the same work shrank: a quantity more than 1 %
+ *  smaller (QUANTITY_CUT), or none, in the same unit, robot type, zone and structure. */
 function changeParts(
   fields: FieldChanges,
   unitBefore: string,
@@ -1364,7 +1445,9 @@ function changeParts(
     !fields.has("zone") &&
     !fields.has("structure") &&
     typeof q.before === "number" &&
-    (q.after === null || q.after === undefined || (typeof q.after === "number" && q.after < q.before));
+    (q.after === null ||
+      q.after === undefined ||
+      (typeof q.after === "number" && q.after < q.before * (1 - QUANTITY_CUT)));
   return { parts, detail, quantityDropped };
 }
 
@@ -1450,7 +1533,7 @@ function matchedChips(
   tasks: readonly Task[],
 ): { chips: DiffChip[]; quantityDropped: string | null } {
   const byId = new Map(tasks.map((t) => [t.id, t]));
-  const rows = groupChanges(diff);
+  const rows = shownChanges(diff);
   const chips: DiffChip[] = [];
   let quantityDropped: string | null = null;
   const doneAdded = new Set<string>();
@@ -1635,7 +1718,7 @@ function stateDelta(old: TaskState, now: Task): { parts: string[]; quantityDropp
   if (old.robot_type !== now.robot_type) parts.push(`moved to ${now.robot_type}`);
   if (old.zone !== now.zone) parts.push(`zone ${old.zone} → ${now.zone}`);
   let quantityDropped = false;
-  if (old.quantity !== now.quantity) {
+  if (old.quantity !== now.quantity && !quantityNoise(old.quantity, now.quantity)) {
     // the unit of a re-typed task's old quantity is not in a per-id diff
     const u = old.robot_type === now.robot_type ? unit : "";
     parts.push(`quantity ${quantityRange(old.quantity, now.quantity, u, unit)}`);
@@ -1643,7 +1726,7 @@ function stateDelta(old: TaskState, now: Task): { parts: string[]; quantityDropp
       old.robot_type === now.robot_type &&
       old.zone === now.zone &&
       typeof old.quantity === "number" &&
-      (now.quantity === null || now.quantity < old.quantity);
+      (now.quantity === null || now.quantity < old.quantity * (1 - QUANTITY_CUT));
   }
   if (old.duration_h !== now.duration_h) parts.push(`duration ${range("duration_h", old.duration_h, now.duration_h, unit)}`);
   if (old.energy_wh !== now.energy_wh) parts.push(`energy ${range("energy_wh", old.energy_wh, now.energy_wh, unit)}`);
@@ -1661,7 +1744,7 @@ function legacyUnits(task: Task | undefined, fields: FieldChanges): [string, str
 function legacyChips(diff: RepairDiff, tasks: readonly Task[]): { chips: DiffChip[]; quantityDropped: string | null } {
   const byId = new Map(tasks.map((t) => [t.id, t]));
   const changes = new Map<string, FieldChanges>();
-  for (const [id, row] of groupChanges(diff)) changes.set(id, row.fields);
+  for (const [id, row] of shownChanges(diff)) changes.set(id, row.fields);
 
   const chips: DiffChip[] = [];
   let quantityDropped: string | null = null;

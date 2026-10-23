@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import math
+import re
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -45,6 +47,24 @@ CHECK_ORDER = [
     "duplicate", "reference", "cycle", "capability", "quantity", "scope", "volume",
     "energy_task", "horizon_path", "horizon", "energy",
 ]
+# the fixtures written by hand on Oct 22 (no quantities); the others are live recordings, whose
+# structuring and answers are what the model said
+HAND_MADE = ("access_road", "landing_pad_v1", "tight_battery")
+# the soft site warnings of each fixture's structure.json; every fixture not named is clean
+EXPECTED_SITE_WARNINGS = {
+    "landing_pad": [   # Lightning placed the demo's three zones 4 cells apart with radius 3
+        "zones Z1 and Z2 overlap (centres 4.0 cells apart, radii 3 + 3)",
+        "zones Z2 and Z3 overlap (centres 4.0 cells apart, radii 3 + 3)",
+    ],
+}
+
+
+def fixture_answers(d: Path) -> list[Path]:
+    """A fixture's task-graph answers in the order the model gave them: taskgraph_1,
+    taskgraph_2, ..., taskgraph_10 (numbers compared as numbers)."""
+    numbered = [(int(m.group(1)), p) for p in d.glob("taskgraph_*.json")
+                if (m := re.fullmatch(r"taskgraph_(\d+)\.json", p.name))]
+    return [p for _, p in sorted(numbered)]
 
 
 # ----------------------------------------------------------------------------- builders
@@ -625,12 +645,16 @@ def test_site_geometry_reports_every_violation_at_once() -> None:
 
 def test_structure_stage_reports_soft_geometry_warnings() -> None:
     """What the schema allows but the prompt discourages is reported on the structure step's
-    payload for the UI, never as a failure (the simulator copes with all of it)."""
+    payload for the UI, never as a failure (the simulator copes with all of it). Every fixture's
+    warnings are pinned: the hand-made ones and front_loaded are clean, a live recording keeps
+    what the model gave it (the demo landing_pad's overlapping zones, pinned by its replay in
+    test_pipeline_e2e as well)."""
     from moonwright.pipeline.structure import site_warnings
 
     for d in sorted(p for p in FIXTURES_DIR.iterdir() if p.is_dir()):
-        assert site_warnings(Requirements.model_validate_json(
-            (d / "structure.json").read_text())) == []
+        warnings = site_warnings(Requirements.model_validate_json(
+            (d / "structure.json").read_text()))
+        assert warnings == EXPECTED_SITE_WARNINGS.get(d.name, []), d.name
     messy = Requirements(
         site=Site(zones=[Zone(id="Z1", center=(10, 10), radius=5),
                          Zone(id="Z2", center=(16, 10), radius=4),      # 6 < 5 + 4: overlap
@@ -868,9 +892,12 @@ def test_scope_sits_between_capability_and_energy_task_in_check_order() -> None:
 
 
 def test_fixture_graphs_pass_the_coverage_check() -> None:
+    """Every hand-made graph passes, and so does the graph a live recording ended on; its
+    earlier answers may be refused, which is what the repair loop is recorded for."""
     for d in sorted(p for p in FIXTURES_DIR.iterdir() if p.is_dir()):
         r = Requirements.model_validate_json((d / "structure.json").read_text())
-        for path in sorted(d.glob("taskgraph_*.json")):
+        answers = fixture_answers(d)
+        for path in answers if d.name in HAND_MADE else answers[-1:]:
             g = TaskGraph.model_validate_json(path.read_text())
             assert validate_graph(r, g, coverage=True) is None, path
             for s in r.structures:

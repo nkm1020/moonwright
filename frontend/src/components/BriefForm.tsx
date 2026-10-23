@@ -3,10 +3,23 @@
  * Step 01: the brief. A three-tile strip says what the console does (propose, prove / repair,
  * stress), example cards load a brief, the textarea holds plain prose (markdown markers are
  * stripped) and the primary action structures it with Nemotron. The landing-pad example is
- * pre-filled once the examples arrive and the textarea is still empty.
+ * pre-filled once the examples arrive and the textarea is still empty. A card with a bundled
+ * recording says what that run did, read from its PlanResult; in the static demo the cards are
+ * the recordings, the textarea is read-only and the primary action replays the structuring.
  */
 import { useEffect, useRef, type KeyboardEvent } from "react";
-import type { ExampleBrief } from "@/lib/types";
+import type { ExampleBrief, PlanResult, Requirements } from "@/lib/types";
+import {
+  fmtConflictId,
+  fmtHours,
+  fmtNum,
+  fmtSeconds,
+  isFixtureModel,
+  modelDisplayName,
+  plural,
+  runOutcome,
+  type RunOutcome,
+} from "@/lib/format";
 import { Badge, Button, Card, Notice, Section, Spinner, cx } from "./Section";
 
 export interface BriefFormProps {
@@ -28,11 +41,21 @@ export interface BriefFormProps {
   offline?: boolean;
   /** Additive: example pre-filled when the textarea is empty on first load. */
   defaultExampleId?: string;
+  /** Additive: the bundled recordings by example id; a card with one shows that run's outcome
+   *  and its fleet, structures and horizon as the recording has them. */
+  recordings?: Partial<Record<string, PlanResult>>;
+  /** Additive: the static demo replays recordings: the textarea is read-only, this reason
+   *  takes the place of the shortcut hint, and the primary action replays the structuring of
+   *  the recording on screen. Null or absent: a live console. */
+  recorded?: string | null;
+  /** Additive: the static demo's walk is past the brief, so the loaded card starts it again
+   *  (and says so); before that the loaded card does nothing. */
+  restartable?: boolean;
 }
 
 const PLACEHOLDER = `Site. LS-1 plateau near the lunar south pole, 80 m by 80 m of loose regolith; depot on the south edge; no recharging.
-Structures. 1. Landing pad: circular, 20 m diameter, excavate 0.4 m, compact, sinter a 30 cm surface. 2. Blast berm: 60 m arc, 2.5 m high, built from pad spoil.
-Fleet. EX1 and EX2 (excavators, 5000 Wh), HL1 (hauler, 3000 Wh), CP1 (compactor, 3500 Wh), PR1 (printer, 4000 Wh), SV1 (surveyor, 1500 Wh).
+Structures. 1. Landing pad: circular, 20 m diameter, excavate 0.4 m, compact, sinter a 30 cm surface. 2. Blast berm: 40 m arc, 1.5 m high and 4 m wide at the base, built from pad spoil.
+Fleet. EX1 and EX2 (excavators, 5000 Wh), HL1 and HL2 (haulers, 3000 Wh), CP1 (compactor, 3500 Wh), PR1 (printer, 4000 Wh), SV1 (surveyor, 1500 Wh).
 Deadline. 14 days. Only one robot per zone at a time.`;
 
 /** Mirrors the backend's strip_markdown: ATX heading markers, **bold** / __bold__, *em* /
@@ -111,38 +134,30 @@ function Glyph({ kind }: { kind: "propose" | "prove" | "stress" }) {
 interface ExampleMeta {
   fleet: string;
   structures: string;
-  demonstrates: string | null;
+  horizon: string | null;
 }
 
-/** What the bundled briefs demonstrate (ids of backend/examples/briefs); other briefs are
- *  described from their text. */
-const EXAMPLE_META: Record<string, ExampleMeta> = {
-  landing_pad: {
-    fleet: "7 robots · 5 types",
-    structures: "landing pad + blast berm",
-    demonstrates: "Landing pad: feasible first try. The sortie for a mid-mission robot failure and a solver-only replan.",
-  },
-  tight_battery: {
-    fleet: "5 robots · 4 types",
-    structures: "pad + berm + apron",
-    demonstrates:
-      "Tight battery: both excavators over their battery budget; CP-SAT names the conflicting tasks, Nemotron re-splits the dig.",
-  },
-  access_road: {
-    fleet: "5 robots · 4 types",
-    structures: "road + foundation + berm",
-    demonstrates: "Access road: linear work, road segments graded in order with two compactors and no printer.",
-  },
-};
+/** "7 robots · 5 types", "landing pad + blast berm", "14 d" (a 60 h window stays "60 h"): a
+ *  recording's own requirements. */
+function recordedMeta(req: Requirements): ExampleMeta {
+  const types = new Set(req.robots.map((r) => r.type));
+  const days = req.horizon_h >= 48 && req.horizon_h % 24 === 0;
+  return {
+    fleet: `${plural(req.robots.length, "robot")} · ${plural(types.size, "type")}`,
+    structures: req.structures.map((s) => s.type.replace(/_/g, " ")).join(" + ") || "no structures",
+    horizon: days ? `${fmtNum(req.horizon_h / 24, 0)} d` : fmtHours(req.horizon_h, 0),
+  };
+}
 
-/** Robot ids like EX1 / HL2, numbered structures and the deadline, read from the prose. */
+/** Robot ids like EX1 / HL2, numbered structures and the deadline, read from the prose (a
+ *  brief without a recording). */
 function deriveMeta(text: string): ExampleMeta {
   const robots = new Set(text.match(/\b[A-Z]{2}\d\b/g) ?? []);
   const structures = (text.match(/^\s*\d+\.\s+\S/gm) ?? []).length;
   return {
     fleet: robots.size > 0 ? `${robots.size} robots` : "fleet in text",
     structures: structures > 0 ? `${structures} structure${structures === 1 ? "" : "s"}` : "structures in text",
-    demonstrates: null,
+    horizon: deriveHorizon(text),
   };
 }
 
@@ -151,6 +166,39 @@ function deriveHorizon(text: string): string | null {
   if (!m) return null;
   const n = Number(m[1]);
   return /^d/i.test(m[2]) ? `${n} d` : `${n} h`;
+}
+
+/** What a card's recorded run did, every figure read from its PlanResult: "rejected
+ *  energy:printer → 1 repair round → verified, 89 h of 336 h". */
+function OutcomeLine({ outcome }: { outcome: RunOutcome }) {
+  return (
+    <span className="text-[11.5px] leading-snug text-muted">
+      {outcome.rejected.length > 0 ? (
+        <>
+          rejected{" "}
+          <span className="break-all font-mono text-fail/90">{outcome.rejected.map(fmtConflictId).join(", ")}</span>
+        </>
+      ) : (
+        "first graph accepted"
+      )}
+      {" → "}
+      {plural(outcome.repairs, "repair round")}
+      {" → "}
+      {outcome.verified ? (
+        <span className="text-ok">verified, {outcome.verified}</span>
+      ) : (
+        `not verified${outcome.advice ? `: ${outcome.advice}` : ""}`
+      )}
+    </span>
+  );
+}
+
+/** "Nemotron 3.5 Lightning structured it live in 7.69 s": the structure step of a recording,
+ *  or null for a recording of offline answers. */
+function structuredBy(plan: PlanResult | undefined): string | null {
+  const usage = plan?.steps.find((s) => s.stage === "structure" && s.ok)?.usage;
+  if (!usage || isFixtureModel(usage.model)) return null;
+  return `${modelDisplayName(usage.model)} structured it live in ${fmtSeconds(usage.latency_s)}`;
 }
 
 export function BriefForm({
@@ -167,9 +215,14 @@ export function BriefForm({
   disabled = false,
   offline = false,
   defaultExampleId = "landing_pad",
+  recordings = {},
+  recorded = null,
+  restartable = false,
 }: BriefFormProps) {
-  const canStructure = brief.trim().length > 0 && !structuring && !disabled;
+  // the static demo replays a recording: only a recording's brief can be "structured"
+  const canStructure = brief.trim().length > 0 && !structuring && !disabled && (recorded === null || briefId !== null);
   const words = brief.trim() ? brief.trim().split(/\s+/).length : 0;
+  const replayedBy = recorded !== null && briefId ? structuredBy(recordings[briefId]) : null;
 
   // pre-fill the default example once, only while the textarea is still untouched
   const prefilled = useRef(false);
@@ -193,7 +246,11 @@ export function BriefForm({
       id="brief"
       step="01"
       title="Brief"
-      subtitle="Describe the site, the structures, the robot fleet and the deadline in plain English. Nemotron turns it into structured requirements you can correct before anything is scheduled."
+      subtitle={
+        recorded !== null
+          ? "A recorded run's brief in plain English: the site, the structures, the robot fleet and the deadline. Nemotron turned it into the structured requirements of step 02; a brief of your own needs the backend."
+          : "Describe the site, the structures, the robot fleet and the deadline in plain English. Nemotron turns it into structured requirements you can correct before anything is scheduled."
+      }
     >
       <Card>
         {/* mechanism strip */}
@@ -235,17 +292,31 @@ export function BriefForm({
         {examples.length > 0 && (
           <div className="mb-3 grid gap-2 lg:grid-cols-3">
             {examples.map((ex) => {
-              const meta = EXAMPLE_META[ex.id] ?? deriveMeta(ex.text);
-              const horizon = deriveHorizon(ex.text);
+              const recording = recordings[ex.id];
+              const meta = recording ? recordedMeta(recording.requirements) : deriveMeta(ex.text);
               const active = briefId === ex.id;
+              // the static demo's loaded card: a restart of the walk once it has moved on,
+              // nothing to do before
+              const restart = recorded !== null && active && restartable;
+              const inert = recorded !== null && active && !restartable;
               return (
                 <button
                   key={ex.id}
                   type="button"
-                  onClick={() => onUseExample(plainExample(ex))}
+                  onClick={() => {
+                    if (!inert) onUseExample(plainExample(ex));
+                  }}
                   disabled={disabled || structuring}
                   aria-pressed={active}
-                  title={active ? "This brief is in the textarea" : `Put “${ex.title}” in the textarea`}
+                  title={
+                    restart
+                      ? "Start the walk again from the brief; the stages below are cleared"
+                      : active
+                        ? "This brief is in the textarea"
+                        : recorded !== null
+                          ? `Walk through the recorded run of “${ex.title}” from its brief`
+                          : `Put “${ex.title}” in the textarea`
+                  }
                   className={cx(
                     "flex min-w-0 flex-col items-start gap-1 rounded-md border px-3 py-2.5 text-left transition-colors",
                     "disabled:cursor-not-allowed disabled:opacity-50",
@@ -256,14 +327,19 @@ export function BriefForm({
                 >
                   <span className="flex w-full items-center justify-between gap-2">
                     <span className="truncate text-[13px] font-medium text-fg">{ex.title}</span>
-                    {active && <Badge tone="neutral">loaded</Badge>}
+                    {active && <Badge tone="neutral">{restart ? "start again" : "loaded"}</Badge>}
                   </span>
                   <span className="font-mono text-[11px] text-dim">
                     {meta.fleet} · {meta.structures}
-                    {horizon ? ` · ${horizon}` : ""}
+                    {meta.horizon ? ` · ${meta.horizon}` : ""}
                   </span>
-                  {meta.demonstrates && (
-                    <span className="text-[11.5px] leading-snug text-muted">{meta.demonstrates}</span>
+                  {recording && (
+                    <span className="text-[11.5px] leading-snug text-muted">
+                      {/* the static demo's cards are all recordings; elsewhere say whose
+                          outcome this is */}
+                      {recorded === null && <span className="text-dim">Recorded run: </span>}
+                      <OutcomeLine outcome={runOutcome(recording)} />
+                    </span>
                   )}
                 </button>
               );
@@ -278,6 +354,8 @@ export function BriefForm({
           onChange={(e) => onBriefChange(e.target.value)}
           onKeyDown={onKeyDown}
           disabled={disabled}
+          readOnly={recorded !== null}
+          title={recorded ?? undefined}
           rows={9}
           spellCheck={false}
           placeholder={PLACEHOLDER}
@@ -285,27 +363,42 @@ export function BriefForm({
         />
 
         <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-dim">
+          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1 text-xs text-dim">
             <span className="font-mono tabular-nums">{words} words</span>
-            {offline && briefId && (
-              <span
-                className="text-[11px]"
-                title="Offline mode: the backend replays the recorded Nemotron answers for this example even if you edit the text; clear the textarea to detach."
-              >
-                replays this example&apos;s recorded answers
+            {recorded !== null ? (
+              <span>
+                {replayedBy && <span className="text-muted">{replayedBy} · </span>}
+                {recorded}
               </span>
+            ) : (
+              <>
+                {offline && briefId && (
+                  <span
+                    className="text-[11px]"
+                    title="Offline mode: the backend replays the recorded Nemotron answers for this example even if you edit the text; clear the textarea to detach."
+                  >
+                    replays this example&apos;s recorded answers
+                  </span>
+                )}
+                <span className="hidden items-center gap-1 md:inline-flex">
+                  <kbd className="mw-kbd">⌘</kbd>
+                  <span>/</span>
+                  <kbd className="mw-kbd">Ctrl</kbd>
+                  <span>+</span>
+                  <kbd className="mw-kbd">Enter</kbd>
+                  <span>to structure</span>
+                </span>
+              </>
             )}
-            <span className="hidden items-center gap-1 md:inline-flex">
-              <kbd className="mw-kbd">⌘</kbd>
-              <span>/</span>
-              <kbd className="mw-kbd">Ctrl</kbd>
-              <span>+</span>
-              <kbd className="mw-kbd">Enter</kbd>
-              <span>to structure</span>
-            </span>
           </div>
-          <Button variant="primary" onClick={onStructure} disabled={!canStructure} loading={structuring}>
-            {structuring ? "Structuring…" : "Structure brief"}
+          <Button
+            variant="primary"
+            onClick={onStructure}
+            disabled={!canStructure}
+            loading={structuring}
+            title={recorded !== null ? "Show the requirements the recorded run structured from this brief" : undefined}
+          >
+            {recorded !== null ? "Replay structuring" : structuring ? "Structuring…" : "Structure brief"}
           </Button>
         </div>
 

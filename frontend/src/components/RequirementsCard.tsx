@@ -9,9 +9,11 @@
  * brief allows editable like any dimension) with the task graph's work under it once a plan
  * exists, one figure per operation; the structuring stage's notes (operations recovered from a
  * scrambled answer, a structure without dimensions, an operation the fleet cannot staff, zone
- * geometry) head the card; validation mirrors the backend's pydantic limits.
+ * geometry) head the card; validation mirrors the backend's pydantic limits. The static demo
+ * shows the card read-only: the fields keep their values at full contrast, the add / remove /
+ * edit affordances are gone, and the plan button replays the recorded run.
  */
-import { useMemo, useState, type ReactNode } from "react";
+import { createContext, useContext, useMemo, useState, type ReactNode } from "react";
 import type { LoopStep, Operation, Requirements, Robot, Site, Structure, Task, Unit } from "@/lib/types";
 import { ID_PATTERN, LIMITS } from "@/lib/types";
 import { ROBOT_TYPE_COLORS, robotTypeColor, zoneColor } from "@/lib/palette";
@@ -25,6 +27,7 @@ import {
   fmtNum,
   fmtSeconds,
   fmtWh,
+  isFixtureModel,
   isOperation,
   minDimension,
   operationLabel,
@@ -72,7 +75,14 @@ export interface RequirementsCardProps {
    *  recording of the brief the card came from); the plan button is off and the reason shows
    *  above it. Null or absent: planning is possible. */
   planBlocked?: string | null;
+  /** Additive: the static demo replays a recording: the card is read-only with this reason in
+   *  its footer, Re-structure is not offered, and the plan button replays the recorded plan.
+   *  Null or absent: the card is an editor. */
+  recorded?: string | null;
 }
+
+/** The card is read-only (the static demo): the pieces that edit it render nothing. */
+const LockedContext = createContext(false);
 
 /** Keys a dimension can never take: the identity fields and the operations list. */
 const RESERVED_KEYS = ["id", "type", "zone", "operations"];
@@ -99,12 +109,16 @@ const OPERATIONS_CAPTION =
 
 const isPosInt = (n: number) => Number.isInteger(n) && n > 0;
 const isPos = (n: number) => Number.isFinite(n) && n > 0;
+/** A dimension the backend takes: any finite number, and a 0 is an absent part (a 0 m key
+ *  trench is no trench, as the structuring model writes it); a negative one is a typo. */
+const isDim = (n: number) => Number.isFinite(n) && n >= 0;
 /** Ids must match the backend's ID_PATTERN (letters, digits, _ . -): no spaces, no "#". */
 const isId = (id: string) => ID_PATTERN.test(id);
 const fmtLimit = (n: number) => n.toLocaleString("en-US");
 
 /** Client-side checks mirroring the backend's pydantic constraints: numbers > 0 and within the
- *  MAX_* limits, ids unique and matching ID_PATTERN (what the server would answer 422 to). */
+ *  MAX_* limits, ids unique and matching ID_PATTERN (what the server would answer 422 to), and
+ *  structure dimensions of 0 or more (the server takes any finite one; a negative is a typo). */
 export function validateRequirements(req: Requirements): string[] {
   const problems: string[] = [];
   if (!req.site.name.trim()) problems.push("site name is empty");
@@ -150,7 +164,7 @@ export function validateRequirements(req: Requirements): string[] {
       }
     }
     for (const [k, v] of structureDims(s)) {
-      if (!isPos(v)) problems.push(`${label}: ${dimLabel(k)} must be > 0`);
+      if (!isDim(v)) problems.push(`${label}: ${dimLabel(k)} must be 0 or more`);
     }
   });
   return problems;
@@ -189,7 +203,10 @@ export function structureSummary(s: Structure): string {
       continue;
     }
     if (trenchPair && (k === "trench_width_m" || k === "trench_depth_m")) {
-      if (!trenchDone) parts.push(`trench ${fmtNum(trenchWidth, 2)} m wide × ${fmtNum(trenchDepth, 2)} m deep`);
+      // a 0 × 0 trench is no trench (the structuring model writes the keys either way)
+      if (!trenchDone && (trenchWidth !== 0 || trenchDepth !== 0)) {
+        parts.push(`trench ${fmtNum(trenchWidth, 2)} m wide × ${fmtNum(trenchDepth, 2)} m deep`);
+      }
       trenchDone = true;
       continue;
     }
@@ -446,7 +463,9 @@ export function RequirementsCard({
   tasks,
   staleBrief = false,
   planBlocked = null,
+  recorded = null,
 }: RequirementsCardProps) {
+  const locked = recorded !== null;
   const problems = validateRequirements(value);
   const repairsOk = Number.isInteger(maxRepairs) && maxRepairs >= 0 && maxRepairs <= 10;
   const zoneIds = value.site.zones.map((z) => z.id);
@@ -501,14 +520,17 @@ export function RequirementsCard({
   const addConstraint = () => update({ constraints: [...value.constraints, ""] });
 
   const usage = structureStep?.usage ?? null;
+  // a sample recorded from a live run shows its structuring call like a fresh one
+  const recordedLive = source === "sample" && Boolean(usage?.model) && !isFixtureModel(usage?.model);
   const badges = (
     <>
-      {source === "sample" && <Badge tone="info">from the bundled sample</Badge>}
-      {source === "model" && structureStep && (
+      {source === "sample" && <Badge tone="info">{recordedLive ? "recorded live run" : "from the bundled sample"}</Badge>}
+      {(source === "model" || recordedLive) && structureStep && (
         <Badge title={modelTitle(usage?.model)}>
           {usage?.model ? modelDisplayName(usage.model) : "recorded answer"}
           {" · "}
-          {fmtSeconds(structureStep.duration_s)}
+          {/* the model's own latency, as the brief line and the trace quote it */}
+          {fmtSeconds(usage?.latency_s ?? structureStep.duration_s)}
           {usage && usage.input_tokens + usage.output_tokens > 0 && (
             <>
               {" · "}
@@ -529,7 +551,11 @@ export function RequirementsCard({
       id="requirements"
       step="02"
       title="Requirements"
-      subtitle="What the model understood from the brief. Correct ids, dimensions, batteries or the horizon here: the planner only ever sees this card."
+      subtitle={
+        locked
+          ? "What the model understood from the brief, as recorded: the card the planner was given. With the backend you correct ids, dimensions, batteries or the horizon here before planning."
+          : "What the model understood from the brief. Correct ids, dimensions, batteries or the horizon here: the planner only ever sees this card."
+      }
       actions={badges}
     >
       <Card bodyClassName="p-0">
@@ -571,10 +597,16 @@ export function RequirementsCard({
           </div>
         )}
 
+        {/* read-only: the fieldset disables every control at once and mw-locked keeps them at
+            full contrast (they are the content); the edit affordances read LockedContext */}
+        <LockedContext.Provider value={locked}>
+        <fieldset disabled={locked} className={cx("min-w-0", locked && "mw-locked")}>
         <div className="grid grid-cols-[minmax(0,1fr)] gap-6 p-4 md:p-5 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
           <div className="space-y-6">
             <Group title="Site">
-              <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-4">
+              {/* the map goes under the fields on a phone, where beside them it leaves the
+                  grid inputs too narrow to show their values */}
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-[minmax(0,1fr)_auto]">
                 <div className="grid grid-cols-2 gap-3">
                   <Field label="Site name" className="col-span-2">
                     <TextInput
@@ -781,8 +813,12 @@ export function RequirementsCard({
             </Group>
           </div>
         </div>
+        </fieldset>
+        </LockedContext.Provider>
 
-        {problems.length > 0 && (
+        {/* a recorded card is not sent anywhere: the client's checks do not apply to it (the
+            backend took it as it is) */}
+        {problems.length > 0 && !locked && (
           <div className="border-t border-line px-4 py-3 md:px-5">
             <Notice tone="warn" title={`${plural(problems.length, "problem")} to fix before planning`}>
               {problems.slice(0, 4).join(" · ")}
@@ -810,43 +846,50 @@ export function RequirementsCard({
 
         <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-line px-4 py-3 md:px-5">
           <div className="flex flex-wrap items-center gap-3">
-            <Field label="Repair rounds" className="w-24">
+            <Field label="Repair rounds" className={cx("w-24", locked && "mw-locked")}>
               <NumberInput
                 value={maxRepairs}
                 min={0}
                 max={10}
                 step={1}
                 invalid={!repairsOk}
+                disabled={locked}
                 onChange={onMaxRepairsChange}
               />
             </Field>
             <p className="max-w-xs text-[11px] leading-snug text-dim">
-              Infeasibility cores from the validator or CP-SAT go back to Nemotron up to this many
-              times (0–10).
+              {recorded ??
+                "Infeasibility cores from the validator or CP-SAT go back to Nemotron up to this many times (0–10)."}
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <Button
-              variant="secondary"
-              onClick={onRestructure}
-              loading={restructuring}
-              disabled={!canRestructure || planning}
-              title="Run the structuring stage again on the current brief (discards your edits)"
-            >
-              Re-structure
-            </Button>
+            {/* a recorded card has nothing to re-structure (the reason line says what needs the
+                backend), so the button is not offered at all */}
+            {!locked && (
+              <Button
+                variant="secondary"
+                onClick={onRestructure}
+                loading={restructuring}
+                disabled={!canRestructure || planning}
+                title="Run the structuring stage again on the current brief (discards your edits)"
+              >
+                Re-structure
+              </Button>
+            )}
             <Button
               variant="primary"
               onClick={onPlan}
               loading={planning}
-              disabled={problems.length > 0 || !repairsOk || restructuring || staleBrief || Boolean(planBlocked)}
+              disabled={
+                (!locked && (problems.length > 0 || !repairsOk)) || restructuring || staleBrief || Boolean(planBlocked)
+              }
               title={
                 staleBrief
                   ? "Re-structure the brief first: these requirements came from another brief"
-                  : (planBlocked ?? undefined)
+                  : (planBlocked ?? (locked ? "Replay the recorded run's planning: its trace, cores and repairs" : undefined))
               }
             >
-              {planning ? "Planning…" : "Plan with these requirements"}
+              {locked ? "Replay planning" : planning ? "Planning…" : "Plan with these requirements"}
             </Button>
           </div>
         </footer>
@@ -1054,11 +1097,12 @@ function Group({
   action?: ReactNode;
   children: ReactNode;
 }) {
+  const locked = useContext(LockedContext);
   return (
     <div>
       <div className="mb-2 flex items-center justify-between gap-2">
         <h3 className="text-[12px] font-semibold uppercase tracking-wider text-muted">{title}</h3>
-        {action}
+        {!locked && action}
       </div>
       {caption && <p className="-mt-1 mb-2 text-[11px] leading-snug text-dim">{caption}</p>}
       {children}
@@ -1067,6 +1111,8 @@ function Group({
 }
 
 function RemoveButton({ onClick, label }: { onClick: () => void; label: string }) {
+  const locked = useContext(LockedContext);
+  if (locked) return null;
   return (
     <button
       type="button"
@@ -1105,11 +1151,12 @@ function StructureRow({
   onChange: (next: Structure) => void;
   onRemove: () => void;
 }) {
+  const locked = useContext(LockedContext);
   const dims = structureDims(structure);
   const ops = structureOperations(structure);
   const [editingOps, setEditingOps] = useState(false);
   const unknownZone = structure.zone !== null && !zoneIds.includes(structure.zone);
-  const invalidDim = dims.some(([, v]) => !isPos(v));
+  const invalidDim = dims.some(([, v]) => !isDim(v));
   const summary = structureSummary(structure);
   const name = structure.id || `structure ${index + 1}`;
   const recovered = warnings.some((w) => w.shape === "recovered");
@@ -1194,14 +1241,16 @@ function StructureRow({
               );
             })}
         {!editingOps && ops.length === 0 && <span className="text-[11px] text-dim">none stated in the brief</span>}
-        <button
-          type="button"
-          onClick={() => setEditingOps((v) => !v)}
-          aria-expanded={editingOps}
-          className="ml-0.5 text-[11px] text-dim hover:text-fg"
-        >
-          {editingOps ? "done" : "edit operations"}
-        </button>
+        {!locked && (
+          <button
+            type="button"
+            onClick={() => setEditingOps((v) => !v)}
+            aria-expanded={editingOps}
+            className="ml-0.5 text-[11px] text-dim hover:text-fg"
+          >
+            {editingOps ? "done" : "edit operations"}
+          </button>
+        )}
         {recovered && !editingOps && (
           <span className="ml-1 text-[11px] font-medium text-warn">{WARNING_LEADS.recovered}</span>
         )}
@@ -1222,29 +1271,32 @@ function StructureRow({
           {work ?? "no task in the graph builds this structure"}
         </p>
       )}
-      <details className="group mt-1.5" open={invalidDim || dims.length === 0 || undefined}>
-        <summary className="cursor-pointer select-none text-[11px] text-dim hover:text-fg">
-          {dims.length === 0 ? "add dimensions" : "edit dimensions"}
-          {invalidDim ? <span className="ml-1 text-fail">· a dimension must be &gt; 0</span> : null}
-        </summary>
-        <div className="mt-2 flex flex-wrap items-end gap-2">
-          {dims.map(([key, v]) => (
-            <Field key={key} label={dimLabel(key)} className="w-28" error={isPos(v) ? undefined : "must be > 0"}>
-              <div className="flex items-center gap-0.5">
-                <NumberInput
-                  value={v}
-                  min={0}
-                  step="any"
-                  invalid={!isPos(v)}
-                  onChange={(n) => onChange(withDim(structure, key, n))}
-                />
-                <RemoveButton onClick={() => onChange(omitKey(structure, key))} label={`remove ${dimLabel(key)}`} />
-              </div>
-            </Field>
-          ))}
-          <DimAdder existing={dims.map(([k]) => k)} onAdd={(key) => onChange(withDim(structure, key, 1))} />
-        </div>
-      </details>
+      {/* the summary line above already reads the dimensions out; the editor is for edits */}
+      {!locked && (
+        <details className="group mt-1.5" open={invalidDim || dims.length === 0 || undefined}>
+          <summary className="cursor-pointer select-none text-[11px] text-dim hover:text-fg">
+            {dims.length === 0 ? "add dimensions" : "edit dimensions"}
+            {invalidDim ? <span className="ml-1 text-fail">· a dimension must be 0 or more</span> : null}
+          </summary>
+          <div className="mt-2 flex flex-wrap items-end gap-2">
+            {dims.map(([key, v]) => (
+              <Field key={key} label={dimLabel(key)} className="w-28" error={isDim(v) ? undefined : "must be 0 or more"}>
+                <div className="flex items-center gap-0.5">
+                  <NumberInput
+                    value={v}
+                    min={0}
+                    step="any"
+                    invalid={!isDim(v)}
+                    onChange={(n) => onChange(withDim(structure, key, n))}
+                  />
+                  <RemoveButton onClick={() => onChange(omitKey(structure, key))} label={`remove ${dimLabel(key)}`} />
+                </div>
+              </Field>
+            ))}
+            <DimAdder existing={dims.map(([k]) => k)} onAdd={(key) => onChange(withDim(structure, key, 1))} />
+          </div>
+        </details>
+      )}
     </li>
   );
 }

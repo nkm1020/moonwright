@@ -15,7 +15,7 @@ from types import ModuleType
 import pytest
 
 from moonwright.pipeline.rates import RATED_TYPES, scope_gaps, volume_advisories, volume_shares
-from moonwright.pipeline.validate import supply_report, validate_graph
+from moonwright.pipeline.validate import supply_advisories, supply_report, validate_graph
 from moonwright.schemas import Requirements
 
 BACKEND = Path(__file__).resolve().parents[1]
@@ -49,6 +49,15 @@ EXPECTED_KIND: dict[str, str] = {
     "small_fleet_long_berm": "infeasible",    # D, energy short 15 %
     "solar_array_pad": "infeasible",          # D, energy short 25 %
     "low_battery_pad": "infeasible",          # E: infeasible as written, feasible re-scoped
+}
+# The demo briefs (examples/briefs) and their eval twins: byte-identical, except that the demo
+# landing_pad's berm is a 40 m arc 1.5 m high and 4 m wide at the base (120 m3, so the pad's
+# 125.7 m3 of spoil builds it) while the twin keeps the 60 m, 300 m3 berm of eval runs 1-3.
+DEMO_TWINS: dict[str, str] = {
+    "access_road": "access_road",
+    "front_loaded": "front_loaded_excavation",
+    "landing_pad": "landing_pad",
+    "tight_battery": "tight_battery",
 }
 
 
@@ -274,10 +283,33 @@ def test_every_eval_brief_parses_and_lands_in_its_kind(bb: ModuleType) -> None:
 
 
 def test_demo_briefs_share_the_registry_with_their_eval_twins(bb: ModuleType) -> None:
-    for path in sorted(DEMO_DIR.glob("*.md")):
-        assert path.read_text() == (EVAL_DIR / path.name).read_text()
+    assert sorted(p.stem for p in DEMO_DIR.glob("*.md")) == sorted(DEMO_TWINS)
+    for stem, twin in DEMO_TWINS.items():
+        demo, path = DEMO_DIR / f"{stem}.md", EVAL_DIR / f"{twin}.md"
+        budget = bb.compute_budget(bb.spec_from_brief(demo), str(demo))
+        assert budget.verdict.kind == EXPECTED_KIND[twin], stem
+        if stem != "landing_pad":
+            assert demo.read_bytes() == path.read_bytes(), stem
+            assert bb.spec_from_brief(demo) == bb.spec_from_brief(path), stem
+
+    # landing_pad differs in the berm's line alone, and so does its registry entry
+    demo, twin = DEMO_DIR / "landing_pad.md", EVAL_DIR / "landing_pad.md"
+    changed = [(a, b) for a, b in zip(demo.read_text().splitlines(),
+                                      twin.read_text().splitlines(), strict=True) if a != b]
+    berm = ("2. Blast berm: a {} m arc on the north side of the pad, {} m high and 4 m wide at the "
+            "base, built from pad spoil, compacted, with a sintered crest to resist plume erosion.")
+    assert changed == [(berm.format(40, 1.5), berm.format(60, 2.5))]
+    berms = {}
+    for path in (demo, twin):
         budget = bb.compute_budget(bb.spec_from_brief(path), str(path))
-        assert budget.verdict.kind == "comfortable"
+        assert [s.zone for s in budget.structures] == ["Z1", "Z2"]
+        [haul] = [p for p in budget.structures[1].phases if p.phase == "haul"]
+        graph = bb.build_graph(budget, "lazy")
+        assert validate_graph(budget.requirements, graph, coverage=True) is None
+        berms[path.parent.name] = (haul.quantity, supply_advisories(budget.requirements, graph))
+    assert berms["briefs"] == (120.0, [])      # the pad's spoil builds the demo berm
+    assert berms["eval"][0] == 300.0           # the twin's berm needs more than the pad yields
+    assert [a.split(": ", 1)[0] for a in berms["eval"][1]] == ["supply:S2"]
 
 
 def test_parse_brief_formats(bb: ModuleType) -> None:
@@ -318,22 +350,27 @@ def test_overrides_edit_structures_robots_and_the_horizon(bb: ModuleType) -> Non
 
 
 # ----------------------------------------------------------------------------- inputs / CLI
-@pytest.mark.parametrize("brief", ["landing_pad", "access_road", "tight_battery"])
-def test_script_runs_on_every_fixture_structure_json(bb: ModuleType, brief: str, capsys) -> None:
+@pytest.mark.parametrize(("brief", "verdict"), [
+    ("landing_pad", "comfortable"), ("landing_pad_v1", "comfortable"),
+    ("access_road", "comfortable"), ("tight_battery", "comfortable"),
+    ("front_loaded", "infeasible"),   # the live structuring of the designed-impossible brief
+])
+def test_script_runs_on_every_fixture_structure_json(bb: ModuleType, brief: str, verdict: str,
+                                                     capsys) -> None:
     path = FIXTURES / brief / "structure.json"
     assert bb.main([str(path), "--no-solve"]) == 0
     out = capsys.readouterr().out
-    assert "verdict: comfortable" in out and "assumptions:" in out
+    assert f"verdict: {verdict}" in out and "assumptions:" in out
     assert bb.main([str(path), "--json", "--no-solve"]) == 0
     report = json.loads(capsys.readouterr().out)
     assert report["horizon_h"] == Requirements.model_validate_json(path.read_text()).horizon_h
     assert {s["id"] for s in report["structures"]} == {
         s["id"] for s in json.loads(path.read_text())["structures"]}
-    assert report["graphs"] == {} and report["verdict"]["kind"] == "comfortable"
+    assert report["graphs"] == {} and report["verdict"]["kind"] == verdict
 
 
 def test_landing_pad_fixture_budget_matches_the_hand_arithmetic(bb: ModuleType) -> None:
-    budget = bb.compute_budget(bb.spec_from_json(FIXTURES / "landing_pad" / "structure.json"))
+    budget = bb.compute_budget(bb.spec_from_json(FIXTURES / "landing_pad_v1" / "structure.json"))
     assert [s.zone for s in budget.structures] == ["Z1", "Z2"]     # the fixture's own zones
     assert budget.types["printer"].need_wh == 3475.8 and budget.types["hauler"].need_wh == 2100.0
     assert budget.critical_path == ["S1/survey", "S1/excavate", "S2/haul", "S2/compact",

@@ -63,21 +63,35 @@ the `MOONWRIGHT_MODEL_*` variables. If the Ultra request answers 404, the client
 
 ## 2. Demo plans and the fixture refresh
 
+The demo briefs' fixtures are the live runs of Oct 23 (final prompts): `landing_pad`
+(`energy:printer`, one repair, 89 h; 3.4 min of model time, 36k output tokens, $0.12) and
+`front_loaded` (no plan after three repairs, advice 85 h; 5.4 min, 73k tokens, $0.24). Record a
+new take under its own id, so it never overwrites the fixtures the demo and the tests replay:
+
 ```bash
-uv run moonwright plan examples/briefs/landing_pad.md --llm nebius        # about 60-160 s, $0.04
-uv run moonwright plan examples/briefs/landing_pad.md --llm record        # the same, saving fixtures/landing_pad/
-uv run moonwright plan examples/briefs/tight_battery.md --llm record
-uv run moonwright plan examples/briefs/access_road.md --llm record
-uv run pytest                                                             # fixtures changed: make sure the suite agrees
+uv run moonwright plan examples/briefs/landing_pad.md --llm record --brief-id landing_pad_next \
+  --out out/demo/landing_pad_next.plan.json                               # writes fixtures/landing_pad_next/
+uv run moonwright plan examples/briefs/front_loaded.md --llm record --brief-id front_loaded_next \
+  --out out/demo/front_loaded_next.plan.json
 ```
 
-`--llm record` overwrites `fixtures/<brief>/*.json`. The e2e tests quote the fixture makespans
-80 / 64 / 68 h and the hand-declared `operations` lists (`tests/test_coverage_ops.py:
-FIXTURE_OPERATIONS`), so after a re-recording update `tests/test_pipeline_e2e.py` and that table
-or keep the old fixtures (copy them aside first). Regenerate `frontend/public/samples` from
-`out/` afterwards (`plan` x3 `--llm fixture`, `simulate --fail EX2@30`, `montecarlo --runs 200
---seed 1`). Fast demo setting when Ultra with thinking is slow: `MOONWRIGHT_THINKING=off` (lower
-first-try feasibility, which the repair loop should absorb).
+To adopt a take, move its directory to `fixtures/<brief>/` (the replay keys on the brief's file
+stem), check that `uv run moonwright plan examples/briefs/<brief>.md --llm fixture` gives the
+take's verdicts per step, repairs and schedule, and update the tests that pin the old take's
+story (`tests/test_pipeline_e2e.py: test_<brief>_replays_its_live_run`, and the demo flows in
+`tests/test_integration.py` and `tests/test_cli_api.py`, which quote its steps, makespans and
+landing_pad's replan at 10 h) until `uv run pytest` passes. Never re-record `landing_pad_v1`
+(brief: `tests/data/landing_pad_v1.md`), `access_road` or `tight_battery`: those are the
+hand-made fixtures the arithmetic tests are written against. Then regenerate
+`frontend/public/samples` from the take itself: copy the take's own PlanResult
+(`out/demo/<take>.plan.json`, never a `--llm fixture` replay, whose steps name `fixture:`
+models), then `simulate --fail EX2@10 --llm fixture`, `montecarlo --runs 200 --seed 1` and the
+what-if (the plan with one spare per single-point type, same seed and runs) on that file
+([reference.md](reference.md#samples-frontendpublicsamples) has the commands).
+`test_ui_samples_are_the_live_runs_their_fixtures_replay` fails on a sample that is a replay or
+that its fixtures no longer replay. Fast demo
+setting when Ultra with thinking is slow: `MOONWRIGHT_THINKING=off` (lower first-try
+feasibility, which the repair loop should absorb).
 
 ## 3. Main evaluation: 22 briefs x 2 model arms x loop off/on x 3 repeats
 

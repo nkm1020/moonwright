@@ -439,7 +439,7 @@ class TestRecordingClient:
 
         mismatch = SchemaMismatch("answer failed validation after 2 attempt(s)", "{",
                                   ["tasks: Field required"])
-        pad = FIXTURES_DIR / "landing_pad"
+        pad = FIXTURES_DIR / "landing_pad_v1"
         req = Requirements.model_validate_json((pad / "structure.json").read_text())
         good = json.loads((pad / "taskgraph_1.json").read_text())
         rec = RecordingClient(Flaky({("taskgraph", 1): mismatch, ("taskgraph", 2): good,
@@ -540,7 +540,7 @@ class TestFixtureClient:
         demo = tmp_path / "demo"
         demo.mkdir()
         (demo / "structure.json").write_text(
-            (FIXTURES_DIR / "landing_pad" / "structure.json").read_text())
+            (FIXTURES_DIR / "landing_pad_v1" / "structure.json").read_text())
         (demo / "taskgraph_1.json").write_text("{not json")
         result = Planner(FixtureClient(tmp_path), explain=False).plan("Build a pad.",
                                                                        brief_id="demo")
@@ -988,7 +988,7 @@ class TestApi:
         assert body["success"] is True and body["schedule"]["makespan_h"] > 0
         assert body["schedule"]["makespan_h"] == from_brief["schedule"]["makespan_h"]
         assert [s["stage"] for s in body["steps"]] == ["structure", "taskgraph", "validate",
-                                                        "schedule"]
+                                                        "repair", "validate", "schedule"]
         first = body["steps"][0]
         assert first["ok"] is True and first["failure"] is None
         assert first["message"] == ("requirements provided by the user: 2 structures, "
@@ -1137,8 +1137,9 @@ class TestApi:
         assert r.status_code == 200
         body = r.json()
         assert body["success"] is True and body["schedule"]["makespan_h"] > 0
-        assert [s["stage"] for s in body["steps"]] == ["structure", "taskgraph", "validate", "schedule"]
-        assert body["explanation"] is None
+        assert [s["stage"] for s in body["steps"]] == ["structure", "taskgraph", "validate",
+                                                        "repair", "validate", "schedule"]
+        assert body["repairs"] == 1 and body["explanation"] is None
 
     # ---- /montecarlo
     def test_montecarlo_runs_and_is_deterministic_for_a_seed(self, api):
@@ -1250,10 +1251,11 @@ class TestPlanStream:
         brief = landing_pad_text()
         body = {"brief": brief, "brief_id": "landing_pad", "llm": "fixture", "explain": False}
         events = stream_plan(api, body)
-        assert [kind for kind, _ in events] == ["step", "step", "step", "step", "result"]
+        assert [kind for kind, _ in events] == ["step"] * 6 + ["result"]
         steps = [data for kind, data in events if kind == "step"]
-        assert [s["stage"] for s in steps] == ["structure", "taskgraph", "validate", "schedule"]
-        assert all(s["ok"] for s in steps)
+        assert [(s["stage"], s["ok"]) for s in steps] == [
+            ("structure", True), ("taskgraph", True), ("validate", False), ("repair", True),
+            ("validate", True), ("schedule", True)]   # the recorded live run: one repair
         result = events[-1][1]
         assert result["success"] is True and result["schedule"]["makespan_h"] > 0
         assert [s["stage"] for s in result["steps"]] == [s["stage"] for s in steps]
@@ -1272,7 +1274,7 @@ class TestPlanStream:
         events = stream_plan(api, {"requirements": structured["requirements"],
                                    "brief_id": "landing_pad", "llm": "fixture",
                                    "explain": False})
-        assert [kind for kind, _ in events] == ["step", "step", "step", "step", "result"]
+        assert [kind for kind, _ in events] == ["step"] * 6 + ["result"]
         assert events[0][1]["stage"] == "structure"
         assert events[0][1]["message"].startswith("requirements provided by the user: ")
         assert events[-1][1]["success"] is True
@@ -1670,7 +1672,7 @@ class TestEvalRow:
         """A live-style first answer states quantities with optimistic hours and Wh; the rate
         model re-sizes it on its way into the planner. The captured first graph is grounded the
         same way, so a run without a repair round reports zero drift."""
-        pad = FIXTURES_DIR / "landing_pad"
+        pad = FIXTURES_DIR / "landing_pad_v1"
         req = Requirements.model_validate_json((pad / "structure.json").read_text())
         data = json.loads((pad / "taskgraph_1.json").read_text())
         scope = {"T2": (300, "m2"), "T3": (126, "m3"), "T4": (98, "m3"), "T5": (150, "m2"),
@@ -1694,7 +1696,7 @@ class TestEvalRow:
         assert result.success and result.repairs == 0 and result.task_graph is not None
         assert result.task_graph.task("T3").duration_h == 18
         assert capture.graphs[0].task("T3").estimated_duration_h == 10.0   # grounded capture
-        row = eval_row("landing_pad", "loop_off", 1, result, 1.0, first_graph=capture.graphs[0])
+        row = eval_row("landing_pad_v1", "loop_off", 1, result, 1.0, first_graph=capture.graphs[0])
         assert row.first_try_feasible and row.scope_drift_pct == 0.0
         assert row.first_energy_wh == row.final_energy_wh == pytest.approx(
             sum(t.energy_wh for t in result.task_graph.tasks))
@@ -2582,7 +2584,7 @@ class TestEvalPairing:
             def structure(self, brief, *, brief_id=None):
                 structured.append(brief_id)
                 req = Requirements.model_validate_json(
-                    (FIXTURES_DIR / "landing_pad" / "structure.json").read_text())
+                    (FIXTURES_DIR / "landing_pad_v1" / "structure.json").read_text())
                 req.source_brief = brief
                 return req, LoopStep(stage="structure", ok=True, message="scripted")
 

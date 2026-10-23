@@ -7,21 +7,29 @@ zone, batteries with a transit allowance, horizon) -> infeasibility cores go bac
 repair -> the verified schedule runs in a 2D simulator that reschedules with the solver on robot
 failure and escalates to Nemotron only when the remaining fleet provably cannot finish.
 
-See the repository root README for the full story and the limitations. Quick start:
+See the repository root README for the full story and the limitations. Quick start (the demo
+briefs `landing_pad` and `front_loaded` replay live runs recorded on Oct 23; `landing_pad_v1`,
+`access_road` and `tight_battery` are the hand-made fixtures of Oct 22, whose arithmetic the
+tests check):
 
     uv sync
     uv run moonwright plan examples/briefs/landing_pad.md --llm fixture --out out/landing_pad.plan.json
+    uv run moonwright plan examples/briefs/front_loaded.md --llm fixture    # no plan after 3 repairs: the advice
     uv run moonwright plan examples/briefs/tight_battery.md --llm fixture --max-repairs 0   # loop off: the solver's advice
-    uv run moonwright simulate out/landing_pad.plan.json --fail EX2@30 --llm fixture
+    uv run moonwright simulate out/landing_pad.plan.json --fail EX2@10 --llm fixture
     uv run moonwright montecarlo out/landing_pad.plan.json --runs 200 --seed 1 --out out/landing_pad.mc.json
     uv run moonwright eval --briefs examples/briefs --llm fixture --out out/eval.json --csv out/eval.csv --save-plans out/plans
     uv run moonwright eval --briefs examples/briefs --llm fixture --models ultra,super --markdown out/eval.md
-    uv run moonwright eval --briefs examples/eval --llm fixture --loop off --markdown out/eval_kinds.md   # per-kind table from examples/eval/kinds.json
+    uv run moonwright eval --briefs examples/eval --llm nebius --loop off --markdown out/eval_kinds.md   # live: per-kind table from examples/eval/kinds.json
     uv run python scripts/brief_budget.py fixtures/landing_pad/structure.json --graphs lazy
     uv run python scripts/replan_eval.py out/landing_pad.plan.json --llm fixture --all-tasks --sole-of-type solver
     uv run python scripts/llm_log_report.py out/llm_log.jsonl
     uv run moonwright serve                      # GET /health /examples; POST /structure /plan /plan/stream /simulate /montecarlo
     uv run pytest && uv run ruff check .
+
+The per-kind evaluation is a live command: offline, `examples/eval/landing_pad.md` (the 300 m3
+berm) would replay the demo take recorded for the 120 m3 brief, and most eval briefs have no
+fixture at all.
 
 Commands: `plan` (brief -> verified schedule), `simulate` (replay with failures and replanning),
 `montecarlo` (N replays with random failures and duration jitter; solver-only replans unless

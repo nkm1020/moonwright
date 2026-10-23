@@ -23,10 +23,18 @@ function findLast<T>(items: T[], pred: (item: T) => boolean): T | null {
   return null;
 }
 
-/** The explain step's model, or the first model of the trace for an older PlanResult. */
-function writerModel(steps: LoopStep[]): string | null {
-  const explain = findLast(steps, (s) => s.stage === "explain" && s.ok && Boolean(s.usage?.model));
-  return explain?.usage?.model ?? null;
+/** The backend writes a template summary when the explain call fails (pipeline/explain.py): the
+ *  step carries no usage and says "template fallback (<error class>)". */
+function isTemplate(step: LoopStep): boolean {
+  return !step.usage || /^template fallback\b/i.test(step.message ?? "");
+}
+
+/** Why no model wrote the explanation, from the error class the template step names. */
+function templateReason(step: LoopStep): string {
+  const error = /^template fallback \(([^)]*)\)/i.exec(step.message ?? "")?.[1] ?? "";
+  if (error === "FixtureMissing") return "this offline backend has no recorded explanation for the brief";
+  if (error === "SchemaMismatch") return "the model's answer did not fit the schema";
+  return "the explanation call failed";
 }
 
 export function ExplanationCard({ plan }: ExplanationCardProps) {
@@ -41,7 +49,11 @@ export function ExplanationCard({ plan }: ExplanationCardProps) {
   const taskCount = plan.task_graph?.tasks.length ?? 0;
   const robotsUsed = new Set(schedule?.entries.map((e) => e.robot) ?? []).size;
 
-  const writer = writerModel(plan.steps);
+  // the explain step's model; a template step has none, and only a PlanResult without any
+  // explain step (an older one) falls back to the first model of the trace
+  const explain = findLast(plan.steps, (s) => s.stage === "explain");
+  const template = explain !== null && isTemplate(explain);
+  const writer = explain && !template ? (explain.usage?.model ?? null) : null;
   const grounded = findLast(plan.steps, (s) => taskGraphPayload(s) !== null);
   const priced = grounded ? (taskGraphPayload(grounded)?.grounded ?? 0) > 0 : false;
   const source = schedule ? "from the verified schedule" : "from the last task graph (not verified)";
@@ -51,21 +63,25 @@ export function ExplanationCard({ plan }: ExplanationCardProps) {
   const caption =
     paragraphs.length === 0
       ? null
-      : writer && !isFixtureModel(writer)
-        ? `Written by ${modelDisplayName(writer)} ${source}; ${pricing}, CP-SAT fixed the timing.`
-        : `Recorded Nemotron answer, written ${source}; ${pricing}, CP-SAT fixed the timing.`;
+      : explain && template
+        ? `Template summary ${source}, not a model answer: ${templateReason(explain)}; ${pricing}, CP-SAT fixed the timing.`
+        : writer && !isFixtureModel(writer)
+          ? `Written by ${modelDisplayName(writer)} ${source}; ${pricing}, CP-SAT fixed the timing.`
+          : `Recorded Nemotron answer, written ${source}; ${pricing}, CP-SAT fixed the timing.`;
 
   const fallback = schedule
     ? `No explanation was generated for this plan. The schedule is solver-verified all the same: ${plural(taskCount, "task")} on ${plural(robotsUsed, "robot")} finish in ${fmtHours(schedule.makespan_h, 0)} of the ${fmtHours(plan.requirements.horizon_h, 0)} horizon, with precedence, zone safety, robot no-overlap and battery budgets checked independently of the solver.`
     : "The plan was not verified, so there is nothing to explain yet. See the trace for the conflicts that remained after the repair rounds.";
 
-  const asideModel = writer ?? usage.model;
+  const asideModel = writer ?? (explain ? null : usage.model);
 
   return (
     <Card
       title="Explanation"
       aside={
-        asideModel ? (
+        template ? (
+          <span title="Written from the verified schedule by the backend's template; no model answered">template</span>
+        ) : asideModel ? (
           <span title={modelTitle(asideModel)}>{modelDisplayName(asideModel)}</span>
         ) : (
           <span>{usage.calls > 0 ? "recorded answer" : "no model call"}</span>

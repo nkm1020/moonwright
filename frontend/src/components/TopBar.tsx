@@ -1,7 +1,8 @@
 "use client";
 import { useState } from "react";
 import type { Health } from "@/lib/types";
-import { plural } from "@/lib/format";
+import { RECORDED_ON, SAMPLES, type SampleFile, type SampleId, type SampleSpec } from "@/lib/api";
+import { joinAnd, plural } from "@/lib/format";
 import { Button, Dot, IconCheck, Spinner, cx } from "./Section";
 
 export type FlowStage = "brief" | "requirements" | "plan" | "simulate" | "robustness";
@@ -16,34 +17,20 @@ export const FLOW_STAGES: ReadonlyArray<{ id: FlowStage; label: string }> = [
 
 export type HealthStatus = "checking" | "ok" | "unreachable";
 
-/** The three recorded entry points under public/samples (no backend needed): a verified plan
- *  that survives a robot failure, a plan repaired from an infeasibility core, and a genuine
- *  live run of an impossible brief that ends with solver-proven advice. */
-export type SampleId = "landing_pad" | "tight_battery" | "front_loaded";
+const FILE_NAMES: Record<SampleFile, string> = {
+  sim: "simulation",
+  mc: "Monte Carlo",
+  whatif: "spare what-if",
+};
 
-export const SAMPLE_ACTIONS: ReadonlyArray<{ id: SampleId; label: string; detail: string; title: string }> = [
-  {
-    id: "landing_pad",
-    label: "Landing pad",
-    detail: "failure → replan",
-    title:
-      "Landing pad: failure → replan. Loads the recorded 14-task plan and its simulation: EX2 fails at 30 h and CP-SAT reschedules the remaining work. No backend needed.",
-  },
-  {
-    id: "tight_battery",
-    label: "Tight battery",
-    detail: "infeasible → repair",
-    title:
-      "Tight battery: infeasible → repair. Loads the recorded plan whose first schedule failed on the excavator batteries; Nemotron repaired it from the infeasibility core. No backend needed.",
-  },
-  {
-    id: "front_loaded",
-    label: "Impossible deadline",
-    detail: "infeasible → proven advice",
-    title:
-      "Impossible deadline: infeasible → proven advice. Front-loaded excavation under a 60 h deadline: recorded live Nemotron run, 3 repair rounds, ends with solver-proven advice (a later deadline, re-solved by CP-SAT). No backend needed.",
-  },
-];
+/** Tooltip of a sample button: the run's outcome as its PlanResult tells it (format.ts
+ *  fmtRunOutcome, absent until the file is read) and what loading it shows: the plan is the
+ *  live run itself, its companion files were computed from it offline by the CLI. */
+function sampleTooltip(spec: SampleSpec, outcome: string | undefined): string {
+  const derived = spec.files.map((f) => FILE_NAMES[f]);
+  const computed = derived.length > 0 ? `, with its ${joinAnd(derived)} computed offline from it` : "";
+  return `${spec.title}${outcome ? `: ${outcome}` : ""}. Loads the recorded live plan${computed}; no backend needed.`;
+}
 
 export interface TopBarProps {
   health: Health | null;
@@ -57,6 +44,11 @@ export interface TopBarProps {
   onLoadSample?: (id: SampleId) => void;
   sampleLoading: boolean;
   onRetryHealth: () => void;
+  /** Additive: each sample's outcome in one line (format.ts fmtRunOutcome), for its tooltip. */
+  sampleOutcomes?: Partial<Record<SampleId, string>>;
+  /** Additive: the static demo build, which has no backend: the badge says the page replays
+   *  recorded live runs instead of asking for the backend's health. */
+  staticDemo?: boolean;
 }
 
 export function TopBar({
@@ -68,6 +60,8 @@ export function TopBar({
   onLoadSample,
   sampleLoading,
   onRetryHealth,
+  sampleOutcomes = {},
+  staticDemo = false,
 }: TopBarProps) {
   const activeIdx = FLOW_STAGES.findIndex((s) => s.id === stage);
   // which sample button shows the spinner (the parent only reports "loading"); a stale value
@@ -81,10 +75,13 @@ export function TopBar({
           it, measured: from lg to xl (the stepper on its own row leaves the brand ~460 px) and
           from 1400 px, where the row reaches its 1,400 px cap (1440 and the 1536 recording
           width leave the brand 340-365 px whatever the backend badge says, for a 238 px
-          tagline). Between 1280 and 1399 px the stepper, the three sample buttons and the
-          badge fill the row, and an ellipsis is worse than no tagline (the two ranges never
+          tagline). Between 1280 and 1399 px the stepper, the sample buttons and the badge
+          fill the row, and an ellipsis is worse than no tagline (the two ranges never
           overlap: Tailwind emits min-[1400px] before the named breakpoints, so an xl:hidden
-          would win over it) */}
+          would win over it). From xl the demo group keeps its full width (it shares the row
+          with the brand); below xl it wraps rather than overflow, and below sm it dissolves
+          into the row (display: contents): the badge stays beside the brand and the sample
+          buttons take a row of their own, so a phone never scrolls sideways */}
       <div className="mx-auto flex w-full max-w-[1400px] flex-wrap items-center gap-x-2.5 gap-y-2 px-4 py-2 md:px-6 lg:px-8">
         <div className="flex min-w-0 flex-1 basis-0 items-baseline gap-2.5">
           <h1
@@ -138,31 +135,39 @@ export function TopBar({
           </ol>
         </nav>
 
-        <div className="ml-auto flex shrink-0 items-center gap-1.5 xl:flex-1 xl:basis-0 xl:justify-end">
+        <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-1.5 max-sm:contents xl:min-w-max xl:flex-1 xl:basis-0 xl:flex-nowrap">
           {onLoadSample && (
-            <div className="flex items-center gap-0.5" role="group" aria-label="Recorded demo samples">
-              {SAMPLE_ACTIONS.map((a) => (
+            <div
+              className="flex flex-wrap items-center gap-0.5 max-sm:order-1 max-sm:w-full"
+              role="group"
+              aria-label="Recorded demo samples"
+            >
+              {SAMPLES.map((spec) => (
                 <Button
-                  key={a.id}
+                  key={spec.id}
                   variant="ghost"
                   size="sm"
                   className="px-2 text-fg"
-                  title={a.title}
-                  aria-label={`${a.label}: ${a.detail}`}
-                  loading={sampleLoading && pending === a.id}
+                  title={sampleTooltip(spec, sampleOutcomes[spec.id])}
+                  aria-label={`${spec.title}: load the recorded run`}
+                  loading={sampleLoading && pending === spec.id}
                   disabled={sampleLoading}
                   onClick={() => {
-                    setPending(a.id);
-                    onLoadSample(a.id);
+                    setPending(spec.id);
+                    onLoadSample(spec.id);
                   }}
                 >
-                  {!(sampleLoading && pending === a.id) && <IconPlay className="size-2.5 text-muted" />}
-                  {a.label}
+                  {!(sampleLoading && pending === spec.id) && <IconPlay className="size-2.5 text-muted" />}
+                  {spec.title}
                 </Button>
               ))}
             </div>
           )}
-          <BackendBadge health={health} status={healthStatus} apiBase={apiBase} onRetry={onRetryHealth} />
+          {staticDemo ? (
+            <RecordedBadge />
+          ) : (
+            <BackendBadge health={health} status={healthStatus} apiBase={apiBase} onRetry={onRetryHealth} />
+          )}
         </div>
       </div>
     </header>
@@ -188,6 +193,20 @@ const LIVE_ROUTING =
 /** The backend's address shows only in a development build: the product copy names no host,
  *  port or path. */
 const SHOW_ADDRESS = process.env.NODE_ENV !== "production";
+
+/** The static demo's badge: what is on the page are live runs, recorded, not the offline
+ *  fixtures of a backend in recorded-answers mode. */
+function RecordedBadge() {
+  return (
+    <span
+      className={cx(badgeClass, "border-info/30 bg-info/10 text-info")}
+      title={`Static demo: live plans recorded on Nebius Token Factory on ${RECORDED_ON} (${LIVE_ROUTING}), with their CP-SAT schedules; the simulation and Monte Carlo were computed from those plans offline, by the CLI. Nothing is called now.`}
+    >
+      <Dot color="var(--info)" />
+      recorded live runs
+    </span>
+  );
+}
 
 function BackendBadge({
   health,

@@ -2,7 +2,8 @@
 /**
  * Simulation set-up: failure injections (robot + time), the replan budget and the Run button.
  * The simulator step is fixed at SIM_DT_H (0.25 h). Pure controlled component: the parent owns
- * `SimulateOptions` and the request.
+ * `SimulateOptions` and the request. In the static demo the controls show the recorded scenario,
+ * locked, and Run replays the recorded simulation.
  */
 import type { FailureSpec, PlanResult, Requirements, SimulateRequest } from "@/lib/types";
 import { robotTypeColor } from "@/lib/palette";
@@ -35,6 +36,9 @@ export interface SimControlsProps {
   makespanH?: number;
   /** Additive: error text shown under the Run button (e.g. the last request failure). */
   error?: string | null;
+  /** Additive: the static demo replays a recording: the failure rows and the replan budget
+   *  show the recorded scenario, locked, with this reason beside Run, which replays it. */
+  recorded?: string | null;
 }
 
 export const MAX_REPLANS_RANGE = [0, 1, 2, 3, 4, 5] as const;
@@ -107,11 +111,15 @@ export function SimControls({
   disabled = false,
   makespanH,
   error,
+  recorded = null,
 }: SimControlsProps) {
   const robots = requirements.robots;
   const errors = validateSimulateOptions(value, horizonH, requirements);
-  const locked = disabled || running;
-  const canRun = !locked && errors.length === 0 && robots.length > 0;
+  const replay = recorded !== null;
+  const locked = disabled || running || replay;
+  const canRun = !disabled && !running && errors.length === 0 && robots.length > 0;
+  // a recorded scenario is the content: locked at full contrast (globals.css mw-locked)
+  const lockedClass = replay ? "mw-locked" : undefined;
 
   const patch = (p: Partial<SimulateOptions>) => onChange({ ...value, ...p });
   const updateRow = (i: number, p: Partial<FailureSpec>) =>
@@ -122,14 +130,14 @@ export function SimControls({
     const used = new Set(value.failures.map((f) => f.robot));
     const robot = robots.find((r) => !used.has(r.id)) ?? robots[0];
     const base = makespanH && makespanH > 0 ? makespanH : horizonH;
-    // ~40 % into the work, on a 5 h grid (80 h makespan -> 30 h)
+    // ~40 % into the work, on a 5 h grid (89 h makespan -> 35 h)
     const t = Math.min(horizonH, Math.max(0, Math.round((base * 0.4) / 5) * 5));
     patch({ failures: [...value.failures, { robot: robot.id, t_h: t }] });
   };
 
   return (
     <div className="space-y-4">
-      <fieldset className="space-y-2" disabled={locked}>
+      <fieldset className={`space-y-2 ${lockedClass ?? ""}`} disabled={locked}>
         <legend className="text-[11px] font-medium uppercase tracking-wider text-dim">Failure injections</legend>
         {value.failures.length === 0 && (
           <p className="text-[13px] text-muted">None yet. Add one to watch the agent replan around a lost robot.</p>
@@ -172,31 +180,35 @@ export function SimControls({
                     onChange={(e) => updateRow(i, { t_h: e.target.value === "" ? NaN : Number(e.target.value) })}
                   />
                   <span className="text-[13px] text-muted">h</span>
-                  <button
-                    type="button"
-                    onClick={() => removeRow(i)}
-                    aria-label={`Remove failure ${i + 1}`}
-                    className="ml-auto rounded-md px-2 py-1 text-xs text-muted hover:bg-white/10 hover:text-fg disabled:opacity-50"
-                  >
-                    Remove
-                  </button>
+                  {!replay && (
+                    <button
+                      type="button"
+                      onClick={() => removeRow(i)}
+                      aria-label={`Remove failure ${i + 1}`}
+                      className="ml-auto rounded-md px-2 py-1 text-xs text-muted hover:bg-white/10 hover:text-fg disabled:opacity-50"
+                    >
+                      Remove
+                    </button>
+                  )}
                 </div>
                 {rowError && <p className="pl-5 text-xs text-fail">{rowError}</p>}
               </li>
             );
           })}
         </ul>
-        <button
-          type="button"
-          onClick={addRow}
-          disabled={robots.length === 0}
-          className="rounded-md border border-dashed border-white/20 px-2.5 py-1 text-xs font-medium text-muted hover:border-white/40 hover:text-fg disabled:opacity-50"
-        >
-          + Add failure
-        </button>
+        {!replay && (
+          <button
+            type="button"
+            onClick={addRow}
+            disabled={robots.length === 0}
+            className="rounded-md border border-dashed border-white/20 px-2.5 py-1 text-xs font-medium text-muted hover:border-white/40 hover:text-fg disabled:opacity-50"
+          >
+            + Add failure
+          </button>
+        )}
       </fieldset>
 
-      <fieldset disabled={locked}>
+      <fieldset className={lockedClass} disabled={locked}>
         <legend className="mb-1.5 text-[11px] font-medium uppercase tracking-wider text-dim">Max replans</legend>
         <div className="flex flex-wrap items-center gap-3">
           <div className="inline-flex overflow-hidden rounded-md border border-white/15" role="group">
@@ -227,8 +239,9 @@ export function SimControls({
 
       <div className="flex flex-wrap items-center gap-3">
         <Button variant="primary" onClick={onRun} disabled={!canRun} loading={running}>
-          {running ? "Simulating…" : "Run simulation"}
+          {replay ? "Replay the simulation" : running ? "Simulating…" : "Run simulation"}
         </Button>
+        {recorded && <span className="text-xs text-dim">{recorded}</span>}
         {errors.length > 0 && !running && <span className="text-xs text-fail">{errors[0]}</span>}
         {error && !running && <span className="text-xs text-fail">{error}</span>}
       </div>

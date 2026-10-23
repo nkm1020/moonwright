@@ -1,10 +1,11 @@
 """Tests for the evaluation scripts under ``scripts/`` (no network).
 
-* ``replan_eval.py`` on the offline landing_pad plan: every robot with work is failed at 10 %
-  and 50 % of its tasks; the haulers' failures are rescheduled by CP-SAT alone, an excavator
-  lost early makes the remaining excavator work provably exceed one battery (escalated, and
-  offline the escalation has no recorded answer), the single compactor / printer / surveyor
-  are flagged as sole-of-type, and the escalation budget stops the asking.
+* ``replan_eval.py`` on the offline landing_pad_v1 plan (hand-made, the demo plan of Oct 22;
+  ``tests/data/landing_pad_v1.md``): every robot with work is failed at 10 % and 50 % of its
+  tasks; the haulers' failures are rescheduled by CP-SAT alone, an excavator lost early makes
+  the remaining excavator work provably exceed one battery (escalated, and offline the
+  escalation has no recorded answer), the single compactor / printer / surveyor are flagged as
+  sole-of-type, and the escalation budget stops the asking.
 * ``llm_log_report.py`` on a synthetic call log with a 422, a re-ask, a slow call, a corrupt
   line and an unpriced model, and on the recorded ``out/llm_log.jsonl`` when it exists.
 """
@@ -25,6 +26,7 @@ from moonwright.llm.tokenfactory import DEFAULT_LOG_PATH
 from moonwright.schemas import PlanResult
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
+V1_BRIEF = Path(__file__).resolve().parent / "data" / "landing_pad_v1.md"
 ULTRA = "nvidia/Nemotron-3-Ultra-550b-a55b"
 LIGHTNING = "nvidia/Nemotron-3_5-Lightning"
 SUPER = "nvidia/nemotron-3-super-120b-a12b"
@@ -42,9 +44,9 @@ def load_script(name: str):
 
 
 @pytest.fixture(scope="module")
-def landing_pad_plan(tmp_path_factory) -> Path:
-    path = tmp_path_factory.mktemp("plans") / "landing_pad.plan.json"
-    code = main(["plan", str(EXAMPLES_DIR / "landing_pad.md"), "--llm", "fixture",
+def landing_pad_v1_plan(tmp_path_factory) -> Path:
+    path = tmp_path_factory.mktemp("plans") / "landing_pad_v1.plan.json"
+    code = main(["plan", str(V1_BRIEF), "--llm", "fixture",
                  "--out", str(path), "-q"])
     assert code == EXIT_OK
     return path
@@ -52,21 +54,21 @@ def landing_pad_plan(tmp_path_factory) -> Path:
 
 # --------------------------------------------------------------------------- replan_eval.py
 class TestReplanEval:
-    def test_all_tasks_offline_landing_pad(self, landing_pad_plan, tmp_path, capsys):
+    def test_all_tasks_offline_landing_pad(self, landing_pad_v1_plan, tmp_path, capsys):
         module = load_script("replan_eval")
         out, md = tmp_path / "r.json", tmp_path / "r.md"
-        code = module.main([str(landing_pad_plan), "--llm", "fixture", "--all-tasks",
+        code = module.main([str(landing_pad_v1_plan), "--llm", "fixture", "--all-tasks",
                             "--sole-of-type", "solver", "--out", str(out), "--markdown", str(md)])
         assert code == 0
         report = json.loads(out.read_text())
         rows = report["rows"]
-        plan = PlanResult.model_validate_json(landing_pad_plan.read_text())
+        plan = PlanResult.model_validate_json(landing_pad_v1_plan.read_text())
         assert plan.schedule is not None
         by_robot = plan.schedule.by_robot()
         # two fractions per scheduled task of every robot with work; idle robots are listed
         assert len(rows) == sum(2 * len(entries) for entries in by_robot.values())
         idle = [r.id for r in plan.requirements.robots if r.id not in by_robot]
-        assert idle and report["idle_robots"] == {"landing_pad": idle}
+        assert idle and report["idle_robots"] == {"landing_pad_v1": idle}
         assert all(0 <= r["fraction"] < 1 and r["t_h"] >= 0 for r in rows)
         for r in rows:
             entry = plan.schedule.entry(r["task"])
@@ -101,7 +103,7 @@ class TestReplanEval:
         assert all(r["verdict_kinds"] == ["capability"] and r["repairs"] == 0 for r in sole)
         assert all(not r["sole_of_type"] for r in rows if r["robot_type"] in ("excavator", "hauler"))
         # summary: counts add up, rates carry Wilson intervals, nothing was spent
-        s = report["summary"]["per_plan"]["landing_pad"]
+        s = report["summary"]["per_plan"]["landing_pad_v1"]
         assert s == report["summary"]["overall"]
         assert s["injections"] == s["replanned"] == len(rows)
         assert s["categories"]["solver_only"] == sum(r["category"] == "solver_only" for r in rows)
@@ -135,13 +137,14 @@ class TestReplanEval:
         # the markdown document
         text = md.read_text()
         assert text.startswith("# Replanning evaluation")
-        assert "| `landing_pad` |" in text and "escalation cores" in text and "energy" in text
+        assert "| `landing_pad_v1` |" in text and "escalation cores" in text and "energy" in text
         assert "| HL2 | " in text and "(sole of type)" in text
-        assert f"Robots without scheduled work were not injected: `landing_pad`: {', '.join(idle)}." in text
+        assert ("Robots without scheduled work were not injected: "
+                f"`landing_pad_v1`: {', '.join(idle)}.") in text
         # the summary row shows the askable denominator and the not-asked column, and the
         # how-to-read names not_asked_sole_type (so 10 + 4 of 28 is not a mystery)
         assert "| not asked (sole / budget) |" in text
-        assert f"| `landing_pad` | {len(rows)} | {len(rows)} | {askable} | {len(sole)} / 0 |" in text
+        assert f"| `landing_pad_v1` | {len(rows)} | {len(rows)} | {askable} | {len(sole)} / 0 |" in text
         assert "`askable + not asked = replanned`" in text
         assert "## Injections" in text
         assert text.count("not_asked_sole_type") == len(sole) + 1   # the rows + the how-to-read
@@ -151,10 +154,10 @@ class TestReplanEval:
         assert "escalated_no_answer (energy)" in captured.err
         assert "not_asked_sole_type (capability)" in captured.err
 
-    def test_escalation_budget_stops_the_asking(self, landing_pad_plan, tmp_path, capsys):
+    def test_escalation_budget_stops_the_asking(self, landing_pad_v1_plan, tmp_path, capsys):
         module = load_script("replan_eval")
         out = tmp_path / "b.json"
-        code = module.main([str(landing_pad_plan), "--llm", "fixture", "--max-escalations", "1",
+        code = module.main([str(landing_pad_v1_plan), "--llm", "fixture", "--max-escalations", "1",
                             "--out", str(out)])
         assert code == 0
         report = json.loads(out.read_text())
@@ -175,14 +178,14 @@ class TestReplanEval:
         assert f"escalation budget of 1 reached after injection {first}" in capsys.readouterr().out
         # the markdown says so too
         md = tmp_path / "b.md"
-        module.main([str(landing_pad_plan), "--llm", "fixture", "--max-escalations", "1",
+        module.main([str(landing_pad_v1_plan), "--llm", "fixture", "--max-escalations", "1",
                      "--out", str(out), "--markdown", str(md)])
         assert "**Escalation budget**" in md.read_text()
 
-    def test_filters_and_usage_errors(self, landing_pad_plan, tmp_path, capsys):
+    def test_filters_and_usage_errors(self, landing_pad_v1_plan, tmp_path, capsys):
         module = load_script("replan_eval")
         out = tmp_path / "f.json"
-        code = module.main([str(landing_pad_plan), "--llm", "fixture", "--sole-of-type", "skip",
+        code = module.main([str(landing_pad_v1_plan), "--llm", "fixture", "--sole-of-type", "skip",
                             "--robots", "HL2,SV1", "--fractions", "0.25", "--out", str(out)])
         assert code == 0
         rows = json.loads(out.read_text())["rows"]
@@ -194,11 +197,11 @@ class TestReplanEval:
         for argv in (["--max-escalations", "-1"], ["--max-replans", "0"], ["--dt", "0"],
                      ["--fractions", "2"], ["--sole-of-type", "never"]):
             with pytest.raises(SystemExit) as info:
-                module.main([str(landing_pad_plan), "--llm", "fixture", *argv])
+                module.main([str(landing_pad_v1_plan), "--llm", "fixture", *argv])
             assert info.value.code == 2, argv
         # an unverified plan file is skipped, not a crash
         unverified = tmp_path / "no.plan.json"
-        plan = PlanResult.model_validate_json(landing_pad_plan.read_text())
+        plan = PlanResult.model_validate_json(landing_pad_v1_plan.read_text())
         unverified.write_text(plan.model_copy(update={"success": False}).model_dump_json())
         capsys.readouterr()
         assert module.main([str(unverified), "--llm", "fixture", "--out", str(out)]) == 0
@@ -384,13 +387,13 @@ class TestLlmLogReport:
 
 
 # --------------------------------------------------------------------------- replan advice (CLI)
-def test_simulate_prints_replan_advice_in_absolute_hours(landing_pad_plan, tmp_path, capsys):
+def test_simulate_prints_replan_advice_in_absolute_hours(landing_pad_v1_plan, tmp_path, capsys):
     """EX2 lost at 10 h: the remaining excavator work is provably infeasible and, offline, the
     escalation has no answer. The advice used to read "feasible at 75 h" under "makespan
     80h" (planner-relative hours, a spare cloned from EX1's remaining 4995 Wh); it is 85 h
     with a full 5000 Wh battery now, in the record and in the step payload alike."""
     out = tmp_path / "ex2.sim.json"
-    code = main(["simulate", str(landing_pad_plan), "--fail", "EX2@10", "--llm", "fixture",
+    code = main(["simulate", str(landing_pad_v1_plan), "--fail", "EX2@10", "--llm", "fixture",
                  "--out", str(out)])
     assert code == EXIT_NO_PLAN
     printed = capsys.readouterr().out

@@ -323,13 +323,14 @@ def test_a_trench_backfill_fed_by_its_own_dig_is_supplied() -> None:
 
 
 def test_the_landing_pad_fixture_hauls_strip_spoil_to_its_stockpile_zone() -> None:
-    """The demo's own graph (fixtures/landing_pad/taskgraph_1.json) with the quantities the
+    """The Oct 22 demo graph (fixtures/landing_pad_v1/taskgraph_1.json) with the quantities the
     pipeline tests give it: "Haul strip spoil to stockpile" (T6, zone Z3, which no structure
     claims) follows the strip T2, and "Stage sinter feedstock on the apron" (T8, zone Z4)
     follows T6; both are hauls to a pile, so the strip supplies them. Phase 3g first rejected
     the shape and its tests added an edge from the bowl, which yields no strip spoil."""
-    req = Requirements.model_validate_json((FIXTURES / "landing_pad" / "structure.json").read_text())
-    data = json.loads((FIXTURES / "landing_pad" / "taskgraph_1.json").read_text())
+    req = Requirements.model_validate_json(
+        (FIXTURES / "landing_pad_v1" / "structure.json").read_text())
+    data = json.loads((FIXTURES / "landing_pad_v1" / "taskgraph_1.json").read_text())
     scope = {"T2": (300, "m2"), "T3": (190, "m3"), "T4": (98, "m3"), "T5": (150, "m2"),
              "T6": (120, "m3"), "T7": (188, "m3"), "T8": (70, "m3"), "T9": (314, "m2"),
              "T10": (350, "m2"), "T11": (314, "m2"), "T12": (80, "m2")}
@@ -371,10 +372,10 @@ def test_a_haul_part_may_wait_for_the_dig_part_that_feeds_it_only() -> None:
 
 # ----------------------------------------------------------------------------- balance
 def test_the_balance_note_sums_a_bodys_hauls_however_they_are_ordered() -> None:
-    """landing_pad: a berm "built from pad spoil" whose prism (300 m3) holds more than the
-    125.7 m3 the bowl yields, with every dig before its hauls: the plan stands (the brief's
-    own arithmetic) and the note says so once per body, the same for chained and parallel
-    parts."""
+    """landing_pad's eval brief: a berm "built from pad spoil" whose prism (300 m3) holds more
+    than the 125.7 m3 the bowl yields, with every dig before its hauls: the plan stands (the
+    brief's own arithmetic) and the note says so once per body, the same for chained and
+    parallel parts."""
     r = reqs(PAD, BERM)
     digs = [task("T3", "excavator", 62.85, "m3", name="Excavate pad bowl north half"),
             task("T4", "excavator", 62.85, "m3", name="Excavate pad bowl south half")]

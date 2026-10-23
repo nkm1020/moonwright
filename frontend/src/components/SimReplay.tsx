@@ -4,11 +4,18 @@
  * current (interpolated) frame with status ring, battery bar and task caption, transport
  * controls, a scrubber with event ticks and replan markers, and a live task readout.
  *
- * The climax: around each event a banner in the event colour runs across the top of the map
- * ("30.0 h · EX2 failed on T4 (79% done) → CP-SAT rescheduled 11 tasks in <0.01 s →
- * verified, 80 h → 91 h"), and autoplay holds for HOLD_MS (4 s) at every robot failure and
- * replan marker (click the map or press space to continue). Failed robots keep a red X at their last
- * position with "failed at 30 h"; robots queued behind a busy zone read "waiting · zone Z1".
+ * The map fits the action, not the whole grid: the zones, the depot and every place a robot
+ * rests, with a long empty stretch between them drawn short and marked as a break (the demo's
+ * zones sit at the north edge, 30 cells from the depot). Captions that would collide with
+ * another robot's marker or label, or a zone's caption, are left out, the failed robots' last
+ * (the tooltip and the task list still say them).
+ *
+ * The climax: around each event a banner in the event colour fills the band at the top of the
+ * canvas, where the site / time line sits otherwise, so it never covers the map ("10.0 h · EX2
+ * failed on T5 (44% done) → CP-SAT rescheduled 13 tasks in <0.01 s → verified, 89 h → 91 h"),
+ * and autoplay holds for HOLD_MS (4 s) at every robot failure and replan marker (click the map
+ * or press space to continue). Failed robots keep a red X at their last position with "failed
+ * at 10 h"; robots queued behind a busy zone read "waiting · zone Z1".
  *
  * Playback state (time, hold, hover, cluster offsets) lives in refs and is drawn by
  * requestAnimationFrame; React state is only updated ~12 times per second for the readouts.
@@ -55,11 +62,25 @@ const BANNER_FADE_H = 0.3; // banner opacity ramps over the last 0.3 h of the wi
 /** Real time the autoplay holds on an event when holdOnEvents is set: long enough to read the
  *  banner aloud at any speed (click the map or press space to continue earlier). */
 export const HOLD_MS = 4000;
-const BANNER_H = 38;
+/** The band across the top of the canvas: the site / time line, and the event banner in its
+ *  place while an event shows (two lines fit, three on a narrow canvas); a run without events
+ *  gets the line alone. */
+const HEADER_H = 48;
+const HEADER_NARROW_H = 66;
+const HEADER_QUIET_H = 30;
+/** What the map fits (cells around each thing it must show): a zone's radius plus
+ *  ZONE_MARGIN_CELLS (its robots sit at its centre), MARGIN_CELLS around the depot and every
+ *  place a robot rests. An empty stretch between them longer than MIN_BREAK_CELLS is drawn
+ *  BREAK_CELLS wide and marked as a break. */
+const ZONE_MARGIN_CELLS = 1;
+const MARGIN_CELLS = 2;
+const MIN_BREAK_CELLS = 8;
+const BREAK_CELLS = 2;
 const R = 7; // marker radius
 const RING = R + 4.5; // status ring radius
-const BAR_W = 26;
 const PAD = 18;
+/** Room left of the map area for the y tick labels. */
+const AXIS_W = 28;
 
 /** Canvas font families: system faces on the server and before the first draw, the console's
  *  Geist faces (next/font sets --font-geist-sans / --font-geist-mono on <html>) from the first
@@ -114,7 +135,7 @@ interface Banner {
   t: number;
   kind: EventKind;
   color: string;
-  /** "EX2 failed on T4 (79% done)" */
+  /** "EX2 failed on T5 (44% done)" */
   lead: string;
   /** clauses drawn after arrows; the last one carries the verdict glyph when set */
   outcome: string[];
@@ -146,6 +167,8 @@ interface Model {
   failedDetail: Record<string, string>;
   tMax: number;
   horizonH: number;
+  /** what the map must show, per axis: [from, to] in cells (fitAxis merges them) */
+  spans: { x: [number, number][]; y: [number, number][] };
 }
 
 const KIND_RANK: Record<EventKind, number> = { robot_failure: 3, battery_low: 2, task_overrun: 1 };
@@ -201,6 +224,17 @@ function buildModel(sim: SimResult, plan: PlanResult, tasks: Task[]): Model {
     ]),
   ).sort((a, b) => a - b);
 
+  // the zones, the depot and wherever a robot stands still (a zone the simulator laid out for
+  // a task included), never the road between them
+  const spans: Model["spans"] = { x: [], y: [] };
+  const show = (x: number, y: number, r: number) => {
+    spans.x.push([x - r, x + r]);
+    spans.y.push([y - r, y + r]);
+  };
+  for (const z of req.site.zones) show(z.center[0], z.center[1], z.radius + ZONE_MARGIN_CELLS);
+  if (req.site.depot) show(req.site.depot[0], req.site.depot[1], MARGIN_CELLS);
+  for (const f of frames) for (const r of f.robots) if (r.status !== "moving") show(r.pos[0], r.pos[1], MARGIN_CELLS);
+
   return {
     siteName: req.site.name,
     grid: req.site.grid,
@@ -221,6 +255,7 @@ function buildModel(sim: SimResult, plan: PlanResult, tasks: Task[]): Model {
     failedDetail,
     tMax: frames.length ? frames[frames.length - 1].t_h : 0,
     horizonH: req.horizon_h,
+    spans,
   };
 }
 
@@ -232,7 +267,7 @@ interface SnapRobot {
   battery: number;
   status: RobotStatus;
   task: string | null;
-  /** "working on T3", "→ T4", "waiting · zone Z1", "waiting · T9 after T3", "failed at 30 h" */
+  /** "working on T3", "→ T4", "waiting · zone Z1", "waiting · T9 after T3", "failed at 10 h" */
   caption: string;
 }
 
@@ -336,25 +371,113 @@ function snapshotAt(model: Model, t: number): Snapshot | null {
 }
 
 // ------------------------------------------------------------------ geometry & marks
+/** One axis of the map: which cells it shows and which empty stretches it draws short. */
+interface Axis {
+  /** the cell at the map area's left (x) or bottom (y) edge */
+  lo: number;
+  /** the map area's length in drawn cells (a break counts BREAK_CELLS) */
+  len: number;
+  /** stretches drawn BREAK_CELLS wide: [from, to] in cells, ascending */
+  breaks: [number, number][];
+  /** the grid's extent on this axis */
+  size: number;
+}
+
 interface Geo {
   w: number;
   h: number;
+  /** px per drawn cell */
   s: number;
+  /** the map area's left and top edges in px (the header band is above it) */
   ox: number;
   oy: number;
-  gx: number;
-  gy: number;
+  /** height of the header band */
+  top: number;
+  x: Axis;
+  y: Axis;
 }
 
-function geometry(w: number, h: number, grid: [number, number]): Geo {
-  const [gx, gy] = grid;
-  const s = Math.max(0.5, Math.min((w - 2 * PAD) / gx, (h - 2 * PAD) / gy));
-  return { w, h, s, ox: (w - s * gx) / 2, oy: (h - s * gy) / 2, gx, gy };
+/** What one axis must show (the spans merged) and the empty stretches between them longer than
+ *  MIN_BREAK_CELLS; the whole grid when nothing is known. */
+function fitAxis(spans: [number, number][], size: number): { from: number; to: number; breaks: [number, number][] } {
+  const merged: [number, number][] = [];
+  for (const [a, b] of [...spans].sort((p, q) => p[0] - q[0])) {
+    const last = merged[merged.length - 1];
+    if (last && a <= last[1]) last[1] = Math.max(last[1], b);
+    else merged.push([a, b]);
+  }
+  if (merged.length === 0) return { from: 0, to: size, breaks: [] };
+  const breaks: [number, number][] = [];
+  for (let i = 1; i < merged.length; i += 1) {
+    const from = merged[i - 1][1];
+    const to = merged[i][0];
+    if (to - from > MIN_BREAK_CELLS) breaks.push([from, to]);
+  }
+  return { from: merged[0][0], to: merged[merged.length - 1][1], breaks };
+}
+
+/** An axis's length in drawn cells (a break counts BREAK_CELLS). */
+function drawnLength(f: ReturnType<typeof fitAxis>): number {
+  return Math.max(1, f.to - f.from - f.breaks.reduce((acc, [a, b]) => acc + (b - a - BREAK_CELLS), 0));
+}
+
+/** Width over height of what the map shows, for the canvas box: a run whose work stands in a
+ *  column gets a taller canvas (up to the box's max height) instead of a smaller scale. Kept
+ *  between 1:2 and 5:2. */
+function mapAspect(model: Model): number {
+  const x = drawnLength(fitAxis(model.spans.x, model.grid[0]));
+  const y = drawnLength(fitAxis(model.spans.y, model.grid[1]));
+  return Math.min(2.5, Math.max(0.5, x / y));
+}
+
+/** The map area under the header band, scaled to what the run uses (fitAxis on both axes, one
+ *  scale for both so zones stay round) and centred on it; the room left over shows more of the
+ *  site around it. */
+function geometry(w: number, h: number, model: Model): Geo {
+  const top = model.banners.length === 0 ? HEADER_QUIET_H : w < COMPACT_W ? HEADER_NARROW_H : HEADER_H;
+  const availW = Math.max(1, w - AXIS_W - PAD);
+  const availH = Math.max(1, h - top - 2 * PAD);
+  const fx = fitAxis(model.spans.x, model.grid[0]);
+  const fy = fitAxis(model.spans.y, model.grid[1]);
+  const lenX = drawnLength(fx);
+  const lenY = drawnLength(fy);
+  const s = Math.max(0.5, Math.min(availW / lenX, availH / lenY));
+  const axis = (f: ReturnType<typeof fitAxis>, len: number, avail: number, size: number): Axis => ({
+    lo: f.from - (avail / s - len) / 2,
+    len: avail / s,
+    breaks: f.breaks,
+    size,
+  });
+  return {
+    w,
+    h,
+    s,
+    ox: AXIS_W,
+    oy: top + PAD,
+    top,
+    x: axis(fx, lenX, availW, model.grid[0]),
+    y: axis(fy, lenY, availH, model.grid[1]),
+  };
+}
+
+/** Drawn cells from the axis's first cell to `v`: a break counts BREAK_CELLS however long. */
+function drawnCells(a: Axis, v: number): number {
+  let u = v - a.lo;
+  for (const [from, to] of a.breaks) {
+    if (v <= from) break;
+    u -= (Math.min(v, to) - from) * (1 - BREAK_CELLS / (to - from));
+  }
+  return u;
+}
+
+/** Whether a cell line falls inside a break (it is not drawn there). */
+function inBreak(a: Axis, v: number): boolean {
+  return a.breaks.some(([from, to]) => v > from && v < to);
 }
 
 /** Grid y grows northward (the depot sits on the south edge), so the canvas flips it. */
 function toPx(g: Geo, x: number, y: number): [number, number] {
-  return [g.ox + x * g.s, g.oy + (g.gy - y) * g.s];
+  return [g.ox + drawnCells(g.x, x) * g.s, g.oy + (g.y.len - drawnCells(g.y, y)) * g.s];
 }
 
 /** Marker outline by robot type, as polygon points around (0,0); null means a circle. */
@@ -481,18 +604,220 @@ function batteryColor(frac: number): string {
 interface Placed extends SnapRobot {
   x: number;
   y: number;
+  /** the robot's own map point, before the cluster spread it on a ring */
+  bx: number;
+  by: number;
   dir: [number, number];
+  /** the cluster it was placed in (robots sharing a spot) */
+  cluster: string;
 }
 
-/** Vertical extent of a robot's marker plus its label stack (mirrors drawRobot's layout). */
-function labelTop(p: Placed): number {
-  if (p.dir[1] < -0.3) return p.y - (RING + 5) - 3 - (p.caption ? 12 : 0) - 15 - 2;
-  return p.y - RING - 2;
+// ------------------------------------------------------------------ label layout
+interface Box {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
 }
-function labelBottom(p: Placed): number {
-  if (p.dir[1] > 0.3) return p.y + RING + 5 + 10 + (p.caption ? 12 : 0) + 5 + 5;
-  if (Math.abs(p.dir[1]) <= 0.3) return p.y + (p.caption ? 9 : -2) + 5 + 5;
-  return p.y + RING + 2;
+
+function overlapArea(a: Box, b: Box): number {
+  return Math.max(0, Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0)) * Math.max(0, Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0));
+}
+
+/** The box of `text` at (x, baseline y) in a `size` px font, placed as `align` places it. */
+function textBox(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  font: string,
+  size: number,
+  x: number,
+  y: number,
+  align: CanvasTextAlign,
+): Box {
+  const w = measure(ctx, text, font);
+  const x0 = align === "left" ? x : align === "right" ? x - w : x - w / 2;
+  return { x0, y0: y - size, x1: x0 + w, y1: y + size * 0.3 };
+}
+
+/** A box slid inside `bounds` (as far as it fits). */
+function slideInto(b: Box, bounds: Box): Box {
+  const dx = b.x0 < bounds.x0 ? bounds.x0 - b.x0 : b.x1 > bounds.x1 ? Math.max(bounds.x0 - b.x0, bounds.x1 - b.x1) : 0;
+  const dy = b.y0 < bounds.y0 ? bounds.y0 - b.y0 : b.y1 > bounds.y1 ? Math.max(bounds.y0 - b.y0, bounds.y1 - b.y1) : 0;
+  return { x0: b.x0 + dx, y0: b.y0 + dy, x1: b.x1 + dx, y1: b.y1 + dy };
+}
+
+/** Where the canvas has room for labels: all of it under the header band, 4 px in. */
+function labelBounds(geo: Geo): Box {
+  return { x0: 4, y0: geo.top + 4, x1: geo.w - 4, y1: geo.h - 4 };
+}
+
+/** The first spot (a box) that overlaps nothing in `taken`, else the one that overlaps it least,
+ *  each slid inside `bounds` first. */
+function bestSpot(spots: Box[], taken: Box[], bounds: Box): Box {
+  let best = slideInto(spots[0], bounds);
+  let bestCost = Infinity;
+  for (const spot of spots) {
+    const b = slideInto(spot, bounds);
+    const cost = taken.reduce((acc, t) => acc + overlapArea(b, t), 0);
+    if (cost === 0) return b;
+    if (cost < bestCost) {
+      best = b;
+      bestCost = cost;
+    }
+  }
+  return best;
+}
+
+/** A zone's caption ("Z1 S1 landing pad"): the id at (x, baseline y), the structures after it. */
+interface ZoneCaption {
+  id: string;
+  idW: number;
+  extra: string;
+  x: number;
+  y: number;
+  box: Box;
+}
+
+/** Each zone's caption beside its circle: above it, else below, left or right of it, the first
+ *  spot clear of the other zones' circles and the captions placed before it. It depends on the
+ *  geometry only, so it holds still while the robots move. */
+function zoneCaptions(ctx: CanvasRenderingContext2D, geo: Geo, model: Model): ZoneCaption[] {
+  const idFont = `600 12px ${FONT_SANS}`;
+  const extraFont = `11px ${FONT_SANS}`;
+  const bounds = labelBounds(geo);
+  const circles = model.zones.map((z) => {
+    const [cx, cy] = toPx(geo, z.center[0], z.center[1]);
+    const r = z.radius * geo.s;
+    return { id: z.id, cx, cy, r, box: { x0: cx - r, y0: cy - r, x1: cx + r, y1: cy + r } };
+  });
+  const out: ZoneCaption[] = [];
+  for (const c of circles) {
+    let extra = (model.structureLabels[c.id] ?? []).join(", ");
+    if (extra.length > 30) extra = extra.slice(0, 29) + "…";
+    const idW = measure(ctx, c.id, idFont);
+    const width = idW + (extra ? measure(ctx, extra, extraFont) + 6 : 0);
+    // the box of a caption whose baseline starts at (x, y): 12 px of text above it, 4 below
+    const at = (x: number, y: number): Box => ({ x0: x - 2, y0: y - 12, x1: x + width + 2, y1: y + 4 });
+    const spots = [
+      at(c.cx - width / 2, c.cy - c.r - 7),
+      at(c.cx - width / 2, c.cy + c.r + 15),
+      at(c.cx - c.r - 8 - width, c.cy + 4),
+      at(c.cx + c.r + 8, c.cy + 4),
+    ];
+    const taken = [...circles.filter((o) => o.id !== c.id).map((o) => o.box), ...out.map((o) => o.box)];
+    const box = bestSpot(spots, taken, bounds);
+    out.push({ id: c.id, idW, extra, x: box.x0 + 2, y: box.y0 + 12, box });
+  }
+  return out;
+}
+
+const idTagFont = () => `600 11px ${FONT_MONO}`;
+
+/** A robot's id beside its marker, on the outside of its cluster; a robot alone has none (its
+ *  callout row sits right next to it). */
+interface IdTag {
+  id: string;
+  x: number;
+  y: number;
+  align: CanvasTextAlign;
+  box: Box;
+}
+
+function idTag(ctx: CanvasRenderingContext2D, p: Placed): IdTag {
+  const [dx, dy] = p.dir;
+  const align: CanvasTextAlign = Math.abs(dx) > 0.3 ? (dx > 0 ? "left" : "right") : "center";
+  const x = p.x + dx * (RING + 3);
+  const y = dy > 0.3 ? p.y + RING + 13 : dy < -0.3 ? p.y - RING - 4 : p.y + 4;
+  return { id: p.id, x, y, align, box: textBox(ctx, p.id, idTagFont(), 11, x, y, align) };
+}
+
+/** The robots that share a spot (placeRobots' clusters, a robot alone included) in one callout
+ *  beside it: a row per robot in fleet order with its id, its battery bar and what it is doing.
+ *  On a narrow canvas (compact) the rows keep the id and the bar, and the task list under the
+ *  map says the rest. */
+interface Callout {
+  rows: Placed[];
+  box: Box;
+  idW: number;
+  compact: boolean;
+}
+
+const CALLOUT_ROW_H = 15;
+const CALLOUT_PAD = 6;
+const CALLOUT_BAR_W = 22;
+/** Canvas width under which callouts leave the captions out. */
+const COMPACT_W = 520;
+
+/** What a callout row says after the bar: the caption, with the charge first when it is low. */
+function rowText(p: Placed): string {
+  const frac = p.cap > 0 ? p.battery / p.cap : 0;
+  return p.status !== "failed" && frac < 0.2 ? `${Math.round(frac * 100)}% · ${p.caption}` : p.caption;
+}
+
+/** Lower first: whose cluster gets its callout placed first. */
+const CALLOUT_RANK: Record<RobotStatus, number> = { failed: 0, working: 1, moving: 2, idle: 3, done: 4 };
+
+/** The id tags and callouts of a frame, laid out so they keep clear of each other where the
+ *  canvas has room: the zone captions, the markers and the id tags are placed first, then each
+ *  cluster's callout (failed robots' clusters first) right of the cluster and its tags, else
+ *  left, below or above them, the first spot clear of everything placed, else the least
+ *  crowded one. */
+function layoutLabels(
+  ctx: CanvasRenderingContext2D,
+  geo: Geo,
+  model: Model,
+  placed: Placed[],
+  zones: ZoneCaption[],
+): { tags: IdTag[]; callouts: Callout[] } {
+  const bounds = labelBounds(geo);
+  const compact = geo.w < COMPACT_W;
+  const clusters = new Map<string, Placed[]>();
+  for (const p of placed) (clusters.get(p.cluster) ?? clusters.set(p.cluster, []).get(p.cluster)!).push(p);
+  const tags = placed.filter((p) => (clusters.get(p.cluster)?.length ?? 1) > 1).map((p) => idTag(ctx, p));
+  const taken: Box[] = [
+    ...zones.map((z) => z.box),
+    ...placed.map((p) => ({ x0: p.x - RING - 1, y0: p.y - RING - 1, x1: p.x + RING + 1, y1: p.y + RING + 1 })),
+    ...tags.map((t) => t.box),
+  ];
+  if (model.depot) {
+    const [dx, dy] = toPx(geo, model.depot[0], model.depot[1]);
+    taken.push({ x0: dx - 18, y0: dy - 32, x1: dx + 18, y1: dy + 18 }); // the pad and its "Depot" label
+  }
+  const rank = (rows: Placed[]) => Math.min(...rows.map((p) => CALLOUT_RANK[p.status]));
+  const first = (rows: Placed[]) => Math.min(...rows.map((p) => model.robots[p.id]?.index ?? 99));
+  const order = [...clusters.values()].sort((a, b) => rank(a) - rank(b) || first(a) - first(b));
+  const idFont = `600 12px ${FONT_MONO}`;
+  const capFont = `11px ${FONT_SANS}`;
+  const callouts: Callout[] = [];
+  for (const rows of order) {
+    const idW = Math.max(...rows.map((p) => measure(ctx, p.id, idFont)));
+    const capW = compact ? 0 : Math.max(0, ...rows.map((p) => measure(ctx, rowText(p), capFont)));
+    const w = CALLOUT_PAD + idW + 6 + CALLOUT_BAR_W + (capW > 0 ? 6 + capW : 0) + CALLOUT_PAD;
+    const h = rows.length * CALLOUT_ROW_H + 8;
+    const cx = rows.reduce((acc, p) => acc + p.bx, 0) / rows.length;
+    const cy = rows.reduce((acc, p) => acc + p.by, 0) / rows.length;
+    // the cluster as drawn: its markers and its id tags
+    const members = new Set(rows.map((p) => p.id));
+    const parts = [
+      ...rows.map((p) => ({ x0: p.x - RING, y0: p.y - RING, x1: p.x + RING, y1: p.y + RING })),
+      ...tags.filter((t) => members.has(t.id)).map((t) => t.box),
+    ];
+    const ext: Box = {
+      x0: Math.min(...parts.map((b) => b.x0)),
+      y0: Math.min(...parts.map((b) => b.y0)),
+      x1: Math.max(...parts.map((b) => b.x1)),
+      y1: Math.max(...parts.map((b) => b.y1)),
+    };
+    const at = (x: number, y: number): Box => ({ x0: x, y0: y, x1: x + w, y1: y + h });
+    const box = bestSpot(
+      [at(ext.x1 + 6, cy - h / 2), at(ext.x0 - 6 - w, cy - h / 2), at(cx - w / 2, ext.y1 + 4), at(cx - w / 2, ext.y0 - 4 - h)],
+      taken,
+      bounds,
+    );
+    taken.push(box);
+    callouts.push({ rows, box, idW, compact });
+  }
+  return { tags, callouts };
 }
 
 /** Robots sharing a cell are spread on a small ring (offsets eased between draws). */
@@ -509,7 +834,7 @@ function placeRobots(
     (groups.get(key) ?? groups.set(key, []).get(key)!).push(r);
   }
   const out: Placed[] = [];
-  for (const group of groups.values()) {
+  for (const [key, group] of groups) {
     group.sort((a, b) => (model.robots[a.id]?.index ?? 99) - (model.robots[b.id]?.index ?? 99));
     const n = group.length;
     const radius = n === 1 ? 0 : n <= 2 ? 14 : n <= 4 ? 19 : 12 + 2.7 * n;
@@ -522,7 +847,7 @@ function placeRobots(
       offsets.set(r.id, cur);
       const [px, py] = toPx(geo, r.pos[0], r.pos[1]);
       const dir: [number, number] = n === 1 ? [0, 1] : [Math.cos(a), Math.sin(a)];
-      out.push({ ...r, x: px + cur.x, y: py + cur.y, dir });
+      out.push({ ...r, x: px + cur.x, y: py + cur.y, bx: px, by: py, dir, cluster: key });
     });
   }
   return out;
@@ -538,45 +863,105 @@ interface DrawInput {
   pointer: { x: number; y: number } | null;
   /** fraction of the hold still to run while autoplay waits on an event, else null */
   hold: { frac: number } | null;
+  /** the zone captions (zoneCaptions) */
+  zoneCaps: ZoneCaption[];
 }
 
-function drawSite({ ctx, geo, model, snap, placed }: DrawInput) {
-  const { w, h, s, gx, gy } = geo;
+/** A run of short teeth along a straight edge (a break's mark): horizontal at y, or vertical at
+ *  x, between `from` and `to`. */
+function zigzag(ctx: CanvasRenderingContext2D, horizontal: boolean, at: number, from: number, to: number) {
+  ctx.beginPath();
+  for (let t = from, k = 0; t <= to + 0.01; t += 4, k += 1) {
+    const off = k % 2 === 0 ? -2 : 2;
+    if (horizontal) {
+      if (k === 0) ctx.moveTo(t, at + off);
+      else ctx.lineTo(t, at + off);
+    } else if (k === 0) ctx.moveTo(at + off, t);
+    else ctx.lineTo(at + off, t);
+  }
+  ctx.stroke();
+}
+
+/** The breaks: each stretch drawn BREAK_CELLS wide on the map's surface with no grid lines,
+ *  zigzag edges, and the cells it stands for ("21 cells"). Called inside the map area's clip. */
+function drawBreaks(ctx: CanvasRenderingContext2D, geo: Geo, area: Box) {
+  const font = `11px ${FONT_SANS}`;
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = C.border;
+  for (const [from, to] of geo.y.breaks) {
+    const south = toPx(geo, 0, from)[1];
+    const north = toPx(geo, 0, to)[1];
+    ctx.fillStyle = C.bg;
+    ctx.fillRect(area.x0, north, area.x1 - area.x0, south - north);
+    zigzag(ctx, true, north, area.x0, area.x1);
+    zigzag(ctx, true, south, area.x0, area.x1);
+    label(ctx, `${Math.round(to - from)} cells`, area.x0 + 8, (north + south) / 2 + 4, font, C.faint, "left");
+  }
+  for (const [from, to] of geo.x.breaks) {
+    const west = toPx(geo, from, 0)[0];
+    const east = toPx(geo, to, 0)[0];
+    ctx.fillStyle = C.bg;
+    ctx.fillRect(west, area.y0, east - west, area.y1 - area.y0);
+    zigzag(ctx, false, west, area.y0, area.y1);
+    zigzag(ctx, false, east, area.y0, area.y1);
+    ctx.save();
+    ctx.translate((west + east) / 2 + 4, area.y1 - 8);
+    ctx.rotate(-Math.PI / 2);
+    label(ctx, `${Math.round(to - from)} cells`, 0, 0, font, C.faint, "left");
+    ctx.restore();
+  }
+}
+
+function drawSite({ ctx, geo, model, snap, placed, zoneCaps }: DrawInput) {
+  const { w, h, s } = geo;
+  const [gx, gy] = model.grid;
   ctx.fillStyle = C.bg;
   ctx.fillRect(0, 0, w, h);
 
-  // grid: hairlines every cell (when there is room) and every 5 cells
-  const [x0, yTop] = toPx(geo, 0, gy);
-  const [x1, yBot] = toPx(geo, gx, 0);
+  // the map area under the header band: grid lines, the site's edge and the breaks stay in it
+  const area: Box = { x0: geo.ox, y0: geo.oy, x1: geo.ox + geo.x.len * s, y1: geo.oy + geo.y.len * s };
+  const [sx0, syTop] = toPx(geo, 0, gy);
+  const [sx1, syBot] = toPx(geo, gx, 0);
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(area.x0, area.y0, area.x1 - area.x0, area.y1 - area.y0);
+  ctx.clip();
+  // grid: hairlines every cell (when there is room) and every 5 cells, none inside a break
   ctx.lineWidth = 1;
   for (let x = 0; x <= gx; x++) {
     const major = x % 5 === 0;
-    if (!major && s < 9) continue;
+    if ((!major && s < 9) || inBreak(geo.x, x)) continue;
     ctx.strokeStyle = major ? C.gridMajor : C.grid;
-    const px = Math.round(x0 + x * s) + 0.5;
+    const px = Math.round(toPx(geo, x, 0)[0]) + 0.5;
     ctx.beginPath();
-    ctx.moveTo(px, yTop);
-    ctx.lineTo(px, yBot);
+    ctx.moveTo(px, syTop);
+    ctx.lineTo(px, syBot);
     ctx.stroke();
   }
   for (let y = 0; y <= gy; y++) {
     const major = y % 5 === 0;
-    if (!major && s < 9) continue;
+    if ((!major && s < 9) || inBreak(geo.y, y)) continue;
     ctx.strokeStyle = major ? C.gridMajor : C.grid;
-    const py = Math.round(yBot - y * s) + 0.5;
+    const py = Math.round(toPx(geo, 0, y)[1]) + 0.5;
     ctx.beginPath();
-    ctx.moveTo(x0, py);
-    ctx.lineTo(x1, py);
+    ctx.moveTo(sx0, py);
+    ctx.lineTo(sx1, py);
     ctx.stroke();
   }
   ctx.strokeStyle = C.border;
-  ctx.strokeRect(Math.round(x0) + 0.5, Math.round(yTop) + 0.5, Math.round(s * gx), Math.round(s * gy));
-  // tick labels every 10 cells
+  ctx.strokeRect(Math.round(sx0) + 0.5, Math.round(syTop) + 0.5, Math.round(sx1 - sx0), Math.round(syBot - syTop));
+  drawBreaks(ctx, geo, area);
+  ctx.restore();
+  // tick labels every 10 cells, where the map shows the line
   for (let x = 0; x <= gx; x += 10) {
-    label(ctx, String(x), x0 + x * s, yBot + 13, `11px ${FONT_MONO}`, C.faint, "center");
+    const px = toPx(geo, x, 0)[0];
+    if (inBreak(geo.x, x) || px < area.x0 - 1 || px > area.x1 + 1) continue;
+    label(ctx, String(x), px, area.y1 + 13, `11px ${FONT_MONO}`, C.faint, "center");
   }
   for (let y = 0; y <= gy; y += 10) {
-    label(ctx, String(y), x0 - 5, yBot - y * s + 4, `11px ${FONT_MONO}`, C.faint, "right");
+    const py = toPx(geo, 0, y)[1];
+    if (inBreak(geo.y, y) || py < area.y0 - 1 || py > area.y1 + 1) continue;
+    label(ctx, String(y), area.x0 - 5, py + 4, `11px ${FONT_MONO}`, C.faint, "right");
   }
 
   // zones
@@ -592,24 +977,11 @@ function drawSite({ ctx, geo, model, snap, placed }: DrawInput) {
     ctx.lineWidth = busy ? 2 : 1.25;
     ctx.strokeStyle = withAlpha(color, busy ? 0.95 : 0.5);
     ctx.stroke();
-    // caption outside the circle, pushed further out when a robot cluster's labels overshoot it
-    const inZone = placed.filter((p) => Math.hypot(p.pos[0] - z.center[0], p.pos[1] - z.center[1]) <= z.radius + 0.5);
-    const topMost = Math.min(cy - r, ...inZone.map(labelTop));
-    const bottomMost = Math.max(cy + r, ...inZone.map(labelBottom));
-    const above = topMost - 8 > yTop + 14;
-    const capY = above ? topMost - 7 : bottomMost + 14;
-    const structures = model.structureLabels[z.id] ?? [];
-    let extra = structures.join(", ");
-    if (extra.length > 30) extra = extra.slice(0, 29) + "…";
-    const idFont = `600 12px ${FONT_SANS}`;
-    const extraFont = `11px ${FONT_SANS}`;
-    ctx.font = idFont;
-    const idW = ctx.measureText(z.id).width;
-    ctx.font = extraFont;
-    const extraW = extra ? ctx.measureText(extra).width + 6 : 0;
-    const startX = cx - (idW + extraW) / 2;
-    label(ctx, z.id, startX, capY, idFont, C.text, "left");
-    if (extra) label(ctx, extra, startX + idW + 6, capY, extraFont, C.muted, "left");
+  }
+  // captions beside the circles, where zoneCaptions found room
+  for (const c of zoneCaps) {
+    label(ctx, c.id, c.x, c.y, `600 12px ${FONT_SANS}`, C.text, "left");
+    if (c.extra) label(ctx, c.extra, c.x + c.idW + 6, c.y, `11px ${FONT_SANS}`, C.muted, "left");
   }
 
   // depot: a dashed pad the parked robots sit on
@@ -662,6 +1034,8 @@ function drawSite({ ctx, geo, model, snap, placed }: DrawInput) {
   }
 }
 
+/** A robot's marker: type shape in the type colour, status ring, the red X once it failed. Its id
+ *  and the rest are its id tag and its callout row (layoutLabels). */
 function drawRobot(ctx: CanvasRenderingContext2D, p: Placed, hovered: boolean) {
   const color = robotTypeColor(p.type);
   const failed = p.status === "failed";
@@ -703,50 +1077,41 @@ function drawRobot(ctx: CanvasRenderingContext2D, p: Placed, hovered: boolean) {
     }
     ctx.lineCap = "butt";
   }
+}
 
-  // labels: id, caption, battery bar, laid out away from the cluster centre
-  const [dx, dy] = p.dir;
-  const ax = p.x + dx * (RING + 5);
-  const ay = p.y + dy * (RING + 5);
-  const align: CanvasTextAlign = Math.abs(dx) > 0.3 ? (dx > 0 ? "left" : "right") : "center";
-  const vert = dy > 0.3 ? "down" : dy < -0.3 ? "up" : "middle";
-  const cap = p.caption;
-  const idFont = `600 12px ${FONT_MONO}`;
-  const capFont = `11px ${FONT_SANS}`;
-  let idY: number;
-  let capY: number | null;
-  let barY: number;
-  if (vert === "down") {
-    idY = ay + 11;
-    capY = cap ? idY + 13 : null;
-    barY = (capY ?? idY) + 5;
-  } else if (vert === "up") {
-    idY = ay - 3;
-    capY = cap ? idY - 13 : null;
-    barY = (capY ?? idY) - 16;
-  } else {
-    idY = p.y - 2;
-    capY = cap ? idY + 12 : null;
-    barY = (capY ?? idY) + 5;
-  }
-  label(ctx, p.id, ax, idY, idFont, hovered ? "#ffffff" : C.text, align);
-  if (cap && capY !== null) label(ctx, cap, ax, capY, capFont, failed ? STATUS_COLORS.failed : C.muted, align);
-  const frac = p.cap > 0 ? Math.max(0, Math.min(1, p.battery / p.cap)) : 0;
-  const bx = align === "left" ? ax : align === "right" ? ax - BAR_W : ax - BAR_W / 2;
-  roundRect(ctx, bx, barY, BAR_W, 3, 1.5);
-  ctx.fillStyle = C.track;
+function drawIdTag(ctx: CanvasRenderingContext2D, tag: IdTag, hovered: boolean) {
+  label(ctx, tag.id, tag.x, tag.y, idTagFont(), hovered ? "#ffffff" : C.text, tag.align);
+}
+
+/** A cluster's callout: one row per robot, the id, the battery bar (neutral, amber under 20 %,
+ *  red under 10 %) and what the robot is doing ("failed at 10 h" in red), on a dark panel. */
+function drawCallout(ctx: CanvasRenderingContext2D, c: Callout, hover: string | null) {
+  const { box } = c;
+  roundRect(ctx, box.x0, box.y0, box.x1 - box.x0, box.y1 - box.y0, 5);
+  ctx.fillStyle = "rgba(11,15,23,0.82)";
   ctx.fill();
-  if (frac > 0) {
-    roundRect(ctx, bx, barY, Math.max(2, BAR_W * frac), 3, 1.5);
-    ctx.fillStyle = withAlpha(batteryColor(frac), failed ? 0.5 : 1);
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = "rgba(148,163,184,0.22)";
+  ctx.stroke();
+  c.rows.forEach((p, i) => {
+    const failed = p.status === "failed";
+    const base = box.y0 + 4 + CALLOUT_ROW_H * i + 11;
+    let x = box.x0 + CALLOUT_PAD;
+    plainText(ctx, p.id, x, base, `600 12px ${FONT_MONO}`, p.id === hover ? "#ffffff" : C.text);
+    x += c.idW + 6;
+    const frac = p.cap > 0 ? Math.max(0, Math.min(1, p.battery / p.cap)) : 0;
+    roundRect(ctx, x, base - 5, CALLOUT_BAR_W, 3, 1.5);
+    ctx.fillStyle = C.track;
     ctx.fill();
-  }
-  // a low battery is quantified next to its bar (text in text colour; the bar carries the state)
-  if (frac < 0.2 && !failed) {
-    const pct = `${Math.round(frac * 100)}%`;
-    const px = align === "right" ? bx - 4 : bx + BAR_W + 4;
-    label(ctx, pct, px, barY + 4, `600 11px ${FONT_MONO}`, C.text, align === "right" ? "right" : "left");
-  }
+    if (frac > 0) {
+      roundRect(ctx, x, base - 5, Math.max(2, CALLOUT_BAR_W * frac), 3, 1.5);
+      ctx.fillStyle = withAlpha(batteryColor(frac), failed ? 0.5 : 1);
+      ctx.fill();
+    }
+    if (!c.compact) {
+      plainText(ctx, rowText(p), x + CALLOUT_BAR_W + 6, base, `11px ${FONT_SANS}`, failed ? STATUS_COLORS.failed : C.muted);
+    }
+  });
 }
 
 function drawTooltip({ ctx, geo, model, pointer, placed, hover }: DrawInput) {
@@ -834,17 +1199,18 @@ function drawVerdict(ctx: CanvasRenderingContext2D, verdict: "ok" | "fail", cx: 
 }
 
 /**
- * Event banner across the top of the canvas, in the event colour: "30.0 h · EX2 failed on T4
- * (79% done) → CP-SAT rescheduled 11 tasks in <0.01 s → ✓ verified, 80 h → 91 h". One line
- * when it fits, otherwise the outcome wraps to a second line; clauses that still overflow are
- * ellipsised. While autoplay holds on the event a countdown bar drains along the bottom edge
- * and a hint says how to continue. Returns the banner height (0 when none is showing).
+ * Event banner in the header band, in the event colour: "10.0 h · EX2 failed on T5 (44% done)
+ * → CP-SAT rescheduled 13 tasks in <0.01 s → ✓ verified, 89 h → 91 h". One line when it fits,
+ * otherwise the outcome goes under the lead, a clause that does not fit taking the next line
+ * while the band has one (two in all, three on a narrow canvas); what still overflows is
+ * ellipsised. It covers the header line, never the map. While autoplay holds on the event a
+ * countdown bar drains along the bottom edge and a hint says how to continue.
  */
-function drawBanner({ ctx, geo, model, snap, hold }: DrawInput): number {
+function drawBanner({ ctx, geo, model, snap, hold }: DrawInput) {
   const b = pickBanner(model, snap.t);
-  if (!b) return 0;
+  if (!b) return;
   const fade = clamp01((PULSE_H - Math.abs(snap.t - b.t)) / BANNER_FADE_H);
-  if (fade <= 0) return 0;
+  if (fade <= 0) return;
   const darkInk = luminance(b.color) > 0.35; // amber and yellow bands take dark ink
   const ink = darkInk ? "#0b0f14" : "#ffffff";
   const inkMuted = darkInk ? "rgba(11,15,23,0.7)" : "rgba(255,255,255,0.78)";
@@ -868,8 +1234,9 @@ function drawBanner({ ctx, geo, model, snap, hold }: DrawInput): number {
     (acc, text, i) => acc + arrowW + (i === b.outcome.length - 1 && b.verdict ? glyphW : 0) + measure(ctx, text, restFont),
     0,
   );
-  const twoLines = b.outcome.length > 0 && timeW + sepW + leadW + outcomeW > maxW;
-  const H = twoLines ? lineH * 2 + 12 : BANNER_H;
+  const oneLine = b.outcome.length === 0 || timeW + sepW + leadW + outcomeW <= maxW;
+  const H = geo.top;
+  const maxLines = Math.max(2, Math.floor((H - 12) / lineH));
 
   ctx.save();
   ctx.globalAlpha = fade;
@@ -882,7 +1249,7 @@ function drawBanner({ ctx, geo, model, snap, hold }: DrawInput): number {
   ctx.fillRect(0, H - 1, geo.w, 1);
 
   // line 1: time · lead
-  const y1 = twoLines ? 8 + 13 : H / 2 + 4.5;
+  const y1 = oneLine ? H / 2 + 4.5 : 8 + 13;
   let x = padX;
   x += plainText(ctx, time, x, y1, timeFont, ink);
   x += plainText(ctx, sep, x, y1, leadFont, inkMuted);
@@ -890,12 +1257,20 @@ function drawBanner({ ctx, geo, model, snap, hold }: DrawInput): number {
 
   // outcome clauses, each after an arrow; the verdict glyph before the last one
   let y = y1;
-  if (twoLines) {
+  let line = 1;
+  if (!oneLine) {
     x = padX;
     y = y1 + lineH;
+    line = 2;
   }
   b.outcome.forEach((text, i) => {
     const last = i === b.outcome.length - 1;
+    const need = arrowW + (last && b.verdict ? glyphW : 0) + measure(ctx, text, restFont);
+    if (x > padX && x + need > geo.w - padX && line < maxLines) {
+      x = padX;
+      y += lineH;
+      line += 1;
+    }
     x += plainText(ctx, arrow, x, y, restFont, inkMuted);
     if (last && b.verdict) {
       drawVerdict(ctx, b.verdict, x + 6, y - 4.5, ink);
@@ -923,16 +1298,17 @@ function drawBanner({ ctx, geo, model, snap, hold }: DrawInput): number {
     plainText(ctx, fitText(ctx, hint, hintFont, pw - 20), px + 10, py + 15, hintFont, C.text);
   }
   ctx.restore();
-  return H;
 }
 
-function drawOverlay({ ctx, geo, model, snap }: DrawInput, topInset: number) {
+/** The header band's own line: the site, the simulated time and day, and the tasks done (the
+ *  event banner covers it while an event shows). */
+function drawHeaderLine({ ctx, geo, model, snap }: DrawInput) {
   const day = Math.floor(snap.t / 24) + 1;
-  const [x0, yTop] = toPx(geo, 0, geo.gy);
-  const [x1] = toPx(geo, geo.gx, 0);
-  const y = topInset > 0 ? topInset + 16 : yTop + 16;
-  label(ctx, `${model.siteName} · t = ${snap.t.toFixed(1)} h · day ${day}`, x0 + 8, y, `600 13px ${FONT_SANS}`, C.text, "left");
-  label(ctx, `${snap.done.length}/${model.total} tasks done`, x1 - 8, y, `12px ${FONT_SANS}`, C.muted, "right");
+  const y = geo.top / 2 + 4.5;
+  ctx.fillStyle = "rgba(148,163,184,0.18)";
+  ctx.fillRect(0, geo.top - 1, geo.w, 1);
+  label(ctx, `${model.siteName} · t = ${snap.t.toFixed(1)} h · day ${day}`, 12, y, `600 13px ${FONT_SANS}`, C.text, "left");
+  label(ctx, `${snap.done.length}/${model.total} tasks done`, geo.w - 12, y, `12px ${FONT_SANS}`, C.muted, "right");
 }
 
 // ------------------------------------------------------------------ small SVG pieces for the DOM
@@ -984,6 +1360,7 @@ export function SimReplay({
   aside,
 }: SimReplayProps) {
   const model = useMemo(() => buildModel(sim, plan, tasks), [sim, plan, tasks]);
+  const aspect = useMemo(() => mapAspect(model), [model]);
 
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -1046,19 +1423,23 @@ export function SimReplay({
       label(ctx, "No simulation frames", w / 2, h / 2, `12px ${FONT_SANS}`, C.muted);
       return;
     }
-    const geo = geometry(w, h, m.grid);
+    const geo = geometry(w, h, m);
     const placed = placeRobots(snap.robots, m, geo, offsetsRef.current, ease);
     hitRef.current = placed.map((p) => ({ id: p.id, x: p.x, y: p.y }));
     const hd = holdRef.current;
     const hold = hd ? { frac: clamp01((hd.until - performance.now()) / HOLD_MS) } : null;
-    const input: DrawInput = { ctx, geo, model: m, snap, placed, hover: hoverRef.current, pointer: pointerRef.current, hold };
-    drawSite(input);
     const hover = hoverRef.current;
+    const zoneCaps = zoneCaptions(ctx, geo, m);
+    const { tags, callouts } = layoutLabels(ctx, geo, m, placed, zoneCaps);
+    const input: DrawInput = { ctx, geo, model: m, snap, placed, hover, pointer: pointerRef.current, hold, zoneCaps };
+    drawSite(input);
     for (const p of placed) if (p.id !== hover) drawRobot(ctx, p, false);
     const hp = hover ? placed.find((p) => p.id === hover) : undefined;
     if (hp) drawRobot(ctx, hp, true);
-    const bannerH = drawBanner(input);
-    drawOverlay(input, bannerH);
+    for (const tag of tags) drawIdTag(ctx, tag, tag.id === hover);
+    for (const c of callouts) drawCallout(ctx, c, hover);
+    drawHeaderLine(input);
+    drawBanner(input);
     drawTooltip(input);
   }, []);
 
@@ -1316,7 +1697,6 @@ export function SimReplay({
   const robotTypes = Array.from(new Set(model.robotList.map((r) => r.type)));
   const statuses: RobotStatus[] = ["idle", "moving", "working", "failed", "done"];
   const eventKinds = Object.keys(EVENT_COLORS).filter((k) => k !== "battery_low");
-  const [gx, gy] = model.grid;
 
   const legend = (
     <div className={`flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[11px] ${mutedClass}`}>
@@ -1428,7 +1808,7 @@ export function SimReplay({
         }}
         onKeyDown={onKeyDown}
         className="relative w-full overflow-hidden rounded-xl border border-line focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
-        style={{ aspectRatio: `${gx} / ${gy}`, maxHeight, backgroundColor: C.bg }}
+        style={{ aspectRatio: aspect, maxHeight, backgroundColor: C.bg }}
       >
         <canvas
           ref={canvasRef}

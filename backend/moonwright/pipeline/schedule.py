@@ -51,7 +51,12 @@ max(scheduled start, arrival), a disturbance-free replay of a solver schedule st
 task on time; a ``task_overrun`` there is a genuine anomaly, not travel drift.
 
 Solve strategy:
-  1. normal solve (opts.num_workers, time limit). OPTIMAL/FEASIBLE -> Schedule.
+  1. normal solve (:func:`_solve`): one worker first, for at most ``SINGLE_WORKER_S``; one
+     worker breaks ties between equally good schedules the same way on every call, so a replay
+     of the same graph gets the same schedule (the opts.num_workers portfolio returns whichever
+     optimum a worker reports first). Only when one worker settles neither the optimum nor
+     infeasibility in that time does the portfolio take the rest of the time limit.
+     OPTIMAL/FEASIBLE -> Schedule.
   2. INFEASIBLE -> re-solve with assumptions, num_workers=1 (cores are only produced there);
      read solver.sufficient_assumptions_for_infeasibility() -> group names.
      If opts.minimize_core: shrink by deletion (drop a group, re-solve; keep it out while still
@@ -150,6 +155,10 @@ from moonwright.text import wh as _wh
 from moonwright.text import whole_wh as _whole_wh
 
 MAX_CORES = 3  # disjoint conflict cores reported per infeasible solve
+# How long the production solve stays on one worker before the portfolio takes over (module
+# docstring, solve strategy 1); the 264 saved graphs of the live evaluation runs all solve on one
+# worker in under a second.
+SINGLE_WORKER_S = 2.0
 
 
 @dataclass
@@ -188,9 +197,9 @@ def solve_schedule(
         return failure
 
     built = _build(inst, soft=False, minimize=True)
-    solver, status = _run(built, workers=opts.num_workers, time_limit_s=opts.time_limit_s)
+    solver, status, earlier_s = _solve(built, opts)
     if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-        return _extract(inst, built, solver, status)
+        return _extract(inst, built, solver, status, earlier_s)
     if status == cp_model.INFEASIBLE:
         if not opts.explain_infeasibility:
             return Failure(kind="infeasible", hint="The solver proved the plan infeasible "
@@ -621,8 +630,32 @@ def _run(
     return solver, status
 
 
+def _solve(
+    built: _Model, opts: SolveOptions
+) -> tuple[cp_model.CpSolver, cp_model.CpSolverStatus, float]:
+    """The production solve (module docstring, solve strategy 1): one worker for at most
+    ``SINGLE_WORKER_S`` (for the whole time limit when ``opts.num_workers`` is 1), then, if it
+    proved neither an optimum nor infeasibility, the portfolio for the rest of the limit. A
+    portfolio that finds nothing in that time keeps the one worker's feasible schedule. Returns
+    the solver to read, its status and the seconds the other solve took (0 when the one worker
+    settled it), which the reported solve time adds to the solver's own."""
+    alone = opts.num_workers <= 1
+    first = opts.time_limit_s if alone else min(opts.time_limit_s, SINGLE_WORKER_S)
+    t0 = time.monotonic()
+    solver, status = _run(built, workers=1, time_limit_s=first)
+    if alone or status in (cp_model.OPTIMAL, cp_model.INFEASIBLE, cp_model.MODEL_INVALID):
+        return solver, status, 0.0
+    t1 = time.monotonic()
+    portfolio, again = _run(built, workers=opts.num_workers,
+                            time_limit_s=max(0.0, opts.time_limit_s - (t1 - t0)))
+    if again == cp_model.UNKNOWN and status == cp_model.FEASIBLE:
+        return solver, status, time.monotonic() - t1
+    return portfolio, again, t1 - t0
+
+
 def _extract(
-    inst: _Instance, built: _Model, solver: cp_model.CpSolver, status: cp_model.CpSolverStatus
+    inst: _Instance, built: _Model, solver: cp_model.CpSolver, status: cp_model.CpSolverStatus,
+    earlier_s: float = 0.0,
 ) -> Schedule:
     entries = []
     for i, task in enumerate(inst.tasks):
@@ -635,7 +668,7 @@ def _extract(
         makespan_h=max(e.end_h for e in entries),
         status="optimal" if status == cp_model.OPTIMAL else "feasible",
         objective_bound_h=int(solver.best_objective_bound),
-        solve_time_s=solver.wall_time,
+        solve_time_s=earlier_s + solver.wall_time,
     )
 
 

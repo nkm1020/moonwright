@@ -1,11 +1,11 @@
 """Monte Carlo robustness (F9) tests.
 
-The plan under test is the offline landing_pad example (``Planner(FixtureClient())`` over
-``examples/briefs/landing_pad.md`` with the canned answers in ``fixtures/landing_pad/``), the
-same PlanResult the frontend ships as ``public/samples/landing_pad.plan.json``: 7 robots, 14
-tasks, 336 h horizon. Its plain replay finishes a little after the makespan without any event.
-CP1, PR1 and SV1 are the only robot of their type, so their failure leaves work nobody can do;
-the two excavators share a tight energy budget.
+The plan under test is the hand-made landing_pad_v1 example (``Planner(FixtureClient())`` over
+``tests/data/landing_pad_v1.md`` with the canned answers in ``fixtures/landing_pad_v1/``), the
+offline demo plan until the live recordings of Oct 23: 7 robots, 14 tasks, 336 h horizon. Its
+plain replay finishes a little after the makespan without any event. CP1, PR1 and SV1 are the
+only robot of their type, so their failure leaves work nobody can do; the two excavators share
+a tight energy budget, which the live demo plan's excavators do not.
 """
 
 from __future__ import annotations
@@ -60,7 +60,7 @@ from moonwright.sim.montecarlo import (
 from moonwright.sim.replan import run_with_replanning
 from moonwright.sim.simulator import FailureInjection, Simulator
 
-BRIEF = Path(__file__).resolve().parents[1] / "examples" / "briefs" / "landing_pad.md"
+BRIEF = Path(__file__).resolve().parent / "data" / "landing_pad_v1.md"
 HORIZON_H = 336
 RATE = 0.002
 SINGLE_ROBOT_TYPES = ["compactor", "printer", "surveyor"]
@@ -68,7 +68,8 @@ SINGLE_ROBOT_TYPES = ["compactor", "printer", "surveyor"]
 
 @pytest.fixture(scope="module")
 def plan() -> PlanResult:
-    result = Planner(FixtureClient(), explain=False).plan(BRIEF.read_text(), brief_id="landing_pad")
+    result = Planner(FixtureClient(), explain=False).plan(BRIEF.read_text(),
+                                                          brief_id="landing_pad_v1")
     assert result.success and result.schedule is not None and result.task_graph is not None
     assert result.requirements.horizon_h == HORIZON_H
     return result

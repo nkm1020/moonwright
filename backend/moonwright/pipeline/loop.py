@@ -835,11 +835,16 @@ def _same_edges(old: Task, new: Task, renumbering: Mapping[str, str], gone: Coll
 
 
 def _diff_value(task: Task, field: str) -> Any:
+    """A field as the diff compares and reports it: energy to the mWh the rate model keeps, a
+    quantity to two decimals, so a repair that re-derives 706.86 m2 as 706.858347 m2 changed
+    nothing (the UI fits a task's own figure to a reported quantity within 0.005)."""
     value = getattr(task, field, None)  # `quantity` lands with the rate model
     if field == "after":
         return sorted(value or [])
     if field == "energy_wh":
         return round(float(value), 3)
+    if field == "quantity" and value is not None:
+        return round(float(value), 2)
     return value
 
 

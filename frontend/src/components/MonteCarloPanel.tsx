@@ -7,7 +7,9 @@
  * The baseline run goes through App.tsx (`onRun` -> `result`). The what-if re-posts
  * /montecarlo from here with the same seed and parameters against a PlanResult whose fleet
  * carries the extra robots, keeps the baseline untouched and renders both side by side, so
- * App.tsx keeps today's props.
+ * App.tsx keeps today's props. The static demo has no /montecarlo: the inputs show the
+ * recorded run's, locked, and the what-if is the recorded one (one spare of each single-point
+ * type) or none.
  */
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import type {
@@ -47,12 +49,22 @@ export interface MonteCarloPanelProps {
   /** Optional: when given, the what-if column offers "Plan with these requirements" with the
    *  fleet that includes the spares (App.tsx can feed it to the requirements editor). */
   onAdoptRequirements?: (requirements: Requirements) => void;
+  /** Additive: the static demo replays a recording: the inputs (the recorded run's parameters)
+   *  are locked with this reason under them, Run replays the recorded result, and the spare
+   *  chips cannot start a what-if of their own. */
+  recorded?: string | null;
+  /** Additive: the static demo's recorded what-if, the same runs with one spare of each single
+   *  point of failure; offered when its fleet is the one spareRobots names (CP1 -> CP2). */
+  recordedWhatIf?: MonteCarloResult | null;
+  /** Additive: why the static demo's recorded what-if is missing ("could not load the recorded
+   *  what-if (HTTP 404)"), said where its button would be. */
+  recordedWhatIfError?: string | null;
 }
 
 const isInt = (n: number, lo: number, hi: number) => Number.isInteger(n) && n >= lo && n <= hi;
 const inUnit = (n: number) => Number.isFinite(n) && n >= 0 && n <= 1;
 
-/** "59%" / "83.5%": one decimal only when the rate needs it (200 runs resolve 0.5 %). */
+/** "84%" / "37.5%": one decimal only when the rate needs it (200 runs resolve 0.5 %). */
 export function fmtPct1(x: number | null | undefined): string {
   if (x === null || x === undefined || !Number.isFinite(x)) return "—";
   return `${(x * 100).toLocaleString("en-US", { maximumFractionDigits: 1 })}%`;
@@ -108,8 +120,15 @@ export function withSpares(plan: PlanResult, spares: Robot[]): PlanResult {
   };
 }
 
+/** True when every robot a recorded what-if's runs lost is in `fleet`: the recording used the
+ *  spares this panel would name, so its result can stand for that fleet. */
+export function whatIfFits(recorded: MonteCarloResult, fleet: Robot[]): boolean {
+  const ids = new Set(fleet.map((r) => r.id));
+  return recorded.samples.every((s) => s.failures.every((f) => ids.has(f.robot)));
+}
+
 /** The hazard the inputs imply, in numbers a judge can check: "0.002 failures per robot-hour
- *  = MTBF 500 h, about 15% per robot over the 80 h plan (67% that at least one of 7 robots
+ *  = MTBF 500 h, about 16% per robot over the 89 h plan (71% that at least one of 7 robots
  *  fails); task durations jittered ±15%; up to 2 solver replans per run." */
 export function hazardCopy(rate: number, jitter: number, maxReplans: number, sortieH: number, fleet: number): string {
   const jitterText = `task durations jittered ±${fmtPercent(jitter)}`;
@@ -150,7 +169,11 @@ export function MonteCarloPanel({
   error,
   onRun,
   onAdoptRequirements,
+  recorded = null,
+  recordedWhatIf = null,
+  recordedWhatIfError = null,
 }: MonteCarloPanelProps) {
+  const replay = recorded !== null;
   const [runs, setRuns] = useState(200);
   const [rate, setRate] = useState(0.002);
   const [jitter, setJitter] = useState(0.15);
@@ -187,10 +210,42 @@ export function MonteCarloPanel({
   const active = whatIf && result && whatIf.baseline === result ? whatIf : null;
   const selected = active?.types ?? [];
   const baselineSeed = lastReq?.seed ?? result?.samples[0]?.seed ?? null;
+  // the recorded what-if stands for "one spare of each" only when its runs lost no robot this
+  // panel would not name
+  const recordedFits =
+    recordedWhatIf !== null && spareCatalog.length > 0 && whatIfFits(recordedWhatIf, [...robots, ...spareCatalog]);
 
   const cancelWhatIf = () => {
     abortRef.current?.abort();
     abortRef.current = null;
+  };
+
+  /** The request a what-if repeats: the baseline's own, else the inputs with its seed. */
+  const baselineRequest = (baseline: MonteCarloResult): MonteCarloRequest =>
+    lastReq ?? {
+      plan,
+      runs: baseline.runs,
+      failure_rate_per_robot_h: rate,
+      duration_jitter: jitter,
+      max_replans: maxReplans,
+      seed: baseline.samples[0]?.seed ?? 1,
+      ...(briefId ? { brief_id: briefId } : {}),
+    };
+
+  /** The static demo's what-if: the recorded runs with one spare of each single-point type. */
+  const showRecordedWhatIf = () => {
+    if (!result || !recordedWhatIf) return;
+    cancelWhatIf();
+    const request: MonteCarloRequest = { ...baselineRequest(result), plan: withSpares(plan, spareCatalog) };
+    setWhatIf({
+      baseline: result,
+      types: spofTypes,
+      spares: spareCatalog,
+      request,
+      status: "done",
+      result: recordedWhatIf,
+      error: null,
+    });
   };
 
   const submit = () => {
@@ -218,18 +273,11 @@ export function MonteCarloPanel({
       setWhatIf(null);
       return;
     }
+    // a fleet of the static demo's own choosing has no recording to show
+    if (replay) return;
     const baseline = result;
     const spares = spareCatalog.filter((r) => types.includes(r.type));
-    const base: MonteCarloRequest = lastReq ?? {
-      plan,
-      runs: baseline.runs,
-      failure_rate_per_robot_h: rate,
-      duration_jitter: jitter,
-      max_replans: maxReplans,
-      seed: baseline.samples[0]?.seed ?? 1,
-      ...(briefId ? { brief_id: briefId } : {}),
-    };
-    const request: MonteCarloRequest = { ...base, plan: withSpares(plan, spares) };
+    const request: MonteCarloRequest = { ...baselineRequest(baseline), plan: withSpares(plan, spares) };
     const ctrl = new AbortController();
     abortRef.current = ctrl;
     setWhatIf((prev) => ({
@@ -276,19 +324,25 @@ export function MonteCarloPanel({
       subtitle="Monte Carlo: the verified plan is replayed many times with random robot failures and task-duration jitter; CP-SAT reschedules the remaining work after every event. The headline is the probability of finishing within the horizon with its 95% confidence interval, and where the misses come from."
     >
       <Card>
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-[repeat(3,minmax(0,13rem))_auto] md:items-end">
+        {/* the static demo locks the inputs to the recorded run's at full contrast (mw-locked) */}
+        <div
+          className={cx(
+            "grid grid-cols-2 gap-3 md:grid-cols-[repeat(3,minmax(0,13rem))_auto] md:items-end",
+            replay && "mw-locked",
+          )}
+        >
           <Field label="Runs" hint="replays, 1–200" error={valid.runs ? undefined : "whole number 1–200"}>
-            <NumberInput value={runs} min={1} max={200} step={1} invalid={!valid.runs} onChange={setRuns} />
+            <NumberInput value={runs} min={1} max={200} step={1} invalid={!valid.runs} disabled={replay} onChange={setRuns} />
           </Field>
           <Field label="Failure rate" hint="per robot-hour, 0–1" error={valid.rate ? undefined : "0–1"}>
-            <NumberInput value={rate} min={0} max={1} step={0.001} invalid={!valid.rate} onChange={setRate} />
+            <NumberInput value={rate} min={0} max={1} step={0.001} invalid={!valid.rate} disabled={replay} onChange={setRate} />
           </Field>
           <Field label="Duration jitter" hint="relative spread, 0–1" error={valid.jitter ? undefined : "0–1"}>
-            <NumberInput value={jitter} min={0} max={1} step={0.05} invalid={!valid.jitter} onChange={setJitter} />
+            <NumberInput value={jitter} min={0} max={1} step={0.05} invalid={!valid.jitter} disabled={replay} onChange={setJitter} />
           </Field>
           <div className="col-span-2 flex md:col-span-1 md:block">
             <Button variant="primary" onClick={submit} loading={running} disabled={!allValid} className="w-full md:w-auto">
-              {running ? `Replaying ${runs} runs…` : "Run Monte Carlo"}
+              {running ? `Replaying ${runs} runs…` : replay ? "Replay Monte Carlo" : "Run Monte Carlo"}
             </Button>
           </div>
         </div>
@@ -308,13 +362,20 @@ export function MonteCarloPanel({
             </span>
           </button>
           {advanced && (
-            <div id="mc-advanced" className="mt-2 grid grid-cols-2 gap-3 md:max-w-md">
+            <div id="mc-advanced" className={cx("mt-2 grid grid-cols-2 gap-3 md:max-w-md", replay && "mw-locked")}>
               <Field
                 label="Seed"
                 hint="same seed, same draws; empty = random"
                 error={valid.seed ? undefined : "whole number"}
               >
-                <NumberInput value={seed} step={1} placeholder="random" invalid={!valid.seed} onChange={setSeed} />
+                <NumberInput
+                  value={seed}
+                  step={1}
+                  placeholder="random"
+                  invalid={!valid.seed}
+                  disabled={replay}
+                  onChange={setSeed}
+                />
               </Field>
               <Field label="Max replans" hint="per run, 0–5" error={valid.maxReplans ? undefined : "0–5"}>
                 <NumberInput
@@ -323,6 +384,7 @@ export function MonteCarloPanel({
                   max={5}
                   step={1}
                   invalid={!valid.maxReplans}
+                  disabled={replay}
                   onChange={setMaxReplans}
                 />
               </Field>
@@ -331,6 +393,7 @@ export function MonteCarloPanel({
         </div>
 
         {hazard && <p className="mt-3 text-xs text-muted">{hazard}</p>}
+        {recorded && <p className="mt-1 text-xs text-dim">{recorded}</p>}
 
         {error && (
           <Notice tone="fail" title="Monte Carlo failed" className="mt-4">
@@ -369,6 +432,9 @@ export function MonteCarloPanel({
               seed={baselineSeed}
               onToggle={toggleSpare}
               onClear={() => runWhatIf([])}
+              locked={recorded}
+              onAddAll={recordedFits ? showRecordedWhatIf : undefined}
+              missing={recordedWhatIfError}
             />
             {active ? (
               <Comparison
@@ -417,6 +483,9 @@ function Chevron({ open }: { open: boolean }) {
 }
 
 // ------------------------------------------------------------------ single points of failure
+/** The single points of failure as chips, each one a what-if toggle (a spare of that type).
+ *  Locked (the static demo), the chips only report, and `onAddAll` shows the recorded what-if
+ *  with one spare of each when there is one. */
 function SpofStrip({
   attribution,
   catalog,
@@ -425,6 +494,9 @@ function SpofStrip({
   seed,
   onToggle,
   onClear,
+  locked = null,
+  onAddAll,
+  missing = null,
 }: {
   attribution: Attribution;
   catalog: Robot[];
@@ -433,8 +505,14 @@ function SpofStrip({
   seed: number | null;
   onToggle: (type: string) => void;
   onClear: () => void;
+  /** why a chip cannot start a what-if of its own */
+  locked?: string | null;
+  onAddAll?: () => void;
+  /** why the recorded what-if is not there (its file did not load) */
+  missing?: string | null;
 }) {
   const { spof } = attribution;
+  const sameDraws = `${seed === null ? "same seed" : `seed ${seed}`}, same failure rate and jitter`;
   return (
     <div className="mt-5 rounded-md border border-line bg-white/[0.02] px-3.5 py-3">
       <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
@@ -443,8 +521,13 @@ function SpofStrip({
           <span className="ml-1 font-normal normal-case tracking-normal">· robot types with one robot</span>
         </div>
         <div className="text-[11px] text-dim">
-          What if: add a spare and the same {runs} replays re-run with it ({seed === null ? "same seed" : `seed ${seed}`},
-          same failure rate and jitter)
+          {locked === null
+            ? `What if: add a spare and the same ${runs} replays re-run with it (${sameDraws})`
+            : onAddAll
+              ? `What if, recorded: the same ${runs} replays with one spare of each (${sameDraws})`
+              : missing
+                ? `What if: ${missing}`
+                : `What if: ${locked}`}
         </div>
       </div>
       <div className="mt-2 flex flex-wrap items-center gap-2">
@@ -459,19 +542,22 @@ function SpofStrip({
               key={row.type}
               type="button"
               aria-pressed={on}
-              disabled={!spare}
+              disabled={!spare || locked !== null}
               onClick={() => onToggle(row.type)}
               title={
-                on
-                  ? `Remove the spare ${spare?.id ?? ""} and re-run`
-                  : `Add a spare ${row.type} (${spare?.id ?? ""}, same battery and speed) and re-run the ${runs} replays`
+                locked !== null
+                  ? `${row.type}: ${locked}`
+                  : on
+                    ? `Remove the spare ${spare?.id ?? ""} and re-run`
+                    : `Add a spare ${row.type} (${spare?.id ?? ""}, same battery and speed) and re-run the ${runs} replays`
               }
               className={cx(
                 "inline-flex max-w-full items-center gap-1.5 rounded-full border px-3 py-1 text-xs transition-colors",
-                "disabled:cursor-not-allowed disabled:opacity-50",
+                // a locked chip reports, at full contrast; it is no dead button
+                locked === null ? "disabled:cursor-not-allowed disabled:opacity-50" : "cursor-default",
                 on
                   ? "border-fg/40 bg-white/10 text-fg"
-                  : "border-white/10 bg-white/5 text-muted hover:border-white/20 hover:text-fg",
+                  : cx("border-white/10 bg-white/5 text-muted", locked === null && "hover:border-white/20 hover:text-fg"),
               )}
             >
               {on ? <IconCheck className="size-3 text-ok" /> : <Dot color={robotTypeColor(row.type)} />}
@@ -480,12 +566,23 @@ function SpofStrip({
               <span className="font-mono tabular-nums text-dim">
                 {row.misses === 0 ? "no misses" : `in ${plural(row.misses, "miss", "misses")}`}
               </span>
-              <span className={cx("font-medium", on ? "text-ok" : "text-fg")}>
-                {on ? `${spare?.id ?? "spare"} added` : `+ add ${spare?.id ?? "spare"}`}
-              </span>
+              {(on || locked === null) && (
+                <span className={cx("font-medium", on ? "text-ok" : "text-fg")}>
+                  {on ? `${spare?.id ?? "spare"} added` : `+ add ${spare?.id ?? "spare"}`}
+                </span>
+              )}
             </button>
           );
         })}
+        {onAddAll && selected.length === 0 && (
+          <Button
+            size="sm"
+            onClick={onAddAll}
+            title={`Show the recorded re-run with ${catalog.map((r) => r.id).join(", ")} in the fleet`}
+          >
+            + Add one spare of each ({catalog.map((r) => r.id).join(", ")})
+          </Button>
+        )}
         {selected.length > 0 && (
           <Button variant="ghost" size="sm" onClick={onClear}>
             Clear spares

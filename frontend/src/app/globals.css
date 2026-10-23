@@ -79,6 +79,16 @@ input[type="number"]::-webkit-outer-spin-button {
   opacity: 0.35;
 }
 
+/* A read-only form (the static demo's requirements card): its controls are disabled, but they
+   are the content, so they keep full contrast instead of the dimmed disabled look. Unlayered,
+   this wins over the utilities' disabled:opacity-50. */
+.mw-locked :disabled {
+  opacity: 1;
+  cursor: default;
+  /* Safari paints disabled text with its own fill colour */
+  -webkit-text-fill-color: currentColor;
+}
+
 /* keyboard shortcut hint ("⌘ Enter") */
 kbd.mw-kbd {
   display: inline-block;

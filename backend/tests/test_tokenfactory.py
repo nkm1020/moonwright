@@ -922,10 +922,10 @@ def test_a_planner_whose_every_reasoning_ask_is_cut_walks_the_whole_ladder_in_si
     from moonwright.schemas import Requirements
 
     server = Server(lambda _r, _b: httpx.Response(200, json=cut()))
-    req = Requirements.model_validate_json(
-        (Path(__file__).resolve().parents[1] / "fixtures/landing_pad/structure.json").read_text())
+    path = Path(__file__).resolve().parents[1] / "fixtures/landing_pad_v1/structure.json"
+    req = Requirements.model_validate_json(path.read_text())
     planner = Planner(server.client(), max_repairs=3, explain=False, suggest_budget_s=0)
-    result = planner.plan_from_requirements(req, key="landing_pad")
+    result = planner.plan_from_requirements(req, key="landing_pad_v1")
     assert not result.success and [s.stage for s in result.steps] == ["taskgraph"] * 3
     assert [b["max_tokens"] for b in server.bodies] == [
         THINKING_MAX_TOKENS, THINKING_MAX_TOKENS_CAP, DEFAULT_MAX_TOKENS,

@@ -16,11 +16,12 @@ from moonwright.pipeline.structure import (
 from moonwright.schemas import Requirements, Structure
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
-BRIEFS = ("landing_pad", "access_road", "tight_battery")
+BRIEFS = ("landing_pad_v1", "access_road", "tight_battery", "landing_pad", "front_loaded")
 
 
 def base() -> Requirements:
-    return Requirements.model_validate_json((FIXTURES / "landing_pad" / "structure.json").read_text())
+    return Requirements.model_validate_json(
+        (FIXTURES / "landing_pad_v1" / "structure.json").read_text())
 
 
 def with_structures(*structures: dict) -> Requirements:
