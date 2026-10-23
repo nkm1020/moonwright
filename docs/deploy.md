@@ -2,7 +2,7 @@
 
 The public demo is a static export of the frontend on GitHub Pages, at
 **https://nkm1020.github.io/moonwright/**. It has no backend: it replays the live runs recorded on
-Nebius Token Factory on Oct 23 2026 (the files under `frontend/public/samples/`: the live
+Nebius Token Factory on Oct 24 2026 (the files under `frontend/public/samples/`: the live
 PlanResults, and the simulation and Monte Carlo the CLI computed offline from the landing-pad
 plan), so it costs nothing to host, needs no API key and cannot go down mid-review. Live planning
 needs the backend; the last section covers hosting one.
