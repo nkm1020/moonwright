@@ -2,14 +2,18 @@
 /**
  * Step 02: what the model understood from the brief, editable. The site is drawn as a tiny
  * map (grid, zone circles, depot) so geometry mistakes are visible at a glance; every
- * structure reads as prose ("20 m diameter · 0.4 m deep") with the task-graph quantities
- * under it once a plan exists; validation mirrors the backend's pydantic limits.
+ * structure shows the operations the brief asks for as chips (toggled from the validator's
+ * closed vocabulary) and reads as prose ("20 m diameter · 0.4 m deep") with the task-graph
+ * quantities under it once a plan exists; the structuring stage's notes (operations recovered
+ * from a scrambled answer, a structure without dimensions, an operation the fleet cannot
+ * staff, zone geometry) head the card; validation mirrors the backend's pydantic limits.
  */
 import { useMemo, useState, type ReactNode } from "react";
-import type { LoopStep, Requirements, Robot, Site, Structure, Task, Unit } from "@/lib/types";
+import type { LoopStep, Operation, Requirements, Robot, Site, Structure, Task, Unit } from "@/lib/types";
 import { ID_PATTERN, LIMITS } from "@/lib/types";
 import { ROBOT_TYPE_COLORS, robotTypeColor, zoneColor } from "@/lib/palette";
 import {
+  OPERATIONS,
   dimLabel,
   fmtCompact,
   fmtHorizon,
@@ -17,10 +21,13 @@ import {
   fmtNum,
   fmtSeconds,
   fmtWh,
+  isOperation,
+  operationLabel,
   plural,
   modelDisplayName,
   modelTitle,
   structureDims,
+  structureOperations,
 } from "@/lib/format";
 import {
   Badge,
@@ -58,7 +65,8 @@ export interface RequirementsCardProps {
   staleBrief?: boolean;
 }
 
-const RESERVED_KEYS = ["id", "type", "zone"];
+/** Keys a dimension can never take: the identity fields and the operations list. */
+const RESERVED_KEYS = ["id", "type", "zone", "operations"];
 const COMMON_DIMENSIONS = [
   "diameter_m",
   "length_m",
@@ -66,8 +74,12 @@ const COMMON_DIMENSIONS = [
   "depth_m",
   "height_m",
   "thickness_m",
+  "trench_width_m",
   "trench_depth_m",
 ];
+/** One-line caption of the structures group, shown once above the rows. */
+const OPERATIONS_CAPTION =
+  "Operations the brief asks for; the solver requires a task of the right robot type for each one";
 
 const isPosInt = (n: number) => Number.isInteger(n) && n > 0;
 const isPos = (n: number) => Number.isFinite(n) && n > 0;
@@ -111,6 +123,16 @@ export function validateRequirements(req: Requirements): string[] {
     structureIds.add(s.id);
     if (!s.type.trim()) problems.push(`${label} has no type`);
     if (s.zone && !zoneIds.has(s.zone)) problems.push(`${label}: zone ${s.zone} is not on the site`);
+    // operations are a closed vocabulary server-side (a 422 otherwise); toggling a chip rewrites
+    // the list normalised, so only a hand-edited or foreign list can get here
+    const ops: unknown = s.operations;
+    if (ops !== undefined && !Array.isArray(ops)) problems.push(`${label}: operations must be a list`);
+    else if (Array.isArray(ops)) {
+      const unknown = ops.filter((op) => !isOperation(op)).map(String);
+      if (unknown.length > 0) {
+        problems.push(`${label}: unknown operation ${unknown.join(", ")} (one of ${OPERATIONS.join(", ")})`);
+      }
+    }
     for (const [k, v] of structureDims(s)) {
       if (!isPos(v)) problems.push(`${label}: ${dimLabel(k)} must be > 0`);
     }
@@ -127,53 +149,108 @@ const DIM_PHRASES: Record<string, (v: string) => string> = {
   depth_m: (v) => `${v} m deep`,
   height_m: (v) => `${v} m high`,
   thickness_m: (v) => `${v} m thick`,
-  trench_depth_m: (v) => `${v} m trench`,
+  trench_width_m: (v) => `trench ${v} m wide`,
+  trench_depth_m: (v) => `trench ${v} m deep`,
 };
 
-/** "20 m diameter · 0.4 m deep · 0.3 m thick" from a structure's numeric extras. */
+/** "20 m diameter · 0.4 m deep · 0.3 m thick" from a structure's numeric extras; a berm's key
+ *  trench reads as one phrase, "trench 1.2 m wide × 0.8 m deep", when both its numbers exist. */
 export function structureSummary(s: Structure): string {
-  const parts = structureDims(s).map(([k, v]) => {
+  const dims = structureDims(s);
+  const trenchWidth = dims.find(([k]) => k === "trench_width_m")?.[1];
+  const trenchDepth = dims.find(([k]) => k === "trench_depth_m")?.[1];
+  const trenchPair = trenchWidth !== undefined && trenchDepth !== undefined;
+  let trenchDone = false;
+  const parts: string[] = [];
+  for (const [k, v] of dims) {
     const num = fmtNum(v, 2);
+    if (trenchPair && (k === "trench_width_m" || k === "trench_depth_m")) {
+      if (!trenchDone) parts.push(`trench ${fmtNum(trenchWidth, 2)} m wide × ${fmtNum(trenchDepth, 2)} m deep`);
+      trenchDone = true;
+      continue;
+    }
     const phrase = DIM_PHRASES[k];
-    if (phrase) return phrase(num);
+    if (phrase) {
+      parts.push(phrase(num));
+      continue;
+    }
     const m = /^(.*)_(m|m2|m3|cm|mm|kg|t|wh|kwh|h|deg)$/i.exec(k);
     const base = (m ? m[1] : k).replace(/_/g, " ");
-    return m ? `${num} ${m[2]} ${base}` : `${num} ${base}`;
-  });
+    parts.push(m ? `${num} ${m[2]} ${base}` : `${num} ${base}`);
+  }
   return parts.join(" · ");
 }
 
 const UNIT_LABELS: Record<Unit, string> = { m3: "m³", m2: "m²", m: "m", ea: "ea" };
 
-/** "5 tasks · 46 h · 5,800 Wh · 126 m³ + 314 m²" for the tasks of one structure. */
+/** "6 tasks · 80 h · 8,058 Wh · excavator 2 × 141.4 m³ · compactor 2 × 353.4 m² · surveyor
+ *  2 × 706.9 m²" for the tasks of one structure: quantities grouped by robot type and unit,
+ *  equal quantities read as a count (two halves of a pad are not summed into a figure larger
+ *  than the pad), unequal ones summed. */
 export function structureWork(tasks: Task[]): string | null {
   if (tasks.length === 0) return null;
   const hours = tasks.reduce((a, t) => a + t.duration_h, 0);
   const wh = tasks.reduce((a, t) => a + t.energy_wh, 0);
-  const byUnit = new Map<Unit, number>();
-  for (const t of tasks) if (t.quantity !== null && t.unit) byUnit.set(t.unit, (byUnit.get(t.unit) ?? 0) + t.quantity);
-  const quantities = [...byUnit].map(([u, q]) => `${fmtNum(q, 1)} ${UNIT_LABELS[u]}`).join(" + ");
+  const groups = new Map<string, { type: string; unit: Unit; quantities: number[] }>();
+  for (const t of tasks) {
+    if (t.quantity === null || !t.unit) continue;
+    const key = `${t.robot_type}|${t.unit}`;
+    const g = groups.get(key) ?? { type: t.robot_type, unit: t.unit, quantities: [] };
+    g.quantities.push(t.quantity);
+    groups.set(key, g);
+  }
+  const quantities = [...groups.values()]
+    .map(({ type, unit, quantities: qs }) => {
+      const same = qs.length > 1 && qs.every((q) => Math.abs(q - qs[0]) < 0.05);
+      const figure = same ? `${qs.length} × ${fmtNum(qs[0], 1)}` : fmtNum(qs.reduce((a, q) => a + q, 0), 1);
+      return `${type} ${figure} ${UNIT_LABELS[unit]}`;
+    })
+    .join(" · ");
   return `${plural(tasks.length, "task")} · ${fmtHours(hours, 1)} · ${fmtWh(wh)}${quantities ? ` · ${quantities}` : ""}`;
 }
 
 // ------------------------------------------------------------------ geometry
 export interface GeometryNote {
+  /** fail: the backend's hard rule (POST /plan answers 422), red; warn: for information, muted */
   level: "warn" | "fail";
   text: string;
 }
 
-/** Soft geometry checks drawn from the current site: zones outside the grid or overlapping,
- *  structures without a declared zone, a missing depot. The backend reports the same kinds
- *  of warnings on the structure step. */
+/** Geometry checks drawn from the current site. "fail" mirrors the backend's hard rules
+ *  (schemas.py Site: a zone centre or the depot outside the grid, a radius over a quarter of
+ *  the grid's shorter side); everything else is a muted note: a zone disc that reaches past
+ *  the grid edge (the planner and the simulator use its centre, so the backend plans it
+ *  without a word), overlapping zones, structures without a declared zone, a missing depot.
+ *  The backend reports the muted kinds on the structure step too. */
 export function geometryNotes(site: Site, structures: Structure[]): GeometryNote[] {
   const notes: GeometryNote[] = [];
   const [gx, gy] = site.grid;
   const zones = site.zones;
+  const maxRadius = Math.max(1, Math.floor(Math.min(gx, gy) / 4));
+  const inside = (x: number, y: number) => x >= 0 && y >= 0 && x < gx && y < gy;
   for (const z of zones) {
     const [cx0, cy0] = z.center;
-    if (cx0 - z.radius < 0 || cy0 - z.radius < 0 || cx0 + z.radius > gx || cy0 + z.radius > gy) {
-      notes.push({ level: "fail", text: `zone ${z.id} reaches outside the ${gx} × ${gy} grid` });
+    if (!inside(cx0, cy0)) {
+      notes.push({ level: "fail", text: `zone ${z.id} centre (${cx0}, ${cy0}) is outside the ${gx} × ${gy} grid` });
+      continue;
     }
+    if (!(z.radius >= 1 && z.radius <= maxRadius)) {
+      notes.push({
+        level: "fail",
+        text: `zone ${z.id} radius ${z.radius} is outside 1–${maxRadius} cells (at most a quarter of the grid's shorter side)`,
+      });
+      continue;
+    }
+    // y grows northward (the map draws north up)
+    const over = [
+      [cy0 + z.radius - gy, "north"],
+      [z.radius - cy0, "south"],
+      [cx0 + z.radius - gx, "east"],
+      [z.radius - cx0, "west"],
+    ]
+      .filter((e): e is [number, string] => typeof e[0] === "number" && e[0] > 0)
+      .map(([n, edge]) => `${plural(n, "cell")} past the ${edge} edge`);
+    if (over.length > 0) notes.push({ level: "warn", text: `zone ${z.id} extends ${over.join(" and ")}; the planner uses its centre` });
   }
   for (let i = 0; i < zones.length; i++) {
     for (let j = i + 1; j < zones.length; j++) {
@@ -187,9 +264,9 @@ export function geometryNotes(site: Site, structures: Structure[]): GeometryNote
   if (unzoned.length > 0) {
     notes.push({ level: "warn", text: `${unzoned.join(", ")} ${unzoned.length === 1 ? "has" : "have"} no zone: the planner will auto-place it` });
   }
-  if (!site.depot) notes.push({ level: "warn", text: "no depot: robots start at the grid origin" });
-  else if (site.depot[0] < 0 || site.depot[1] < 0 || site.depot[0] > gx || site.depot[1] > gy) {
-    notes.push({ level: "fail", text: `depot (${site.depot[0]}, ${site.depot[1]}) is outside the grid` });
+  if (!site.depot) notes.push({ level: "warn", text: "no depot: robots start at the bottom centre of the grid" });
+  else if (!inside(site.depot[0], site.depot[1])) {
+    notes.push({ level: "fail", text: `depot (${site.depot[0]}, ${site.depot[1]}) is outside the ${gx} × ${gy} grid` });
   }
   return notes;
 }
@@ -198,6 +275,72 @@ export function geometryNotes(site: Site, structures: Structure[]): GeometryNote
 function stepWarnings(step: LoopStep | null): string[] {
   const w = step?.payload?.warnings;
   return Array.isArray(w) ? w.filter((x): x is string => typeof x === "string") : [];
+}
+
+// ------------------------------------------------------------------ structuring notes
+/** The shapes of StructurePayload.warnings, told apart by their opening words: operations
+ *  salvaged from a scrambled structuring answer, a structure without a single dimension, an
+ *  operation no robot type can staff, an operation the brief line does not ask for, zone /
+ *  depot geometry; anything else is "other". */
+export type WarningShape = "recovered" | "no_dimensions" | "unstaffed" | "unsupported" | "geometry" | "other";
+
+export interface CardWarning {
+  shape: WarningShape;
+  /** warn (amber): act before planning; muted: for information, nothing to do */
+  tone: "warn" | "muted";
+  /** the short imperative an amber note leads with */
+  lead: string | null;
+  /** the structure the note names ("structure S2 ..."), null for a site-wide one */
+  structure: string | null;
+  /** the operation an unstaffed / unsupported note is about */
+  operation: Operation | null;
+  /** the sentence as shown: an amber note drops the clause its lead already says */
+  text: string;
+  raw: string;
+}
+
+export const WARNING_LEADS = {
+  recovered: "Check these operations against the brief",
+  no_dimensions: "Add the brief's dimensions before planning",
+} as const;
+
+const WARNING_SHAPES: [WarningShape, RegExp][] = [
+  ["recovered", /^structure \S+: operations \[[^\]]*\] recovered from malformed keys/],
+  ["no_dimensions", /^structure \S+ (?:\([^)]*\) )?has no dimensions\b/],
+  ["unstaffed", /^structure \S+ lists \S+ but the fleet has no /],
+  ["unsupported", /^structure \S+ lists \S+ but the brief line about it asks for /],
+  ["geometry", /^(?:zones \S+ and \S+ overlap\b|structure \S+ (?:has no zone\b|names zone )|no depot\b)/],
+];
+
+/** One warning line of the structure step, classified by its prefix. */
+export function classifyWarning(raw: string): CardWarning {
+  const text = raw.trim();
+  const shape = WARNING_SHAPES.find(([, re]) => re.test(text))?.[0] ?? "other";
+  const structure = /^structure (\S+?):?(?:\s|$)/.exec(text)?.[1] ?? null;
+  const op = /^structure \S+ lists (\S+) but /.exec(text)?.[1] ?? null;
+  const lead =
+    shape === "recovered" ? WARNING_LEADS.recovered : shape === "no_dimensions" ? WARNING_LEADS.no_dimensions : null;
+  const shown =
+    shape === "recovered"
+      ? text.replace(/;\s*check them against the brief\.?$/, "")
+      : shape === "no_dimensions"
+        ? text.replace(/,\s*so add the brief's numbers before planning\.?$/, "")
+        : text;
+  return { shape, tone: lead ? "warn" : "muted", lead, structure, operation: isOperation(op) ? op : null, text: shown, raw };
+}
+
+/** The structure step's warnings as the card lists them: amber notes first, order kept. */
+export function cardWarnings(step: LoopStep | null): CardWarning[] {
+  const all = stepWarnings(step).map(classifyWarning);
+  return [...all.filter((w) => w.tone === "warn"), ...all.filter((w) => w.tone === "muted")];
+}
+
+/** The structure with `op` added to (or removed from) its operations: every other key is kept
+ *  (dimensions and unknown extras round-trip to POST /plan) and the list is written normalised
+ *  (closed vocabulary, no repeats, order of mention kept), which is what the backend accepts. */
+export function toggleOperation(s: Structure, op: Operation): Structure {
+  const ops = structureOperations(s);
+  return { ...s, operations: ops.includes(op) ? ops.filter((o) => o !== op) : [...ops, op] };
 }
 
 function nextId(prefix: string, existing: string[]): string {
@@ -241,7 +384,11 @@ export function RequirementsCard({
   const structureIds = value.structures.map((s) => s.id);
   const duplicateStructures = new Set(structureIds.filter((id, i) => structureIds.indexOf(id) !== i));
   const notes = geometryNotes(value.site, value.structures);
-  const warnings = stepWarnings(structureStep);
+  const warnings = cardWarnings(structureStep);
+  const warningsByStructure = new Map<string, CardWarning[]>();
+  for (const w of warnings) {
+    if (w.structure) warningsByStructure.set(w.structure, [...(warningsByStructure.get(w.structure) ?? []), w]);
+  }
   const tasksByStructure = useMemo(() => {
     const m = new Map<string, Task[]>();
     for (const t of tasks ?? []) {
@@ -326,6 +473,33 @@ export function RequirementsCard({
           ))}
         </datalist>
 
+        {warnings.length > 0 && (
+          <div className="border-b border-line px-4 py-2.5 md:px-5">
+            <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+              <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted">
+                Structuring notes · {warnings.length}
+              </h3>
+              <span className="text-[11px] text-dim">what the structuring stage flagged; none of these stops planning</span>
+            </div>
+            <ul className="mt-1.5 space-y-1 text-[12px] leading-snug">
+              {warnings.map((w, i) => (
+                <li key={i} className="flex items-start gap-2">
+                  <Dot color={w.tone === "warn" ? "var(--warn)" : "var(--fg-dim)"} className="mt-1" />
+                  <span className={w.tone === "warn" ? "text-muted" : "text-dim"}>
+                    {w.lead && (
+                      <>
+                        <span className="font-medium text-warn">{w.lead}</span>
+                        {" · "}
+                      </>
+                    )}
+                    {w.text}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
         <div className="grid grid-cols-[minmax(0,1fr)] gap-6 p-4 md:p-5 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
           <div className="space-y-6">
             <Group title="Site">
@@ -382,16 +556,11 @@ export function RequirementsCard({
                 </div>
                 <SiteMap site={value.site} structures={value.structures} notes={notes} />
               </div>
-              {(notes.length > 0 || warnings.length > 0) && (
+              {notes.length > 0 && (
                 <ul className="mt-2 space-y-0.5 text-[11px]">
                   {notes.map((n, i) => (
                     <li key={`n${i}`} className={n.level === "fail" ? "text-fail" : "text-dim"}>
                       geometry · {n.text}
-                    </li>
-                  ))}
-                  {warnings.map((w, i) => (
-                    <li key={`w${i}`} className="text-dim">
-                      structure step · {w}
                     </li>
                   ))}
                 </ul>
@@ -427,6 +596,7 @@ export function RequirementsCard({
           <div className="space-y-6">
             <Group
               title={`Structures · ${value.structures.length}`}
+              caption={value.structures.length > 0 ? OPERATIONS_CAPTION : undefined}
               action={
                 <Button size="sm" variant="ghost" onClick={addStructure}>
                   + Add structure
@@ -446,6 +616,7 @@ export function RequirementsCard({
                     duplicate={duplicateStructures.has(s.id)}
                     work={tasks ? structureWork(tasksByStructure.get(s.id) ?? []) : null}
                     hasPlan={Boolean(tasks)}
+                    warnings={warningsByStructure.get(s.id) ?? []}
                     onChange={(next) => setStructure(i, next)}
                     onRemove={() => removeStructure(i)}
                   />
@@ -693,7 +864,7 @@ function SiteMap({ site, structures, notes }: { site: Site; structures: Structur
                   y={py(z.center[1]) + 8}
                   textAnchor="middle"
                   dominantBaseline="central"
-                  fontSize={10}
+                  fontSize={11}
                   fill="#9aa7b4"
                   fontFamily="var(--font-mono)"
                 >
@@ -720,7 +891,7 @@ function SiteMap({ site, structures, notes }: { site: Site; structures: Structur
               x={px(site.depot[0])}
               y={Math.min(H - 4, py(site.depot[1]) + 14)}
               textAnchor="middle"
-              fontSize={10}
+              fontSize={11}
               fill="#9aa7b4"
               fontFamily="var(--font-mono)"
             >
@@ -728,7 +899,7 @@ function SiteMap({ site, structures, notes }: { site: Site; structures: Structur
             </text>
           </g>
         )}
-        <text x={4} y={12} fontSize={10} fill="#66727f" fontFamily="var(--font-mono)">
+        <text x={4} y={13} fontSize={11} fill="#66727f" fontFamily="var(--font-mono)">
           N ↑
         </text>
       </svg>
@@ -740,13 +911,25 @@ function SiteMap({ site, structures, notes }: { site: Site; structures: Structur
 }
 
 // ------------------------------------------------------------------ pieces
-function Group({ title, action, children }: { title: ReactNode; action?: ReactNode; children: ReactNode }) {
+function Group({
+  title,
+  caption,
+  action,
+  children,
+}: {
+  title: ReactNode;
+  /** one line under the title, e.g. what the operation chips mean */
+  caption?: ReactNode;
+  action?: ReactNode;
+  children: ReactNode;
+}) {
   return (
     <div>
       <div className="mb-2 flex items-center justify-between gap-2">
         <h3 className="text-[12px] font-semibold uppercase tracking-wider text-muted">{title}</h3>
         {action}
       </div>
+      {caption && <p className="-mt-1 mb-2 text-[11px] leading-snug text-dim">{caption}</p>}
       {children}
     </div>
   );
@@ -766,6 +949,8 @@ function RemoveButton({ onClick, label }: { onClick: () => void; label: string }
   );
 }
 
+const OP_CHIP = "inline-flex items-center rounded border px-1.5 py-px font-mono text-[11px] leading-[18px]";
+
 function StructureRow({
   structure,
   index,
@@ -773,6 +958,7 @@ function StructureRow({
   duplicate,
   work,
   hasPlan,
+  warnings,
   onChange,
   onRemove,
 }: {
@@ -783,13 +969,25 @@ function StructureRow({
   /** "5 tasks · 46 h · 5,800 Wh · 126 m³" when a task graph exists. */
   work: string | null;
   hasPlan: boolean;
+  /** the structuring notes that name this structure */
+  warnings: CardWarning[];
   onChange: (next: Structure) => void;
   onRemove: () => void;
 }) {
   const dims = structureDims(structure);
+  const ops = structureOperations(structure);
+  const [editingOps, setEditingOps] = useState(false);
   const unknownZone = structure.zone !== null && !zoneIds.includes(structure.zone);
   const invalidDim = dims.some(([, v]) => !isPos(v));
   const summary = structureSummary(structure);
+  const name = structure.id || `structure ${index + 1}`;
+  const recovered = warnings.some((w) => w.shape === "recovered");
+  /** operation -> why no task will be required of it (no robot type can staff it, or the
+   *  brief line asks for another operation): the chip reads dashed with the note as tooltip */
+  const notRequired = new Map<Operation, string>();
+  for (const w of warnings) {
+    if (w.operation && (w.shape === "unstaffed" || w.shape === "unsupported")) notRequired.set(w.operation, w.text);
+  }
   return (
     <li className="rounded-md border border-white/10 bg-surface/60 p-3">
       <div className="grid grid-cols-[4rem_minmax(0,1fr)_7rem_auto] items-center gap-2">
@@ -828,9 +1026,66 @@ function StructureRow({
         </div>
         <RemoveButton onClick={onRemove} label={`remove structure ${structure.id || index + 1}`} />
       </div>
-      <p className={cx("mt-2 text-[12.5px]", summary ? "text-fg" : "text-dim")}>
-        {summary || "no dimensions stated: the rate model cannot price this structure"}
-      </p>
+      <div className="mt-2 flex flex-wrap items-center gap-1" role="group" aria-label={`operations of ${name}`}>
+        <span className="mr-0.5 text-[11px] font-medium uppercase tracking-wider text-dim">operations</span>
+        {editingOps
+          ? OPERATIONS.map((op) => {
+              const on = ops.includes(op);
+              return (
+                <button
+                  key={op}
+                  type="button"
+                  aria-pressed={on}
+                  onClick={() => onChange(toggleOperation(structure, op))}
+                  className={cx(
+                    OP_CHIP,
+                    "transition-colors",
+                    on
+                      ? "border-white/30 bg-white/10 text-fg"
+                      : "border-dashed border-white/15 text-dim hover:border-white/30 hover:text-fg",
+                  )}
+                >
+                  {operationLabel(op)}
+                </button>
+              );
+            })
+          : ops.map((op) => {
+              const note = notRequired.get(op);
+              return (
+                <span
+                  key={op}
+                  title={note}
+                  className={cx(OP_CHIP, note ? "border-dashed border-white/15 text-dim" : "border-white/15 bg-white/[0.06] text-fg")}
+                >
+                  {operationLabel(op)}
+                  {note ? " · not required" : null}
+                </span>
+              );
+            })}
+        {!editingOps && ops.length === 0 && <span className="text-[11px] text-dim">none stated in the brief</span>}
+        <button
+          type="button"
+          onClick={() => setEditingOps((v) => !v)}
+          aria-expanded={editingOps}
+          className="ml-0.5 text-[11px] text-dim hover:text-fg"
+        >
+          {editingOps ? "done" : "edit operations"}
+        </button>
+        {recovered && !editingOps && (
+          <span className="ml-1 text-[11px] font-medium text-warn">{WARNING_LEADS.recovered}</span>
+        )}
+      </div>
+      {summary ? (
+        <p className="mt-2 text-[12.5px] text-fg">{summary}</p>
+      ) : (
+        <p className="mt-2 text-[12px] leading-snug">
+          <span className="font-medium text-warn">{WARNING_LEADS.no_dimensions}</span>
+          <span className="text-dim">
+            {" · "}the planner sizes its tasks from numeric fields such as diameter, length, width, depth or
+            height and never sees the brief
+          </span>
+        </p>
+      )}
       {hasPlan && (
         <p className="mt-0.5 font-mono text-[11px] text-muted">
           {work ?? "no task in the graph builds this structure"}

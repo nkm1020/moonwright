@@ -156,7 +156,13 @@ export function TaskTable({
   const totalWh = tasks.reduce((s, t) => s + t.energy_wh, 0);
   const totalH = tasks.reduce((s, t) => s + t.duration_h, 0);
 
-  const sortIcon = (key: SortKey) => (sortKey === key ? (asc ? "▲" : "▼") : "");
+  /** An 11 px triangle (the design floor for any glyph) on the sorted column. */
+  const sortIcon = (key: SortKey) =>
+    sortKey === key ? (
+      <svg className="size-[11px]" viewBox="0 0 11 11" fill="currentColor" aria-hidden="true">
+        <path d={asc ? "M5.5 2.5l3.5 5h-7z" : "M5.5 8.5l-3.5-5h7z"} />
+      </svg>
+    ) : null;
   const headerCell = (col: { key: SortKey; label: string; align?: "right" }) => (
     <th
       key={col.key}
@@ -170,7 +176,7 @@ export function TaskTable({
         className="inline-flex items-center gap-1 rounded text-muted hover:text-fg focus:outline-none focus-visible:ring-1 focus-visible:ring-white/40"
       >
         {col.label}
-        <span className="w-2 text-[9px]" aria-hidden>
+        <span className="inline-flex w-[11px] justify-center" aria-hidden>
           {sortIcon(col.key)}
         </span>
       </button>

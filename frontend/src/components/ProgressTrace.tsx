@@ -2,10 +2,16 @@
 /**
  * The planning trace: one row per LoopStep as they stream in. A failed validate / schedule
  * step renders as a full-width core block (red bar, conflict chips, the hint, and the numbers
- * behind it as a robot / budget / demanded table); a validated repair shows what the model
- * changed as diff chips with a scope-drift chip; the rate model's advisories render muted;
- * every model call carries its model, tokens and latency; the live row names the stage the
- * planner is expected to run next.
+ * behind it as a robot / budget / demanded table) whose title says what became of the core
+ * (sent to Nemotron for repair, no repair round left, repairs off); the final failed step of a
+ * failed run carries the solver-proven advice in its payload and shows it right under its core
+ * block ("What would make it feasible"), before the result event arrives; a validated repair
+ * shows what the model changed as diff chips with a scope-drift chip (read against the plan's
+ * final graph only for the repair that produced it, from the diff's own fields for every
+ * earlier round, see format.ts describeRepairDiff); the rate model's
+ * advisories render muted, except a volume advisory (planned m³ against the dimensions), which
+ * takes the amber of the scope-drift chip; every model call carries its model, tokens and
+ * latency; the live row names the stage the planner is expected to run next.
  */
 import { useEffect, useState } from "react";
 import type {
@@ -31,6 +37,7 @@ import {
 } from "@/lib/types";
 import { STAGE_LABELS } from "@/lib/palette";
 import {
+  ADVISORY_KIND_LABELS,
   budgetRows,
   conflictMeaning,
   describeRepairDiff,
@@ -42,18 +49,26 @@ import {
   fmtSignedPct,
   fmtUsage,
   isFixtureModel,
+  lastFailedStep,
+  lastGraphStep,
   modelDisplayName,
   modelTitle,
   parseAdvisory,
+  planSuggestions,
+  repairRounds,
   plural,
+  stepSuggestions,
+  suggestionsTimeBase,
+  tidyDetail,
   tidyHint,
   tidyUnits,
   totalUsage,
-  type Advisory,
   type BudgetRow,
   type DiffChip,
 } from "@/lib/format";
 import { Badge, Button, Card, Dot, IconCheck, IconX, Notice, cx } from "./Section";
+import { Suggestions } from "./Suggestions";
+import { classifyWarning, type WarningShape } from "./RequirementsCard";
 
 export interface ProgressTraceProps {
   steps: LoopStep[];
@@ -69,6 +84,9 @@ export interface ProgressTraceProps {
   /** The final task graph (names, units and robot types for the diff chips); empty while the
    *  trace is still streaming. */
   tasks?: Task[];
+  /** Repair rounds the run was allowed (PlanRequest.max_repairs): 0 words the final failed
+   *  core as "repairs off". Inferred from the trace and the result when not given. */
+  maxRepairs?: number | null;
 }
 
 /** The stage the planner is expected to run next, given the steps seen so far. A plan started
@@ -105,6 +123,9 @@ const WORKING: Record<Stage, string> = {
   replan: "CP-SAT is rescheduling the remaining work",
 };
 
+/** The live row once the final verdict has streamed in with its advice: no repair follows. */
+const CLOSING = "no repair round left; the planner is returning the verdict with its solver-proven advice";
+
 export function ProgressTrace({
   steps,
   running,
@@ -114,6 +135,7 @@ export function ProgressTrace({
   onCancel,
   horizonH = null,
   tasks = [],
+  maxRepairs = null,
 }: ProgressTraceProps) {
   const [now, setNow] = useState<number | null>(null);
   useEffect(() => {
@@ -124,8 +146,23 @@ export function ProgressTrace({
 
   const elapsed = running && startedAt !== null && now !== null ? Math.max(0, (now - startedAt) / 1000) : null;
   const next = expectedNextStage(steps);
-  const repairs = steps.filter((s) => s.stage === "repair").length;
+  // verdict rounds, as PlanResult.repairs counts them: a rejected repair answer that is asked
+  // again stays in its round
+  const repairs = repairRounds(steps);
   const usage = totalUsage(steps);
+  const last = steps.length > 0 ? steps[steps.length - 1] : null;
+  // the round the live row is in: a rejected repair answer is re-asked within its round
+  const reasking = last !== null && last.stage === "repair" && !last.ok;
+  // a failed step that already carries the advice is the run's final verdict: no repair follows
+  const closing = running && last !== null && !last.ok && stepSuggestions(last).length > 0;
+  const runEnd: RunEnd = running ? "running" : result ? "result" : "aborted";
+  // a verdict with a round left always spends it, so a failed result with no repair step means
+  // the loop was off; the caller's max_repairs settles it when given
+  const repairsOff = maxRepairs !== null ? maxRepairs === 0 : repairs === 0 && result !== null && isVerdict(result.failure);
+  // the plan's task graph is the answer of the last ok taskgraph / repair step: only that
+  // step's diff may be read against it; an earlier round's diff is shown from its own fields
+  // (and `tasks` belongs to a finished result, never to the previous plan of a run streaming)
+  const graphStep = result ? lastGraphStep(steps) : -1;
 
   return (
     <Card
@@ -133,7 +170,7 @@ export function ProgressTrace({
       aside={
         <span className="font-mono text-[11px] tabular-nums">
           {plural(steps.length, "step")}
-          {repairs > 0 && ` · ${plural(repairs, "repair")}`}
+          {repairs > 0 && ` · ${plural(repairs, "repair round")}`}
           {usage.input + usage.output > 0 && ` · ${fmtCompact(usage.input + usage.output)} tok`}
         </span>
       }
@@ -147,8 +184,10 @@ export function ProgressTrace({
             prev={i > 0 ? steps[i - 1] : null}
             next={i + 1 < steps.length ? steps[i + 1] : null}
             pending={running && i === steps.length - 1}
-            round={step.stage === "repair" ? steps.slice(0, i + 1).filter((s) => s.stage === "repair").length : null}
-            tasks={tasks}
+            runEnd={runEnd}
+            repairsOff={repairsOff}
+            round={step.stage === "repair" ? repairRounds(steps.slice(0, i + 1)) : null}
+            tasks={i === graphStep ? tasks : []}
             horizonH={horizonH}
           />
         ))}
@@ -157,11 +196,20 @@ export function ProgressTrace({
             <div className="flex items-center gap-3">
               <Dot color="var(--accent)" pulse className="size-2.5" />
               <div className="min-w-0 flex-1">
-                <span className="font-medium text-accent">
-                  Working: {STAGE_LABELS[next] ?? next}
-                  {next === "repair" && repairs > 0 ? ` ${repairs + 1}` : ""}
-                </span>
-                <span className="ml-2 text-xs text-muted">{WORKING[next]}…</span>
+                {closing ? (
+                  <>
+                    <span className="font-medium text-accent">Closing</span>
+                    <span className="ml-2 text-xs text-muted">{CLOSING}…</span>
+                  </>
+                ) : (
+                  <>
+                    <span className="font-medium text-accent">
+                      Working: {STAGE_LABELS[next] ?? next}
+                      {next === "repair" && repairs > 0 ? ` ${reasking ? repairs : repairs + 1}` : ""}
+                    </span>
+                    <span className="ml-2 text-xs text-muted">{WORKING[next]}…</span>
+                  </>
+                )}
               </div>
               <span className="shrink-0 font-mono text-xs tabular-nums text-dim">
                 {elapsed !== null ? fmtSeconds(elapsed) : ""}
@@ -193,6 +241,8 @@ function StepRow({
   prev,
   next,
   pending,
+  runEnd,
+  repairsOff,
   round,
   tasks,
   horizonH,
@@ -203,14 +253,19 @@ function StepRow({
   next: LoopStep | null;
   /** the last step of a run still streaming: what follows is not known yet */
   pending: boolean;
+  /** how the run ended, for the label of the step that ended it */
+  runEnd: RunEnd;
+  /** the run had no repair round to spend (max_repairs 0) */
+  repairsOff: boolean;
   /** 1-based repair round for a repair row (the backend's `attempt` counts task graphs) */
   round: number | null;
   tasks: Task[];
   horizonH: number | null;
 }) {
   const failed = !step.ok;
-  // a failed core went to Nemotron only when a repair step followed it
-  const coreOutcome: CoreOutcome = next?.stage === "repair" ? "repaired" : pending ? "pending" : "stopped";
+  const coreOutcome = failed ? coreOutcomeOf(step, next, pending, runEnd, repairsOff) : "pending";
+  // the final failed step of a failed run carries the solver-proven advice in its payload
+  const advice = failed ? stepSuggestions(step) : [];
   // a model row carries its latency in the usage badge, an ok schedule row the solver time
   const showDuration = !step.usage && !(step.stage === "schedule" && step.ok);
   return (
@@ -254,8 +309,23 @@ function StepRow({
         ) : (
           <p className="mt-1 pl-7 text-xs text-dim">The step failed without a failure record.</p>
         ))}
+      {advice.length > 0 && (
+        <Suggestions
+          variant="trace"
+          suggestions={advice}
+          timeBase={suggestionsTimeBase(step)}
+          offsetH={offsetOf(step)}
+          className="mt-1.5"
+        />
+      )}
     </li>
   );
+}
+
+/** Planner time 0 of a replan step in simulator hours, when its payload says (offset_h). */
+function offsetOf(step: LoopStep): number | undefined {
+  const v = step.payload?.offset_h;
+  return typeof v === "number" && Number.isFinite(v) ? v : undefined;
 }
 
 /** Model, tokens and latency of one LLM call. */
@@ -287,6 +357,8 @@ const KNOWN_PAYLOAD_KEYS = new Set([
   "before_makespan_h",
   "after_makespan_h",
   "solve_time_s",
+  "suggestions",
+  "suggestions_time_base",
 ]);
 
 function StepBody({ step, prev, tasks }: { step: LoopStep; prev: LoopStep | null; tasks: Task[] }) {
@@ -350,6 +422,19 @@ function GenericPayload({ step }: { step: LoopStep }) {
   );
 }
 
+/** Chip label per structuring-note shape (RequirementsCard classifyWarning): operations
+ *  salvaged from a scrambled answer or missing dimensions (amber: act before planning), an
+ *  operation the fleet cannot staff, one the brief line does not ask for, zone / depot
+ *  geometry, anything else. */
+const WARNING_CHIP: Record<WarningShape, string> = {
+  recovered: "operations",
+  no_dimensions: "dimensions",
+  unstaffed: "fleet",
+  unsupported: "operations",
+  geometry: "geometry",
+  other: "note",
+};
+
 function StructureLine({ payload }: { payload: StructurePayload }) {
   return (
     <div className="mt-1 text-xs text-muted">
@@ -359,14 +444,26 @@ function StructureLine({ payload }: { payload: StructurePayload }) {
       </span>
       {payload.warnings.length > 0 && (
         <ul className="mt-1 space-y-0.5 text-dim">
-          {payload.warnings.map((w) => (
-            <li key={w} className="flex gap-1.5">
-              <span className="shrink-0 rounded border border-white/10 px-1 font-mono text-[11px] uppercase tracking-wider">
-                geometry
-              </span>
-              <span>{w}</span>
-            </li>
-          ))}
+          {payload.warnings.map((raw) => {
+            const w = classifyWarning(raw);
+            return (
+              <li key={raw} className="flex items-start gap-1.5">
+                {w.tone === "warn" ? (
+                  <Badge tone="warn" className="shrink-0">
+                    {WARNING_CHIP[w.shape]}
+                  </Badge>
+                ) : (
+                  <span className="mt-px shrink-0 rounded border border-white/10 px-1 font-mono text-[11px] uppercase tracking-wider">
+                    {WARNING_CHIP[w.shape]}
+                  </span>
+                )}
+                <span className={w.tone === "warn" ? "text-muted" : undefined}>
+                  {w.lead && <span className="font-medium text-warn">{w.lead} · </span>}
+                  {w.text}
+                </span>
+              </li>
+            );
+          })}
         </ul>
       )}
     </div>
@@ -383,26 +480,33 @@ function RateModelLine({ payload }: { payload: TaskGraphPayload }) {
   );
 }
 
-/** Chip label per advisory kind, in sentence case: these are notes, not error codes. */
-const ADVISORY_LABEL: Record<Advisory["kind"], string> = {
-  estimate: "estimate",
-  ungrounded: "no quantities",
-  other: "advisory",
-};
-
-/** Advisories are warnings (estimate gaps, an ungrounded graph), never conflicts: muted. */
+/** Advisories are warnings, never conflicts: estimate gaps and an ungrounded graph render
+ *  muted; a volume line (a structure's planned m³ differ from what its dimensions imply) takes
+ *  the amber of the scope-drift chip, with the structure id, because it is a re-scope the user
+ *  should look at. Labels come from format.ts ADVISORY_KIND_LABELS. */
 function AdvisoryList({ advisories }: { advisories: string[] }) {
   return (
     <ul className="mt-1.5 space-y-0.5 text-xs text-dim">
       {advisories.map((raw) => {
         const a = parseAdvisory(raw);
+        const volume = a.category === "volume";
         return (
           <li key={raw} className="flex items-start gap-1.5">
-            <span className="mt-px shrink-0 rounded border border-white/10 px-1 font-mono text-[11px]">
-              {ADVISORY_LABEL[a.kind]}
-            </span>
-            {a.task && <span className="shrink-0 font-mono text-muted">{a.task}</span>}
-            <span>{a.text}</span>
+            {volume ? (
+              <Badge
+                tone="warn"
+                className="shrink-0"
+                title="The planned volume differs from what the structure's dimensions imply: a re-scope to check against the brief"
+              >
+                {ADVISORY_KIND_LABELS.volume}
+              </Badge>
+            ) : (
+              <span className="mt-px shrink-0 rounded border border-white/10 px-1 font-mono text-[11px]">
+                {ADVISORY_KIND_LABELS[a.category]}
+              </span>
+            )}
+            {a.task && <span className={cx("shrink-0 font-mono", volume ? "text-warn" : "text-muted")}>{a.task}</span>}
+            <span className={volume ? "text-muted" : undefined}>{a.text}</span>
           </li>
         );
       })}
@@ -487,9 +591,9 @@ function RepairDiffBlock({ diff, tasks }: { diff: NonNullable<ReturnType<typeof 
             scope {fmtSignedPct(summary.drift)} energy
           </Badge>
         )}
-        {visible.map((c) => (
+        {visible.map((c, i) => (
           <span
-            key={`${c.kind}-${c.task}`}
+            key={`${c.kind}-${c.task}-${i}`}
             title={c.title}
             className={cx(
               "inline-flex max-w-full items-center gap-1 rounded border px-1.5 py-px text-[11px] leading-[18px]",
@@ -589,25 +693,24 @@ function BudgetTable({ rows }: { rows: BudgetRow[] }) {
 
 /** Kind badge, conflict chips (prefix meaning as tooltip), the hint, its numbers as a table,
  *  and the raw details behind a disclosure. Shared by the trace, the outcome notice and the
- *  red verification receipt. */
+ *  red verification receipt; `collapsed` keeps the badge and the chips and folds the hint and
+ *  the numbers behind "Show the core", for a second copy of a core the trace's final step
+ *  already shows in full. */
 export function FailureDetails({
   failure,
   horizonH = null,
+  collapsed = false,
   className,
 }: {
   failure: Failure;
   horizonH?: number | null;
+  collapsed?: boolean;
   className?: string;
 }) {
   const rows = budgetRows(failure, horizonH);
-  return (
-    <div className={cx("space-y-2", className)}>
-      <div className="flex flex-wrap items-center gap-1.5">
-        <Badge tone="fail" mono>
-          {failure.kind}
-        </Badge>
-        <ConflictChips conflicts={failure.conflicts} />
-      </div>
+  const hasBody = Boolean(failure.hint) || rows.length > 0 || failure.details.length > 0;
+  const body = (
+    <>
       {failure.hint && <p className="text-[13px] leading-relaxed text-fg/90">{tidyHint(failure.hint)}</p>}
       {rows.length > 0 && <BudgetTable rows={rows} />}
       {failure.details.length > 0 && (
@@ -617,24 +720,115 @@ export function FailureDetails({
           </summary>
           <ul className="mt-1 list-disc space-y-0.5 pl-4 font-mono">
             {failure.details.map((d, i) => (
-              <li key={i}>{d}</li>
+              <li key={i}>{tidyDetail(d)}</li>
             ))}
           </ul>
         </details>
+      )}
+    </>
+  );
+  return (
+    <div className={cx("space-y-2", className)}>
+      <div className="flex flex-wrap items-center gap-1.5">
+        <Badge tone="fail" mono>
+          {failure.kind}
+        </Badge>
+        <ConflictChips conflicts={failure.conflicts} />
+      </div>
+      {collapsed && hasBody ? (
+        <details className="group text-xs">
+          <summary className="cursor-pointer select-none text-muted hover:text-fg">
+            <span className="group-open:hidden">Show the core: the hint and the numbers behind it</span>
+            <span className="hidden group-open:inline">Hide the core</span>
+          </summary>
+          <div className="mt-2 space-y-2">{body}</div>
+        </details>
+      ) : (
+        body
       )}
     </div>
   );
 }
 
-/** What became of a failed step's core: a repair followed, the run is still streaming, or the
- *  planner stopped there (no repair round left). */
-export type CoreOutcome = "repaired" | "pending" | "stopped";
+/** How the run ended, as far as the trace knows: still streaming, with a PlanResult, or
+ *  without one (cancelled, or the stream failed). */
+export type RunEnd = "running" | "result" | "aborted";
+
+/** What became of a failed step, read from the step that followed it: a verdict (validate /
+ *  schedule) answered by a repair round; a rejected model answer (structure / taskgraph /
+ *  repair) asked again within its round; the run still streaming; or the step that ended the
+ *  run: no repair round left, repairs off (max_repairs 0), a rejected answer with no re-ask
+ *  left, no recorded answer at all (an offline backend without a recording for the brief: its
+ *  step message starts with "offline:"), or a run that ended without a result. "continued"
+ *  makes no claim. */
+export type CoreOutcome =
+  | "repaired"
+  | "reasked"
+  | "pending"
+  | "stopped"
+  | "off"
+  | "rejected"
+  | "unavailable"
+  | "aborted"
+  | "continued";
 
 const CORE_OUTCOME_LABEL: Record<CoreOutcome, string> = {
   repaired: "sent to Nemotron for repair",
+  reasked: "answer rejected, Nemotron asked again",
   pending: "",
   stopped: "no repair round left, planning stopped",
+  off: "repairs off, planning stopped",
+  rejected: "answer rejected, planning stopped",
+  unavailable: "no recorded answer, planning stopped",
+  aborted: "planning stopped",
+  continued: "",
 };
+
+/** The outcome of a failed step from its neighbours (see CoreOutcome). A verdict with a
+ *  repair round left is always followed by a repair step, so a verdict that ends a finished run
+ *  had none left, or the loop was off. */
+export function coreOutcomeOf(
+  step: LoopStep,
+  next: LoopStep | null,
+  pending: boolean,
+  runEnd: RunEnd,
+  repairsOff: boolean,
+): CoreOutcome {
+  const verdict = step.stage === "validate" || step.stage === "schedule";
+  const answer = step.stage === "structure" || step.stage === "taskgraph" || step.stage === "repair";
+  if (!verdict && !answer) return "continued";
+  if (next) {
+    if (answer && next.stage === step.stage) return "reasked";
+    if (verdict && next.stage === "repair") return "repaired";
+    return "continued";
+  }
+  if (pending || runEnd === "running") return "pending";
+  if (runEnd === "aborted") return "aborted";
+  if (answer) return /^offline:/i.test(step.message ?? "") ? "unavailable" : "rejected";
+  return repairsOff ? "off" : "stopped";
+}
+
+/** The same verdict (kind, conflicts, hint): the final failed step's and the result's. */
+function sameFailure(a: Failure, b: Failure): boolean {
+  return (
+    a.kind === b.kind &&
+    a.hint === b.hint &&
+    a.conflicts.length === b.conflicts.length &&
+    a.conflicts.every((c, i) => c === b.conflicts[i])
+  );
+}
+
+/** A verdict failure (the validator or CP-SAT said no), as opposed to a broken model answer. */
+export function isVerdict(failure: Failure | null | undefined): boolean {
+  return failure?.kind === "infeasible" || failure?.kind === "validation";
+}
+
+/** "after 3 repair rounds", or "with repairs off" when the first verdict was final
+ *  (PlanResult.repairs is 0 with a verdict failure only then). */
+export function roundsPhrase(plan: Pick<PlanResult, "repairs" | "failure">): string {
+  if (plan.repairs === 0 && isVerdict(plan.failure)) return "with repairs off";
+  return `after ${plural(plan.repairs, "repair round")}`;
+}
 
 /** A failed step as a full-width block with a red bar: the infeasibility core the solver (or
  *  the validator) extracted, which is what goes back to Nemotron when a repair round is left. */
@@ -651,12 +845,11 @@ export function CoreBlock({
 }) {
   const isCore = failure.kind === "infeasible" || failure.kind === "validation";
   const suffix = CORE_OUTCOME_LABEL[outcome];
+  const head = isCore ? `Infeasibility core · ${plural(failure.conflicts.length, "conflict")}` : "Step failed";
   return (
     <div className={cx("rounded-r-md border-l-[3px] border-fail bg-fail/[0.07] py-2.5 pl-3.5 pr-3", className)}>
       <div className="mb-1.5 text-[11px] font-medium uppercase tracking-wider text-fail">
-        {isCore
-          ? `Infeasibility core · ${plural(failure.conflicts.length, "conflict")}${suffix ? ` · ${suffix}` : ""}`
-          : "Step failed"}
+        {suffix ? `${head} · ${suffix}` : head}
       </div>
       <FailureDetails failure={failure} horizonH={horizonH} />
     </div>
@@ -682,14 +875,16 @@ function Outcome({
   }
   if (!result) return null;
   const usage = totalUsage(result.steps);
+  // every model the run called, so the token total is not credited to the first one alone
+  const models = usage.models.length > 0 ? ` · ${usage.models.map(modelDisplayName).join(" + ")}` : "";
   // recorded answers carry no token counts: say "2 recorded model answers"
   const tokens =
     usage.calls > 0
       ? usage.input + usage.output > 0
-        ? `${fmtCompact(usage.input)} in / ${fmtCompact(usage.output)} out tokens${usage.model ? ` · ${modelDisplayName(usage.model)}` : ""}`
+        ? `${fmtCompact(usage.input)} in / ${fmtCompact(usage.output)} out tokens${models}`
         : isFixtureModel(usage.model)
           ? plural(usage.calls, "recorded model answer")
-          : `${plural(usage.calls, "model call")}${usage.model ? ` · ${modelDisplayName(usage.model)}` : ""}`
+          : `${plural(usage.calls, "model call")}${models}`
       : "no model calls";
   if (result.success && result.schedule) {
     const s = result.schedule;
@@ -705,13 +900,29 @@ function Outcome({
       </Notice>
     );
   }
+  // the advice sits under the final failed step's core block just above; a recording whose
+  // steps do not carry it (PlanResult.suggestions only) shows it here instead
+  const failedStep = lastFailedStep(result.steps);
+  const advice = failedStep && stepSuggestions(failedStep).length > 0 ? [] : planSuggestions(result);
+  // the final failed step just above shows this core in full (chips, hint, numbers): the
+  // notice repeats only the conflict ids, so one screen holds one full core
+  const coreAbove =
+    result.failure !== null && failedStep?.failure !== null && failedStep?.failure !== undefined && sameFailure(failedStep.failure, result.failure);
   return (
-    <Notice tone="fail" title={`No verified plan after ${plural(result.repairs, "repair round")}`}>
+    <Notice tone="fail" title={`No verified plan ${roundsPhrase(result)}`}>
       {result.failure ? (
-        <FailureDetails failure={result.failure} horizonH={horizonH ?? result.requirements.horizon_h} />
+        coreAbove ? (
+          <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs">
+            <span>{result.failure.conflicts.length > 0 ? "the core, shown in full in the final step above:" : "the verdict is in the final step above"}</span>
+            <ConflictChips conflicts={result.failure.conflicts} />
+          </div>
+        ) : (
+          <FailureDetails failure={result.failure} horizonH={horizonH ?? result.requirements.horizon_h} />
+        )
       ) : (
         "the planner stopped without a failure record"
       )}
+      {advice.length > 0 && <Suggestions variant="outcome" suggestions={advice} className="mt-2" />}
       <div className="mt-1.5 text-xs">{tokens}</div>
     </Notice>
   );

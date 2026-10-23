@@ -3,7 +3,9 @@
  * One replan: the schedule in force before the event next to the replanned schedule, both in
  * absolute simulator hours on the same axis, plus the outcome (CP-SAT alone, or escalated to
  * Nemotron), the makespan delta, the re-verification summary, the replanning trace and the
- * context the planner was given.
+ * context the planner was given. A failed replan shows its verdict in place of the "After"
+ * chart, with the solver-proven advice the replanner attached (a later deadline, one more
+ * robot; absolute hours against the brief's deadline) under the failure line.
  */
 import { useMemo } from "react";
 import type {
@@ -20,10 +22,23 @@ import type {
 } from "@/lib/types";
 import { CONFLICT_PREFIXES, conflictPrefix } from "@/lib/types";
 import { EVENT_COLORS, STAGE_LABELS, robotTypeColor, zoneColor } from "@/lib/palette";
-import { fmtHours, fmtSeconds, isFixtureModel, modelDisplayName, plural, tidyHint, tidyUnits } from "@/lib/format";
+import {
+  fmtHours,
+  fmtSeconds,
+  isFixtureModel,
+  lastFailedStep,
+  modelDisplayName,
+  planSuggestions,
+  repairRounds,
+  plural,
+  suggestionsTimeBase,
+  tidyHint,
+  tidyUnits,
+} from "@/lib/format";
 import { Gantt, defaultZoneIds } from "./Gantt";
 import { ESCALATION_MODEL, KindPill, escalationText, eventKindLabel, formatHours, replanOutcome as outcomeOf } from "./EventList";
 import { Badge } from "./Section";
+import { Suggestions } from "./Suggestions";
 
 export interface BeforeAfterProps {
   record: ReplanRecord;
@@ -289,7 +304,7 @@ export function BeforeAfter({ record, requirements, tasks, index, onSelectTask, 
               onSelectTask={onSelectTask}
             />
           ) : (
-            <FailurePanel failure={after.failure} />
+            <FailurePanel after={after} atH={record.t_h} />
           )}
         </div>
       </div>
@@ -436,7 +451,7 @@ function TraceChips({ steps }: { steps: LoopStep[] }) {
     <ol className="flex flex-wrap items-center gap-1">
       {steps.map((s, i) => {
         // repair rounds count from the first repair; the backend's `attempt` counts task graphs
-        const round = s.stage === "repair" ? steps.slice(0, i + 1).filter((x) => x.stage === "repair").length : null;
+        const round = s.stage === "repair" ? repairRounds(steps.slice(0, i + 1)) : null;
         return (
         <li key={i} className="flex items-center gap-1">
           <span
@@ -467,7 +482,19 @@ function TraceChips({ steps }: { steps: LoopStep[] }) {
   );
 }
 
-function FailurePanel({ failure }: { failure: Failure | null }) {
+/** The "After" cell of a failed replan: the verdict (kind, conflicts, hint, details), then the
+ *  advice the replanner attached (ReplanRecord.after.suggestions, or the final failed step's
+ *  payload): absolute simulator hours against the brief's deadline, unless an older recording's
+ *  step says its hours are planner-relative, in which case the note names the offset. */
+function FailurePanel({ after, atH }: { after: PlanResult; atH: number }) {
+  const failure: Failure | null = after.failure;
+  const advice = planSuggestions(after);
+  const failedStep = lastFailedStep(after.steps);
+  // the PlanResult-level list of a replan is rebased to absolute hours by the backend; only a
+  // step payload recorded without the flag is relative
+  const own = Array.isArray(after.suggestions) && after.suggestions.length > 0;
+  const timeBase = own || !failedStep ? "absolute" : suggestionsTimeBase(failedStep);
+  const offset = failedStep?.payload?.offset_h;
   return (
     <div className="flex h-full min-h-40 flex-col gap-2 rounded-lg border border-fail/40 bg-fail/5 p-3 text-sm">
       <div className="flex items-center gap-2">
@@ -500,6 +527,14 @@ function FailurePanel({ failure }: { failure: Failure | null }) {
         </>
       ) : (
         <p className={mutedClass}>The planner returned no schedule and no failure record.</p>
+      )}
+      {advice.length > 0 && (
+        <Suggestions
+          variant="replan"
+          suggestions={advice}
+          timeBase={timeBase}
+          offsetH={typeof offset === "number" && Number.isFinite(offset) ? offset : atH}
+        />
       )}
       <p className={`mt-auto text-xs ${mutedClass}`}>The previous schedule stays in force.</p>
     </div>

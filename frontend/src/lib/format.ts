@@ -4,18 +4,31 @@
  */
 import {
   CONFLICT_PREFIXES,
+  OPERATIONS,
+  OPERATION_LABELS,
+  SUGGESTION_COPY,
+  SUGGESTION_KIND_LABELS,
   conflictPrefix,
+  isSuggestion,
   unitLabel,
   type DiffField,
   type Failure,
   type LoopStep,
+  type Operation,
+  type PlanResult,
   type RepairDiff,
   type Structure,
+  type Suggestion,
+  type SuggestionKind,
   type Task,
   type Usage,
 } from "./types";
 
-const NON_DIMENSION_KEYS = new Set(["id", "type", "zone"]);
+export { OPERATIONS } from "./types";
+
+/** Structure keys that are never dimensions: the identity fields and the operations list
+ *  (a non-numeric value is skipped anyway; a boolean flag is never 1 m). */
+export const NON_DIMENSION_KEYS: ReadonlySet<string> = new Set(["id", "type", "zone", "operations"]);
 
 export function fmtNum(n: number | null | undefined, digits = 1): string {
   if (n === null || n === undefined || !Number.isFinite(n)) return "—";
@@ -80,7 +93,32 @@ export function structureDims(s: Structure): [string, number][] {
   const out: [string, number][] = [];
   for (const [k, v] of Object.entries(s)) {
     if (NON_DIMENSION_KEYS.has(k)) continue;
-    if (typeof v === "number") out.push([k, v]);
+    if (typeof v === "number" && Number.isFinite(v)) out.push([k, v]);
+  }
+  return out;
+}
+
+// ------------------------------------------------------------------ operations
+/** "sinter" -> "sinter" (the verbs stay lower case); an unknown word prints as it came, with
+ *  underscores read as spaces. */
+export function operationLabel(op: Operation | string): string {
+  return OPERATION_LABELS[op as Operation] ?? String(op).replace(/_/g, " ");
+}
+
+export function isOperation(v: unknown): v is Operation {
+  return typeof v === "string" && (OPERATIONS as readonly string[]).includes(v);
+}
+
+/** The operations a structure lists, defensively: unknown strings dropped, repeats dropped
+ *  (first mention's place kept), [] when the key is missing (a recording older than phase 3c)
+ *  or malformed. */
+export function structureOperations(s: Structure): Operation[] {
+  const raw = s.operations;
+  if (!Array.isArray(raw)) return [];
+  const out: Operation[] = [];
+  for (const v of raw) {
+    const op = typeof v === "string" ? v.trim().toLowerCase() : v;
+    if (isOperation(op) && !out.includes(op)) out.push(op);
   }
   return out;
 }
@@ -99,6 +137,28 @@ export function conflictLabel(conflict: string): string {
   return rest ? `${meaning} (${rest})` : meaning;
 }
 
+/** Conflict prefixes a resource change (bigger battery, one more robot, later deadline) can
+ *  answer, as the backend's advice stage has them (moonwright.pipeline.relax
+ *  RESOURCE_CONFLICTS); a verdict with any other prefix (scope, missing, reference, cycle,
+ *  quantity, ...) means the task graph itself is wrong, so no battery or spare fixes it. */
+export const RESOURCE_CONFLICT_PREFIXES: ReadonlySet<string> = new Set([
+  "energy",
+  "energy_task",
+  "horizon",
+  "horizon_path",
+  "robot",
+  "zone",
+  "precedence",
+  "capability",
+]);
+
+/** True when a verdict (validator or CP-SAT) names only conflicts a resource change can
+ *  answer; false for a coverage verdict and for a broken or missing model answer. */
+export function isResourceFailure(failure: Failure | null | undefined): boolean {
+  if (!failure || (failure.kind !== "infeasible" && failure.kind !== "validation")) return false;
+  return failure.conflicts.length > 0 && failure.conflicts.every((c) => RESOURCE_CONFLICT_PREFIXES.has(conflictPrefix(c)));
+}
+
 /** "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B" -> "Nemotron-3-Super-120B-A12B"; the offline
  *  client reports "fixture:<file>" as its model, which reads as "recorded answer". */
 export function shortModel(model: string): string {
@@ -112,12 +172,33 @@ export interface UsageTotal {
   input: number;
   output: number;
   latency: number;
+  /** The first model seen (the structuring model of a full run). */
   model: string | null;
+  /** Every distinct model, in order of first appearance: a live run uses several. */
+  models: string[];
+}
+
+/** True when steps[i] is a repair step that opens a verdict round: it answers a failed
+ *  validate / schedule step. A repair step that follows a rejected repair answer is the same
+ *  round asked again (LoopStep.attempt counts every answer; PlanResult.repairs only rounds). */
+export function opensRepairRound(steps: LoopStep[], i: number): boolean {
+  const s = steps[i];
+  if (!s || s.stage !== "repair") return false;
+  const prev = i > 0 ? steps[i - 1] : null;
+  return prev === null || ((prev.stage === "validate" || prev.stage === "schedule") && !prev.ok);
+}
+
+/** Repair rounds in a trace, counted like the backend's PlanResult.repairs: re-asks within a
+ *  round do not add one. Pass a prefix of the trace for the round a given step belongs to. */
+export function repairRounds(steps: LoopStep[]): number {
+  let n = 0;
+  for (let i = 0; i < steps.length; i += 1) if (opensRepairRound(steps, i)) n += 1;
+  return n;
 }
 
 /** Sum of the LLM usage over a trace (steps without usage are solver/validator stages). */
 export function totalUsage(steps: LoopStep[]): UsageTotal {
-  const t: UsageTotal = { calls: 0, input: 0, output: 0, latency: 0, model: null };
+  const t: UsageTotal = { calls: 0, input: 0, output: 0, latency: 0, model: null, models: [] };
   for (const s of steps) {
     if (!s.usage) continue;
     t.calls += 1;
@@ -125,6 +206,7 @@ export function totalUsage(steps: LoopStep[]): UsageTotal {
     t.output += s.usage.output_tokens;
     t.latency += s.usage.latency_s;
     if (!t.model && s.usage.model) t.model = s.usage.model;
+    if (s.usage.model && !t.models.includes(s.usage.model)) t.models.push(s.usage.model);
   }
   return t;
 }
@@ -192,23 +274,55 @@ export function fmtSignedPct(pct: number | null | undefined, digits = 1): string
 }
 
 // ------------------------------------------------------------------ advisories
+/** estimate: the rate model overrode the model's hours / Wh of a task; ungrounded: no task
+ *  states a quantity; volume (phase 3c): a structure's planned m3 clearly differ from what its
+ *  dimensions imply (a re-scope to make visible, amber, label "scope differs from dimensions");
+ *  other: any sentence the console does not know. */
+export type AdvisoryKind = "estimate" | "ungrounded" | "volume" | "other";
+
+/** Chip label per advisory kind, in sentence case (notes, not error codes). */
+export const ADVISORY_KIND_LABELS: Record<AdvisoryKind, string> = {
+  estimate: "estimate",
+  ungrounded: "no quantities",
+  volume: "scope differs from dimensions",
+  other: "advisory",
+};
+
 export interface Advisory {
+  /** `category` without "volume" (a volume line reads "other" here): kept so a label table
+   *  typed Record<Advisory["kind"], string> keeps compiling; new code indexes by `category`. */
   kind: "estimate" | "ungrounded" | "other";
-  /** the task an estimate advisory is about */
+  /** the full classification: "volume" tells a scope-vs-dimensions warning apart */
+  category: AdvisoryKind;
+  /** the task an estimate advisory is about, the structure a volume advisory is about */
   task: string | null;
   text: string;
   raw: string;
 }
 
 /** "estimate:T4: model said 10 h / 1000 Wh, rate model gives 27 h / 3000 Wh (+170%)" ->
- *  {kind: "estimate", task: "T4", text: "model said ..."}; "ungrounded: no task states a
- *  quantity, ..." -> {kind: "ungrounded", task: null, text: "no task ..."}. */
+ *  {category: "estimate", task: "T4", text: "model said ..."}; "ungrounded: no task states a
+ *  quantity, ..." -> {category: "ungrounded", task: null, text: "no task ..."}; "volume:S1: its
+ *  dimensions give 360 m3 (100 x 6 x 0.6 m) but its excavation tasks (T3 600 m2) total only
+ *  0 m3 (0%)" -> {category: "volume", kind: "other", task: "S1", text: "its dimensions give
+ *  360 m³ (100 × 6 × 0.6 m) but ..."}. */
 export function parseAdvisory(raw: string): Advisory {
   const est = /^estimate:([^:\s]+):\s*([\s\S]*)$/.exec(raw);
-  if (est) return { kind: "estimate", task: est[1], text: humanizeFields(est[2].trim()), raw };
+  if (est) return { kind: "estimate", category: "estimate", task: est[1], text: humanizeFields(est[2].trim()), raw };
   const ung = /^ungrounded:\s*([\s\S]*)$/.exec(raw);
-  if (ung) return { kind: "ungrounded", task: null, text: humanizeFields(ung[1].trim()), raw };
-  return { kind: "other", task: null, text: humanizeFields(raw), raw };
+  if (ung) return { kind: "ungrounded", category: "ungrounded", task: null, text: humanizeFields(ung[1].trim()), raw };
+  const vol = /^volume:([^:\s]+):\s*([\s\S]*)$/.exec(raw);
+  if (vol) return { kind: "other", category: "volume", task: vol[1], text: humanizeVolume(vol[2].trim()), raw };
+  return { kind: "other", category: "other", task: null, text: humanizeFields(raw), raw };
+}
+
+/** The volume sentence with the console's units: "360 m3 (100 x 6 x 0.6 m)" ->
+ *  "360 m³ (100 × 6 × 0.6 m)"; task ids such as T3 are left alone. */
+export function humanizeVolume(text: string): string {
+  return humanizeFields(text)
+    .replace(/\bm3\b/g, "m³")
+    .replace(/\bm2\b/g, "m²")
+    .replace(/(\d)\s+x\s+(?=\d)/g, "$1 × ");
 }
 
 /** Backend sentences name schema fields ("every duration_h and energy_wh"): read them as words. */
@@ -233,6 +347,19 @@ export function tidyUnits(text: string): string {
  *  "5000 Wh" -> "5,000 Wh", "336h" -> "336 h"; bare counts and ids are left alone. */
 export function tidyNumbers(text: string): string {
   return text.replace(/(\d+(?:\.\d+)?)\s?(kWh|Wh|h)\b/g, (_, n: string, unit: string) => `${fmtNum(Number(n), 1)} ${unit}`);
+}
+
+/** A failure detail line as the console prints it: the backend's file-system clauses dropped
+ *  ("(looked in /…/x)"), absolute paths removed and its recording vocabulary read as words
+ *  ("no fixture directory for brief 'x'" -> "no recording for brief 'x'"), units spaced. */
+export function tidyDetail(text: string): string {
+  return tidyUnits(
+    text
+      .replace(/\s*\(looked in [^)]*\)/g, "")
+      .replace(/(^|[\s(])\/(?:[^\s/)]+\/)+[^\s)]*/g, "$1…")
+      .replace(/\bfixture directory\b/gi, "recording")
+      .replace(/\bfixtures?\b/gi, "recording"),
+  ).trim();
 }
 
 /** "a", "a and b", "a, b and c". */
@@ -316,6 +443,97 @@ export function tidyHint(text: string | null | undefined): string {
   return out
     .map((s) => (s.startsWith("\u0000") ? renderPool(s.slice(1), pools.get(s.slice(1)) as PoolHint) : s))
     .join(" ");
+}
+
+// ------------------------------------------------------------------ structure warnings
+export interface StructureWarning {
+  /** the structure the warning names ("structure S2 ..."), null for a site-wide one */
+  structure: string | null;
+  /** "warn" (amber): the user should act before planning (operations recovered from malformed
+   *  keys: check them against the brief; a structure without dimensions: add the brief's
+   *  numbers); "muted": an operation the fleet cannot staff or the brief does not ask for,
+   *  overlapping zones, an undeclared or missing zone, no depot */
+  tone: "warn" | "muted";
+  /** the sentence with field names read as words and units spaced */
+  text: string;
+  raw: string;
+}
+
+/** One StructurePayload.warnings line as the console shows it. */
+export function parseStructureWarning(raw: string): StructureWarning {
+  const m = /^structure (\S+?):?(?:\s|$)/.exec(raw);
+  const tone = /recovered from malformed keys|has no dimensions/.test(raw) ? "warn" : "muted";
+  return { structure: m ? m[1] : null, tone, text: tidyUnits(humanizeFields(raw.trim())), raw };
+}
+
+// ------------------------------------------------------------------ advice (suggestions)
+/** Well-formed suggestions of an untyped list (anything else dropped, order kept). */
+function suggestionList(v: unknown): Suggestion[] {
+  return Array.isArray(v) ? v.filter(isSuggestion) : [];
+}
+
+/** The advice a step carries (SuggestionsPayload): non-empty only on the final failed step of
+ *  a failed run or replan, [] for every other step and for a payload recorded before the
+ *  field existed. */
+export function stepSuggestions(step: LoopStep): Suggestion[] {
+  return suggestionList(step.payload?.suggestions);
+}
+
+/** Time base of a step's advice: "absolute" for a replan step that says so
+ *  (suggestions_time_base) and for a main-plan step (planner hours start at simulator 0, so
+ *  there is no offset to add); "relative" only for a replan step whose advice was recorded
+ *  without the flag. */
+export function suggestionsTimeBase(step: LoopStep): "absolute" | "relative" {
+  const p = step.payload;
+  if (!p) return "absolute";
+  if (p.suggestions_time_base === "absolute") return "absolute";
+  return p.time_base === "relative" || p.time_base === "absolute" ? "relative" : "absolute";
+}
+
+/** The last step with ok=false: on a failed run the verdict no repair could answer (its
+ *  payload carries the advice); null when every step passed. */
+export function lastFailedStep(steps: LoopStep[]): LoopStep | null {
+  for (let i = steps.length - 1; i >= 0; i -= 1) if (!steps[i].ok) return steps[i];
+  return null;
+}
+
+/** Index of the step whose answer is the plan's task graph (PlanResult.task_graph): the last
+ *  ok taskgraph / repair step, since a rejected repair answer produces no graph; -1 when there
+ *  is none. Only that step's repair diff may be read against the final graph. */
+export function lastGraphStep(steps: LoopStep[]): number {
+  for (let i = steps.length - 1; i >= 0; i -= 1) {
+    const s = steps[i];
+    if ((s.stage === "taskgraph" || s.stage === "repair") && s.ok) return i;
+  }
+  return -1;
+}
+
+/** The advice of a plan: PlanResult.suggestions, else (a recording without the field, or a
+ *  run still streaming) the final failed step's payload, else []; always [] for a verified
+ *  plan. The same call works on ReplanRecord.after. */
+export function planSuggestions(plan: Pick<PlanResult, "success" | "steps"> & { suggestions?: unknown }): Suggestion[] {
+  if (plan.success) return [];
+  const own = suggestionList(plan.suggestions);
+  if (own.length > 0) return own;
+  const failed = lastFailedStep(plan.steps);
+  return failed ? stepSuggestions(failed) : [];
+}
+
+/** "extend_horizon" -> "later deadline"; an unknown kind prints as words. */
+export function suggestionKindLabel(kind: SuggestionKind | string): string {
+  return SUGGESTION_KIND_LABELS[kind as SuggestionKind] ?? String(kind).replace(/_/g, " ");
+}
+
+/** The detail sentence as the console prints it: the words verbatim, every number that carries
+ *  a unit in the console's format ("5950 Wh" -> "5,950 Wh", "86h" -> "86 h") so the row reads
+ *  like the apply button and the hint next to it; ids and bare counts are left alone. */
+export function fmtSuggestion(s: Suggestion): string {
+  return tidyNumbers(tidyUnits(s.detail.trim()));
+}
+
+/** Chip text of a suggestion: "CP-SAT verified" or "not solver-verified" (reduce_scope). */
+export function suggestionProofLabel(s: Suggestion): string {
+  return s.verified ? SUGGESTION_COPY.verified : SUGGESTION_COPY.unverified;
 }
 
 /** Integer percentages that add up to 100 (largest remainder), for shares shown side by side
@@ -604,6 +822,20 @@ function detectRenumbering(changes: Map<string, FieldChanges>, diff: RepairDiff,
     out.set(id, candidates[0].id);
     taken.add(candidates[0].id);
   }
+  // a shift is a chain that ends in a new id: every target is itself a source (its own old
+  // work moved on) or an added id. A lone match against an id that kept its own diff entry is
+  // a coincidence of equal figures (a task re-scoped to the work another one gave up), not a
+  // renumbering, and would print "renumbered, work unchanged" over a real change.
+  const added = new Set(diff.added);
+  for (let pruned = true; pruned; ) {
+    pruned = false;
+    for (const [o, n] of out) {
+      if (!added.has(n) && !out.has(n)) {
+        out.delete(o);
+        pruned = true;
+      }
+    }
+  }
   return out;
 }
 
@@ -654,8 +886,13 @@ const workOf = (t: Pick<TaskState, "duration_h" | "energy_wh">) => `${fmtNum(t.d
  * The repair diff as chips, one per task: "T2 split into T2 + T11 · energy 4,000 → 2,100 Wh",
  * "T5 moved to excavator · zone Z2 → Z4", "T11 added", "T9 removed". A split is detected
  * when an added task's energy plus the shrunken task's new energy adds back to the old energy
- * (within 10 %) on the same robot type; `tasks` (the final graph) supplies names, units and
- * robot types and may be empty while the trace is still streaming.
+ * (within 10 %) on the same robot type; `tasks` supplies names, units and robot types.
+ *
+ * `tasks` must be the graph THIS repair produced: the plan's final graph for the step
+ * lastGraphStep names, and [] for every earlier round (and while the trace still streams), so
+ * those chips come from the diff's fields verbatim. Matching a round's diff against a graph
+ * that later rounds rewrote describes changes that never happened ("renumbered, work
+ * unchanged" for tasks that were re-scoped) and drops the real ones.
  *
  * When the repair renumbered the graph (see detectRenumbering) the shifted ids collapse into
  * one "renumbered, work unchanged" chip and the ids whose old work is gone are matched to the
@@ -737,15 +974,33 @@ export function describeRepairDiff(diff: RepairDiff, tasks: Task[] = []): Repair
         continue;
       }
       const now = group.find((t) => t.id === id) ?? group[0];
-      const { parts, quantityDropped: dropped } = stateDelta(old, now);
-      noteDrop(dropped, now.id);
-      const verb = parts.some((x) => /^(duration|energy|quantity)/.test(x)) ? "re-scoped" : "re-issued";
-      const head = now.id === id ? verb : `${verb} (was ${id})`;
+      let words: string[];
+      if (now.id === id) {
+        // the id kept its work: the diff's own fields, with the task's unit
+        const { parts, quantityDropped: dropped } = fieldParts(id, fields, unitLabel(now.unit));
+        noteDrop(dropped, id);
+        words = parts;
+      } else {
+        // the old work went on under another id: what changed on the way, the edges included
+        // when the diff recorded the old ones
+        const { parts, quantityDropped: dropped } = stateDelta(old, now);
+        const edges = fields.get("after");
+        if (edges && Array.isArray(edges.before)) {
+          const was = edges.before.map(String).sort();
+          const is = [...now.after].sort();
+          if (was.length !== is.length || was.some((x, k) => x !== is[k])) {
+            parts.push(`after ${range("after", edges.before, now.after, "")}`);
+          }
+        }
+        noteDrop(dropped, now.id);
+        const scoped = parts.some((x) => /^(duration|energy|quantity)/.test(x));
+        words = [`${scoped ? "re-scoped" : "re-issued"} (was ${id})`, ...parts];
+      }
       chips.push({
         task: now.id,
         kind: "changed",
-        text: [head, ...parts].join(" · "),
-        title: `${now.id} ${now.name}: ${[head, ...parts].join("; ")}`,
+        text: words.join(" · "),
+        title: `${now.id} ${now.name}: ${words.join("; ")}`,
       });
       free.delete(now.id);
       handled.add(now.id);

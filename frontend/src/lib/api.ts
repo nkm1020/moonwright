@@ -148,26 +148,65 @@ export function postMonteCarlo(req: MonteCarloRequest, signal?: AbortSignal): Pr
 }
 
 // ------------------------------------------------------------------ bundled samples
-export type SampleId = "landing_pad" | "access_road" | "tight_battery";
-export const SAMPLE_IDS: readonly SampleId[] = ["landing_pad", "access_road", "tight_battery"];
+/** Recorded runs under public/samples: `<id>.plan.json` always; `.sim.json` and `.mc.json`
+ *  only where a sample ships them (landing_pad). front_loaded is a genuine live Nemotron run
+ *  of an impossible 60 h brief: success false, 3 repair rounds, solver-proven advice, no
+ *  simulation. */
+export type SampleId = "landing_pad" | "access_road" | "tight_battery" | "front_loaded";
+export const SAMPLE_IDS: readonly SampleId[] = ["landing_pad", "access_road", "tight_battery", "front_loaded"];
 
-async function loadStatic<T>(path: string): Promise<T> {
+async function loadStatic<T>(path: string, what: string): Promise<T> {
   let res: Response;
   try {
     res = await fetch(path, { headers: { accept: "application/json" } });
   } catch (e) {
-    throw new ApiError(0, `could not load ${path} (${errorMessage(e)})`);
+    throw new ApiError(0, `could not load ${what} (${errorMessage(e)})`);
   }
-  if (!res.ok) throw new ApiError(res.status, `could not load ${path}`);
+  if (!res.ok) throw new ApiError(res.status, `could not load ${what}`);
   return (await res.json()) as T;
 }
 
 /** Recorded PlanResult served from public/samples (no backend needed). */
 export function loadSamplePlan(id: SampleId): Promise<PlanResult> {
-  return loadStatic<PlanResult>(`/samples/${id}.plan.json`);
+  return loadStatic<PlanResult>(`/samples/${id}.plan.json`, "the recorded plan");
 }
 
-/** Recorded SimResult (only landing_pad ships one: an EX2 failure at 30 h and one replan). */
+/** Recorded SimResult (only landing_pad ships one: an EX2 failure at 30 h and one replan);
+ *  rejects with ApiError(404) for the others, see `optionalSample`. */
 export function loadSampleSim(id: SampleId): Promise<SimResult> {
-  return loadStatic<SimResult>(`/samples/${id}.sim.json`);
+  return loadStatic<SimResult>(`/samples/${id}.sim.json`, "the recorded simulation");
+}
+
+/** Recorded MonteCarloResult next to a sample plan (only landing_pad ships one). */
+export function loadSampleMonteCarlo(id: SampleId): Promise<MonteCarloResult> {
+  return loadStatic<MonteCarloResult>(`/samples/${id}.mc.json`, "the recorded Monte Carlo result");
+}
+
+/** A sample's optional companion file: null when the sample does not ship it (404); any
+ *  other failure propagates. */
+export async function optionalSample<T>(load: Promise<T>): Promise<T | null> {
+  try {
+    return await load;
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 404) return null;
+    throw e;
+  }
+}
+
+export interface SampleBundle {
+  id: SampleId;
+  plan: PlanResult;
+  sim: SimResult | null;
+  mc: MonteCarloResult | null;
+}
+
+/** Everything a sample ships: the plan always, the simulation and Monte Carlo result when
+ *  present (a plan-only sample such as front_loaded loads with sim = mc = null). */
+export async function loadSampleBundle(id: SampleId): Promise<SampleBundle> {
+  const [plan, sim, mc] = await Promise.all([
+    loadSamplePlan(id),
+    optionalSample(loadSampleSim(id)),
+    optionalSample(loadSampleMonteCarlo(id)),
+  ]);
+  return { id, plan, sim, mc };
 }

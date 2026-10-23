@@ -15,8 +15,10 @@ export const FLOW_STAGES: ReadonlyArray<{ id: FlowStage; label: string }> = [
 
 export type HealthStatus = "checking" | "ok" | "unreachable";
 
-/** The two recorded entry points under public/samples (no backend needed). */
-export type SampleId = "landing_pad" | "tight_battery";
+/** The three recorded entry points under public/samples (no backend needed): a verified plan
+ *  that survives a robot failure, a plan repaired from an infeasibility core, and a genuine
+ *  live run of an impossible brief that ends with solver-proven advice. */
+export type SampleId = "landing_pad" | "tight_battery" | "front_loaded";
 
 export const SAMPLE_ACTIONS: ReadonlyArray<{ id: SampleId; label: string; detail: string; title: string }> = [
   {
@@ -33,6 +35,13 @@ export const SAMPLE_ACTIONS: ReadonlyArray<{ id: SampleId; label: string; detail
     title:
       "Tight battery: infeasible → repair. Loads the recorded plan whose first schedule failed on the excavator batteries; Nemotron repaired it from the infeasibility core. No backend needed.",
   },
+  {
+    id: "front_loaded",
+    label: "Impossible deadline",
+    detail: "infeasible → proven advice",
+    title:
+      "Impossible deadline: infeasible → proven advice. Front-loaded excavation under a 60 h deadline: recorded live Nemotron run, 3 repair rounds, ends with solver-proven advice (a later deadline, re-solved by CP-SAT). No backend needed.",
+  },
 ];
 
 export interface TopBarProps {
@@ -43,7 +52,7 @@ export interface TopBarProps {
   stage: FlowStage;
   /** Something is running for the current stage (spinner on the stepper). */
   busy: boolean;
-  /** Loads a recorded sample; the two sample actions are hidden when omitted. */
+  /** Loads a recorded sample; the sample buttons are hidden when omitted. */
   onLoadSample?: (id: SampleId) => void;
   sampleLoading: boolean;
   onRetryHealth: () => void;
@@ -66,15 +75,20 @@ export function TopBar({
 
   return (
     <header className="sticky top-0 z-30 border-b border-line bg-surface">
-      {/* one row from xl (brand + tagline | stepper | demo + health); below xl the stepper
-          takes its own centred row so the tagline never has to truncate */}
+      {/* one row from xl (brand [+ tagline] | stepper | demo + health); below xl the stepper
+          takes its own centred row. The tagline shows only where the row has room for all of
+          it (md to lg, and from 2xl: the recording width); at xl the stepper, the three sample
+          buttons and the backend badge fill the row, and an ellipsis is worse than no tagline */}
       <div className="mx-auto flex w-full max-w-[1400px] flex-wrap items-center gap-x-2.5 gap-y-2 px-4 py-2 md:px-6 lg:px-8">
         <div className="flex min-w-0 flex-1 basis-0 items-baseline gap-2.5">
-          <h1 className="shrink-0 text-[15px] font-semibold tracking-tight text-fg">
+          <h1
+            className="shrink-0 text-[15px] font-semibold tracking-tight text-fg"
+            title="Verified multi-robot planning for lunar construction"
+          >
             <a href="#top">Moonwright</a>
           </h1>
           <span
-            className="hidden min-w-0 truncate text-[12.5px] text-muted md:inline"
+            className="hidden min-w-0 truncate text-[12.5px] text-muted md:inline xl:hidden 2xl:inline"
             title="Verified multi-robot planning for lunar construction"
           >
             verified multi-robot planning for the Moon
@@ -149,7 +163,7 @@ export function TopBar({
   );
 }
 
-/** A small play triangle: the two demo buttons load a recorded run end to end. */
+/** A small play triangle: the demo buttons load a recorded run end to end. */
 function IconPlay({ className }: { className?: string }) {
   return (
     <svg className={className ?? "size-3"} viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
@@ -185,7 +199,7 @@ function BackendBadge({
       <button
         type="button"
         onClick={onRetry}
-        title={`No backend answered at ${apiBase} (GET /health). The two recorded samples work without one; structuring and planning need it. Click to retry.`}
+        title={`No backend answered at ${apiBase} (GET /health). The recorded demos work without one; structuring and planning need it. Click to retry.`}
         className={cx(badgeClass, "border-white/15 bg-white/5 text-muted hover:bg-white/10 hover:text-fg")}
       >
         <Dot color="var(--fail)" />
@@ -202,18 +216,16 @@ function BackendBadge({
       >
         <Dot color="var(--ok)" />
         recorded answers
-        <span className="hidden 2xl:inline">· live solver</span>
       </span>
     );
   }
   return (
     <span
       className={cx(badgeClass, "border-ok/30 bg-ok/10 text-ok")}
-      title={`Moonwright ${health.version} at ${apiBase} · Nebius Token Factory · Nemotron Lightning structures the brief, Super proposes the task graph and writes the explanation, Ultra repairs · ${health.examples} example briefs`}
+      title={`Moonwright ${health.version} at ${apiBase} · Nebius Token Factory · Nemotron 3.5 Lightning structures the brief, Nemotron 3 Ultra proposes and repairs the task graph, Nemotron 3 Super writes the explanation · ${health.examples} example briefs`}
     >
       <Dot color="var(--ok)" />
       Nemotron live
-      <span className="hidden 2xl:inline">· 3 models</span>
     </span>
   );
 }

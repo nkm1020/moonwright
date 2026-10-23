@@ -15,21 +15,22 @@ import type {
   Requirements,
   SimEvent,
   SimResult,
+  Stage,
   StructureResponse,
+  Suggestion,
   Task,
   VerificationReceipt as ReceiptData,
 } from "@/lib/types";
 import { lastReceipt } from "@/lib/types";
 import {
   API_BASE,
-  ApiError,
   SAMPLE_IDS,
   errorMessage,
   getExamples,
   getHealth,
   isAbortError,
+  loadSampleBundle,
   loadSamplePlan,
-  loadSampleSim,
   postMonteCarlo,
   postSimulate,
   postStructure,
@@ -37,16 +38,43 @@ import {
 } from "@/lib/api";
 import { planStream } from "@/lib/sse";
 import { allTasks, tasksById } from "@/lib/tasks";
-import { EVENT_COLORS, robotTypeColor } from "@/lib/palette";
-import { fmtHours, fmtPercent, fmtSeconds, fmtWh, plural, tidyHint, titleFromBrief } from "@/lib/format";
+import { EVENT_COLORS, STAGE_LABELS, robotTypeColor } from "@/lib/palette";
+import {
+  fmtHours,
+  fmtPercent,
+  fmtSeconds,
+  fmtSuggestion,
+  fmtWh,
+  isResourceFailure,
+  planSuggestions,
+  plural,
+  repairRounds,
+  tidyHint,
+  titleFromBrief,
+} from "@/lib/format";
 import { TopBar, type FlowStage, type HealthStatus } from "./TopBar";
 import { BriefForm, stripMarkdown } from "./BriefForm";
 import { RequirementsCard } from "./RequirementsCard";
-import { ProgressTrace } from "./ProgressTrace";
+import { ProgressTrace, expectedNextStage, isVerdict } from "./ProgressTrace";
 import { VerificationReceipt } from "./VerificationReceipt";
 import { ExplanationCard } from "./ExplanationCard";
 import { MonteCarloPanel } from "./MonteCarloPanel";
-import { Badge, Card, CurrentStageContext, Dot, IconChevron, Notice, Section, Stat, cx, type Tone } from "./Section";
+import { Suggestions } from "./Suggestions";
+import {
+  Badge,
+  Button,
+  Card,
+  CurrentStageContext,
+  Dot,
+  IconCheck,
+  IconChevron,
+  IconX,
+  Notice,
+  Section,
+  Stat,
+  cx,
+  type Tone,
+} from "./Section";
 import { Gantt, type GanttMarker } from "./Gantt";
 import { TaskTable } from "./TaskTable";
 import { DEFAULT_SIMULATE_OPTIONS, SimControls, toSimulateRequest, type SimulateOptions } from "./SimControls";
@@ -73,9 +101,18 @@ interface PlanState extends Async<PlanResult> {
   /** The example the plan's requirements came from (sent as brief_id to the simulator and
    *  Monte Carlo so recorded replan answers are looked up under the right key). */
   briefId: string | null;
+  /** Repair rounds this run was allowed (PlanRequest.max_repairs); null for a recording, whose
+   *  trace says it by itself. */
+  maxRepairs: number | null;
 }
 
-const idlePlan = (): PlanState => ({ ...idle<PlanResult>(), steps: [], startedAt: null, briefId: null });
+const idlePlan = (): PlanState => ({
+  ...idle<PlanResult>(),
+  steps: [],
+  startedAt: null,
+  briefId: null,
+  maxRepairs: null,
+});
 
 interface State {
   healthStatus: HealthStatus;
@@ -138,7 +175,7 @@ type Action =
   /** Requirements handed in from outside the editor (the Monte Carlo what-if fleet). */
   | { type: "adoptRequirements"; value: Requirements }
   | { type: "maxRepairs"; value: number }
-  | { type: "planStart"; startedAt: number; briefId: string | null }
+  | { type: "planStart"; startedAt: number; briefId: string | null; maxRepairs: number }
   | { type: "planStep"; step: LoopStep }
   | { type: "planDone"; result: PlanResult }
   | { type: "planError"; message: string }
@@ -211,7 +248,15 @@ function reducer(state: State, action: Action): State {
       // new result arrives; a request that fails leaves them untouched
       return {
         ...state,
-        plan: { ...state.plan, status: "running", error: null, steps: [], startedAt: action.startedAt, briefId: action.briefId },
+        plan: {
+          ...state.plan,
+          status: "running",
+          error: null,
+          steps: [],
+          startedAt: action.startedAt,
+          briefId: action.briefId,
+          maxRepairs: action.maxRepairs,
+        },
       };
     case "planStep":
       if (state.plan.status !== "running") return state;
@@ -258,9 +303,17 @@ function reducer(state: State, action: Action): State {
       const failures = (sim?.events ?? [])
         .filter((e) => e.kind === "robot_failure" && e.robot !== null)
         .map((e) => ({ robot: e.robot as string, t_h: e.t_h }));
-      const parts = ["plan", sim ? "simulation" : null, mc ? "Monte Carlo" : null]
-        .filter((f): f is string => f !== null)
-        .join(" + ");
+      // "plan only", "plan and simulation", "plan, simulation and Monte Carlo"
+      const names = ["plan", sim ? "simulation" : null, mc ? "Monte Carlo" : null].filter((f): f is string => f !== null);
+      const parts =
+        names.length === 1 ? "plan only" : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+      // a verified recording is a demo of the whole flow; a failed one is replayed for its
+      // trace, its cores and the solver-proven advice that ends it
+      const note = plan.success
+        ? `Recorded demo · ${parts}`
+        : planSuggestions(plan).length > 0
+          ? "Recorded live run · plan could not be verified; here is what would make it feasible"
+          : "Recorded live run · plan could not be verified";
       // the textarea holds plain prose: the example's text when the backend sent it, else the
       // recorded brief, markdown markers stripped either way
       const example = state.examples.find((ex) => ex.id === id);
@@ -276,16 +329,12 @@ function reducer(state: State, action: Action): State {
         requirementsSource: "sample",
         requirementsVersion: state.requirementsVersion + 1,
         requirementsBrief: { id, text: brief },
-        plan: { status: "done", result: plan, error: null, steps: plan.steps, startedAt: null, briefId: id },
+        plan: { status: "done", result: plan, error: null, steps: plan.steps, startedAt: null, briefId: id, maxRepairs: null },
         selectedTask: null,
         simOptions: { ...DEFAULT_SIMULATE_OPTIONS, failures },
         sim: sim ? { status: "done", result: sim, error: null } : idle(),
         mc: mc ? { status: "done", result: mc, error: null } : idle(),
-        sample: {
-          loading: false,
-          note: `Recorded demo · ${parts}`,
-          error: null,
-        },
+        sample: { loading: false, note, error: null },
       };
     }
     case "sampleError":
@@ -315,27 +364,116 @@ function scrollToSection(id: string) {
   }, 80);
 }
 
-/** Recorded MonteCarloResult next to a sample plan (only landing_pad ships one). */
-async function loadSampleMonteCarlo(id: SampleId): Promise<MonteCarloResult> {
-  const path = `/samples/${id}.mc.json`;
-  let res: Response;
-  try {
-    res = await fetch(path, { headers: { accept: "application/json" } });
-  } catch (e) {
-    throw new ApiError(0, `could not load ${path} (${errorMessage(e)})`);
-  }
-  if (!res.ok) throw new ApiError(res.status, `could not load ${path}`);
-  return (await res.json()) as MonteCarloResult;
+/** The bundled recordings that double as example briefs when the backend is unreachable: the
+ *  briefs the backend itself ships, so the strip reads the same online and offline (the
+ *  impossible-deadline recording is reached from its demo button instead). */
+const OFFLINE_EXAMPLE_IDS: readonly SampleId[] = SAMPLE_IDS.filter((id) => id !== "front_loaded");
+
+// ------------------------------------------------------------------ solver-proven advice
+/** The hours an extend_horizon suggestion asks for (its horizon_h, else the makespan it
+ *  proved). */
+function suggestedHorizon(s: Suggestion): number | null {
+  const h = s.horizon_h ?? s.makespan_h;
+  return h !== null && Number.isFinite(h) && h > 0 ? Math.ceil(h) : null;
 }
 
-/** A sample's optional companion file: null when the sample does not ship it (404), any
- *  other failure propagates. */
-async function optionalSample<T>(load: Promise<T>): Promise<T | null> {
-  try {
-    return await load;
-  } catch (e) {
-    if (e instanceof ApiError && e.status === 404) return null;
-    throw e;
+function nextRobotId(type: string, taken: string[]): string {
+  const prefix = type.slice(0, 2).toUpperCase() || "R";
+  for (let n = 1; ; n += 1) {
+    const id = `${prefix}${n}`;
+    if (!taken.includes(id)) return id;
+  }
+}
+
+/** The requirements card after one solver-proven change, or null when the change cannot be
+ *  made mechanically (reduce_scope, a robot the card no longer has, a suggestion without its
+ *  numbers): the user then edits the card by hand. */
+function applySuggestion(req: Requirements, s: Suggestion): Requirements | null {
+  switch (s.kind) {
+    case "extend_horizon": {
+      const h = suggestedHorizon(s);
+      return h === null ? null : { ...req, horizon_h: h };
+    }
+    case "raise_battery": {
+      const { robot_id: id, battery_wh: wh } = s;
+      if (id === null || wh === null || !req.robots.some((r) => r.id === id)) return null;
+      return { ...req, robots: req.robots.map((r) => (r.id === id ? { ...r, battery_wh: wh } : r)) };
+    }
+    case "add_robot": {
+      const { robot_type: type, battery_wh: wh } = s;
+      if (type === null || wh === null) return null;
+      const taken = req.robots.map((r) => r.id);
+      const id = s.robot_id && !taken.includes(s.robot_id) ? s.robot_id : nextRobotId(type, taken);
+      // a spare moves like its peers (the first robot of that type, else any robot)
+      const peer = req.robots.find((r) => r.type === type) ?? req.robots[0];
+      const speed = peer?.speed_cells_per_h ?? 12;
+      return { ...req, robots: [...req.robots, { id, type, battery_wh: wh, speed_cells_per_h: speed }] };
+    }
+    default:
+      return null;
+  }
+}
+
+/** True when the card already holds the change (applied, or edited by hand): the deadline is
+ *  at least the suggested one, the robot's battery at least the suggested one, the spare robot
+ *  present (by id, else one more robot of that type than the failed plan had). */
+function suggestionSatisfied(req: Requirements, planned: Requirements, s: Suggestion): boolean {
+  switch (s.kind) {
+    case "extend_horizon": {
+      const h = suggestedHorizon(s);
+      return h !== null && req.horizon_h >= h;
+    }
+    case "raise_battery": {
+      const robot = req.robots.find((r) => r.id === s.robot_id);
+      return robot !== undefined && s.battery_wh !== null && robot.battery_wh >= s.battery_wh;
+    }
+    case "add_robot": {
+      if (s.robot_id && req.robots.some((r) => r.id === s.robot_id)) return true;
+      if (s.robot_type === null) return false;
+      const count = (list: Requirements) => list.robots.filter((r) => r.type === s.robot_type).length;
+      return count(req) > count(planned);
+    }
+    default:
+      return false;
+  }
+}
+
+/** Button label of a change the console can make for the user, with the figure the solver
+ *  proved; null for a suggestion that needs a hand edit (reduce_scope). */
+function suggestionActionLabel(s: Suggestion): string | null {
+  switch (s.kind) {
+    case "extend_horizon": {
+      const h = suggestedHorizon(s);
+      return h === null ? null : `Set the deadline to ${fmtHours(h, 0)}`;
+    }
+    case "raise_battery":
+      return s.robot_id === null || s.battery_wh === null ? null : `Raise ${s.robot_id} to ${fmtWh(s.battery_wh)}`;
+    case "add_robot":
+      return s.robot_type === null || s.battery_wh === null
+        ? null
+        : `Add ${s.robot_id ?? `a ${s.robot_type}`} (${s.robot_type}, ${fmtWh(s.battery_wh)})`;
+    default:
+      return null;
+  }
+}
+
+/** Badge label once the change is in the requirements card (applied, or made by hand), in
+ *  the past tense: "Deadline set to 86 h", "EX1 raised to 5,950 Wh", "EX3 added (excavator,
+ *  5,000 Wh)"; null when the suggestion has no figure to name. */
+function suggestionAppliedLabel(s: Suggestion): string | null {
+  switch (s.kind) {
+    case "extend_horizon": {
+      const h = suggestedHorizon(s);
+      return h === null ? null : `Deadline set to ${fmtHours(h, 0)}`;
+    }
+    case "raise_battery":
+      return s.robot_id === null || s.battery_wh === null ? null : `${s.robot_id} raised to ${fmtWh(s.battery_wh)}`;
+    case "add_robot":
+      return s.robot_type === null || s.battery_wh === null
+        ? null
+        : `${s.robot_id ?? `A ${s.robot_type}`} added (${s.robot_type}, ${fmtWh(s.battery_wh)})`;
+    default:
+      return null;
   }
 }
 
@@ -371,11 +509,11 @@ export function App() {
     } catch (e) {
       if (isAbortError(e)) return;
       try {
-        const plans = await Promise.all(SAMPLE_IDS.map((id) => loadSamplePlan(id)));
+        const plans = await Promise.all(OFFLINE_EXAMPLE_IDS.map((id) => loadSamplePlan(id)));
         const examples = plans
           .map((p, i) => ({
-            id: SAMPLE_IDS[i],
-            title: titleFromBrief(p.requirements.source_brief ?? "", SAMPLE_IDS[i]),
+            id: OFFLINE_EXAMPLE_IDS[i],
+            title: titleFromBrief(p.requirements.source_brief ?? "", OFFLINE_EXAMPLE_IDS[i]),
             // mirrors the backend's ExampleBrief: plain prose in `text`, the file as written in
             // `text_markdown`
             text: stripMarkdown(p.requirements.source_brief ?? ""),
@@ -434,7 +572,7 @@ export function App() {
     // recorded answers are keyed by brief_id: send the id of the brief these requirements came
     // from, never the example that merely sits in the textarea
     const briefId = state.requirementsBrief?.id ?? null;
-    dispatch({ type: "planStart", startedAt: Date.now(), briefId });
+    dispatch({ type: "planStart", startedAt: Date.now(), briefId, maxRepairs: state.maxRepairs });
     scrollToSection("plan");
     try {
       const result = await planStream(
@@ -491,22 +629,29 @@ export function App() {
   };
 
   /** Load a recorded run from /samples into the normal state: the plan always, the simulation
-   *  and Monte Carlo result when the sample ships them (landing_pad does, tight_battery is a
-   *  plan with one repair round and no simulation). */
+   *  and Monte Carlo result when the sample ships them (landing_pad does; tight_battery is a
+   *  plan with one repair round and no simulation; front_loaded is a failed live run whose
+   *  trace ends with solver-proven advice, so there is nothing to simulate). */
   const loadSample = async (id: SampleId = "landing_pad") => {
     cancelPlan();
     dispatch({ type: "sampleStart" });
     try {
-      const [plan, sim, mc] = await Promise.all([
-        loadSamplePlan(id),
-        optionalSample(loadSampleSim(id)),
-        optionalSample(loadSampleMonteCarlo(id)),
-      ]);
+      const { plan, sim, mc } = await loadSampleBundle(id);
       dispatch({ type: "sampleDone", plan, sim, mc, id });
       scrollToSection("plan");
     } catch (e) {
       dispatch({ type: "sampleError", message: errorMessage(e) });
     }
+  };
+
+  /** One solver-proven change written into the requirements card (the editor remounts on the
+   *  new version and marks the card as edited); the user checks it there and plans again. */
+  const adoptSuggestion = (s: Suggestion) => {
+    const base = state.requirements ?? state.plan.result?.requirements ?? null;
+    const next = base ? applySuggestion(base, s) : null;
+    if (!next) return;
+    dispatch({ type: "adoptRequirements", value: next });
+    scrollToSection("requirements");
   };
 
   // ---------------------------------------------------------------- derived
@@ -538,7 +683,15 @@ export function App() {
   const planKept = planResult !== null && state.plan.status !== "done";
   const keptClass = planBusy ? "opacity-50 transition-opacity" : "transition-opacity";
   const simBusy = state.sim.status === "running";
-  const planHorizonH = state.requirements?.horizon_h ?? planResult?.requirements.horizon_h ?? null;
+  // the deadline the trace's budget tables quote: the plan's own once it is done, the card's
+  // while a run streams (its steps belong to the request, not to the previous plan)
+  const traceHorizonH =
+    state.plan.status === "done"
+      ? (planResult?.requirements.horizon_h ?? null)
+      : (state.requirements?.horizon_h ?? planResult?.requirements.horizon_h ?? null);
+  /** solver-proven advice of a failed plan ([] for a verified one) */
+  const planAdvice = useMemo<Suggestion[]>(() => (planResult ? planSuggestions(planResult) : []), [planResult]);
+  const planFailed = planResult !== null && !verified;
   const highlight = useMemo(() => (state.selectedTask ? [state.selectedTask] : []), [state.selectedTask]);
   const selectTask = (id: string | null) => dispatch({ type: "selectTask", id });
   const requirementsEdited =
@@ -630,8 +783,24 @@ export function App() {
                   {planBusy ? "previous plan shown until the new one arrives" : "previous plan kept"}
                 </Badge>
               ) : state.sample.note ? (
-                <Badge tone="info" title="Loaded from the bundled recording of this run; Nemotron and CP-SAT were not called.">
+                <Badge
+                  tone={planFailed ? "warn" : "info"}
+                  title={
+                    planFailed
+                      ? "Replayed from the recording of a live Nemotron run: the trace, the cores and the advice are exactly what the planner produced; nothing was called now."
+                      : "Loaded from the bundled recording of this run; Nemotron and CP-SAT were not called."
+                  }
+                >
                   {state.sample.note}
+                </Badge>
+              ) : planFailed ? (
+                <Badge
+                  tone="warn"
+                  title="The run ended without a verified schedule. The advice next to the trace was re-solved by CP-SAT on the last task graph."
+                >
+                  {planAdvice.length > 0
+                    ? "Plan could not be verified; here is what would make it feasible"
+                    : "Plan could not be verified"}
                 </Badge>
               ) : undefined
             }
@@ -645,19 +814,57 @@ export function App() {
                   result={state.plan.status === "done" ? planResult : null}
                   error={state.plan.error}
                   onCancel={stopPlanning}
-                  horizonH={planHorizonH}
-                  tasks={planTasks}
+                  horizonH={traceHorizonH}
+                  tasks={state.plan.status === "done" ? planTasks : []}
+                  maxRepairs={state.plan.maxRepairs}
                 />
+                {planBusy && !planResult && <PlanningPlaceholder steps={state.plan.steps} />}
                 {planResult && verified && (
                   <div className={keptClass} aria-busy={planBusy || undefined}>
                     <PlanSummary plan={planResult} tasks={planTasks} receipt={receipt} />
                   </div>
                 )}
+                {planResult && planFailed && (
+                  // the outcome of a failed plan sits beside the trace and stays in view while
+                  // the trace is read (first on narrow screens, where it would otherwise be
+                  // below eleven steps of trace)
+                  <div
+                    className={cx(
+                      "order-first lg:order-none lg:sticky lg:top-20 lg:max-h-[calc(100vh-6rem)] lg:self-start lg:overflow-y-auto",
+                      keptClass,
+                    )}
+                    aria-busy={planBusy || undefined}
+                  >
+                    <FailedOutcome
+                      plan={planResult}
+                      steps={resultSteps}
+                      suggestions={planAdvice}
+                      requirements={state.requirements}
+                      planning={planBusy}
+                      onApply={adoptSuggestion}
+                      onEditRequirements={() => scrollToSection("requirements")}
+                    />
+                  </div>
+                )}
               </div>
+
+              {planBusy && !planResult && (
+                <div
+                  role="status"
+                  className="flex flex-wrap items-baseline gap-x-3 gap-y-1 rounded-lg border border-dashed border-line px-4 py-2.5 text-[12.5px] text-muted"
+                >
+                  <span className="font-medium text-fg/80">Verification receipt, schedule and explanation</span>
+                  <span>
+                    land here once CP-SAT proves the plan: the five constraint families with their counts, the Gantt, the
+                    task table and Nemotron&apos;s explanation. A graph no repair can fix shows its solver-proven advice
+                    beside the trace instead.
+                  </span>
+                </div>
+              )}
 
               {planResult && verified && planResult.schedule && (
                 <div className={cx("space-y-5", keptClass)} aria-busy={planBusy || undefined}>
-                  <VerificationReceipt plan={planResult} steps={resultSteps} horizonH={planHorizonH} />
+                  <VerificationReceipt plan={planResult} steps={resultSteps} horizonH={planResult.requirements.horizon_h} />
                   <Card bodyClassName="p-4 md:p-5">
                     <Gantt
                       schedule={planResult.schedule}
@@ -683,17 +890,14 @@ export function App() {
                 </div>
               )}
 
-              {planResult && !verified && (
+              {planResult && planFailed && (
                 <div className={cx("space-y-5", keptClass)} aria-busy={planBusy || undefined}>
-                  <VerificationReceipt plan={planResult} steps={resultSteps} horizonH={planHorizonH} />
                   {planResult.task_graph && (
-                    <>
-                      <ExplanationCard plan={planResult} />
-                      <TaskTableDisclosure tasks={planTasks} label="Last task graph (not scheduled)" defaultOpen>
-                        <TaskTable tasks={planTasks} schedule={null} requirements={planResult.requirements} />
-                      </TaskTableDisclosure>
-                    </>
+                    <TaskTableDisclosure tasks={planTasks} label="Last task graph (not scheduled)" defaultOpen>
+                      <TaskTable tasks={planTasks} schedule={null} requirements={planResult.requirements} />
+                    </TaskTableDisclosure>
                   )}
+                  <DownstreamNote hasAdvice={planAdvice.length > 0} />
                 </div>
               )}
             </div>
@@ -802,6 +1006,183 @@ function TaskTableDisclosure({
       </summary>
       <div className="border-t border-line p-4 md:p-5">{children}</div>
     </details>
+  );
+}
+
+// ------------------------------------------------------------------ failed plan outcome
+/** What a failed plan leaves the user with: the red verification receipt (the failure kind,
+ *  the conflict core and the numbers behind it), the solver-proven advice, and the way back
+ *  into the loop: each change the console can make for the user is one button that writes
+ *  it into the requirements card above, where "Plan with these requirements" runs the planner
+ *  again. */
+function FailedOutcome({
+  plan,
+  steps,
+  suggestions,
+  requirements,
+  planning,
+  onApply,
+  onEditRequirements,
+}: {
+  plan: PlanResult;
+  steps: LoopStep[];
+  suggestions: Suggestion[];
+  /** the requirements card as it stands now (null before any card exists) */
+  requirements: Requirements | null;
+  planning: boolean;
+  onApply: (s: Suggestion) => void;
+  onEditRequirements: () => void;
+}) {
+  const card = requirements ?? plan.requirements;
+  const actions = suggestions.map((s) => ({
+    suggestion: s,
+    label: suggestionActionLabel(s),
+    satisfied: suggestionSatisfied(card, plan.requirements, s),
+    applicable: applySuggestion(card, s) !== null,
+  }));
+  const canApply = actions.some((a) => a.label !== null && (a.applicable || a.satisfied));
+  // the best change the console can still make is the column's primary action: it is the
+  // next step of the loop (the list is best first)
+  const primary = actions.findIndex((a) => a.label !== null && !a.satisfied && a.applicable);
+  // the advice panel leads this column, so the receipt does not repeat it
+  const receipt = (
+    <VerificationReceipt plan={plan} steps={steps} horizonH={plan.requirements.horizon_h} showAdvice={false} />
+  );
+  return (
+    <div className="space-y-4">
+      {/* the advice leads when there is some (the section label promises it); the red receipt
+          with the core follows, or leads when the planner had no proven change to offer */}
+      {suggestions.length > 0 ? (
+        <Suggestions suggestions={suggestions} variant="outcome" horizonH={plan.requirements.horizon_h} />
+      ) : (
+        receipt
+      )}
+      <div className="rounded-lg border border-line bg-raised px-4 py-3">
+        <div className="text-[11px] font-medium uppercase tracking-wider text-dim">Plan again</div>
+        <p className="mt-1 text-xs leading-relaxed text-muted">
+          {canApply
+            ? "Write a change into the requirements card above, check it there and plan again; the planner only ever sees that card."
+            : suggestions.length > 0
+              ? "Trim or defer work in the requirements card above (structures, dimensions, operations) and plan again; the planner only ever sees that card."
+              : !isVerdict(plan.failure)
+                ? "The planner got no usable answer (the verdict above says why): pick an example brief, or plan again once the backend can answer."
+                : isResourceFailure(plan.failure)
+                  ? "Raise a battery, add a robot, extend the deadline or trim the scope in the requirements card above and plan again; the planner only ever sees that card."
+                  : "Add the missing work in the requirements card above (or drop the operation chip the verdict names), or allow repair rounds so Nemotron can add it, then plan again; the planner only ever sees that card."}
+        </p>
+        <div className="mt-2.5 flex flex-wrap items-center gap-2">
+          {actions.map(({ suggestion, label, satisfied, applicable }, i) => {
+            if (label === null) return null;
+            if (satisfied) {
+              return (
+                <Badge key={i} tone="ok" title={`${fmtSuggestion(suggestion)} · already in the requirements card`}>
+                  <IconCheck className="size-2.5" />
+                  {suggestionAppliedLabel(suggestion) ?? label}
+                </Badge>
+              );
+            }
+            if (!applicable) return null;
+            return (
+              <Button
+                key={i}
+                size="sm"
+                variant={i === primary ? "primary" : "secondary"}
+                disabled={planning}
+                title={`${fmtSuggestion(suggestion)} · writes the change into the requirements card`}
+                onClick={() => onApply(suggestion)}
+              >
+                {label}
+              </Button>
+            );
+          })}
+          <Button size="sm" variant="ghost" disabled={planning} onClick={onEditRequirements} className="text-fg">
+            Edit the requirements
+            <span aria-hidden="true">↑</span>
+          </Button>
+        </div>
+      </div>
+      {suggestions.length > 0 && receipt}
+    </div>
+  );
+}
+
+/** One line where the next stages would start: why the console stops here and how to go on. */
+function DownstreamNote({ hasAdvice }: { hasAdvice: boolean }) {
+  return (
+    <div
+      role="status"
+      className="flex flex-wrap items-baseline gap-x-3 gap-y-1 rounded-lg border border-dashed border-line px-4 py-2.5 text-[12.5px] text-muted"
+    >
+      <span className="font-mono text-[11px] font-medium tracking-[0.16em] text-dim">04 · 05</span>
+      <span className="font-medium text-fg/80">Explanation, simulation and robustness wait for a verified schedule</span>
+      <span>
+        No verified schedule to simulate:{" "}
+        {hasAdvice ? "apply one of the changes above, or edit the requirements card, then plan again." : "edit the requirements card, then plan again."}
+      </span>
+    </div>
+  );
+}
+
+// ------------------------------------------------------------------ first-run placeholder
+const PIPELINE: readonly Stage[] = ["taskgraph", "validate", "schedule", "explain"];
+
+/** The right column while the first plan streams (nothing kept from an earlier plan): where
+ *  the verdict lands, with the loop's stages and the one running now, so the screen is never
+ *  half empty during a live run of several minutes. */
+function PlanningPlaceholder({ steps }: { steps: LoopStep[] }) {
+  const next = expectedNextStage(steps);
+  const rounds = repairRounds(steps);
+  const last = steps.length > 0 ? steps[steps.length - 1] : null;
+  // a rejected repair answer is asked again within its round (as the trace's live row counts)
+  const round = next === "repair" ? (last?.stage === "repair" && !last.ok ? rounds : rounds + 1) : rounds;
+  const latest = new Map<Stage, LoopStep>();
+  for (const s of steps) latest.set(s.stage, s);
+  const stateOf = (stage: Stage): "current" | "done" | "failed" | "upcoming" => {
+    if (stage === next) return "current";
+    const s = latest.get(stage);
+    if (!s) return "upcoming";
+    return s.ok ? "done" : "failed";
+  };
+  const stages: { id: Stage; label: string }[] = PIPELINE.map((id) => ({ id, label: STAGE_LABELS[id] ?? id }));
+  if (next === "repair" || rounds > 0) stages.splice(3, 0, { id: "repair", label: `Repair · round ${round}` });
+  const tone: Record<ReturnType<typeof stateOf>, string> = {
+    current: "border-accent/50 bg-accent/10 text-accent",
+    done: "border-ok/30 bg-ok/10 text-ok",
+    failed: "border-fail/30 bg-fail/10 text-fail",
+    upcoming: "border-white/10 text-dim",
+  };
+  return (
+    <Card title="Plan summary" aside={<Badge tone="accent">planning</Badge>}>
+      <div className="grid grid-cols-3 gap-3">
+        <Stat label="Makespan" value="—" sub="proved by CP-SAT" />
+        <Stat label="Tasks" value="—" sub="priced by the rate model" />
+        <Stat label="Repairs" value={rounds} sub={rounds === 1 ? "round so far" : "rounds so far"} />
+      </div>
+      <ol className="mt-4 flex flex-wrap items-center gap-y-1" aria-label="Planning stages">
+        {stages.map((s, i) => {
+          const st = stateOf(s.id);
+          return (
+            <li key={s.id} className="flex items-center">
+              {i > 0 && <span aria-hidden="true" className="mx-1 h-px w-2.5 bg-white/10" />}
+              <span className={cx("inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs", tone[st])}>
+                {st === "current" ? (
+                  <Dot color="var(--accent)" pulse />
+                ) : st === "done" ? (
+                  <IconCheck className="size-2.5" />
+                ) : st === "failed" ? (
+                  <IconX className="size-2.5" />
+                ) : null}
+                {s.label}
+              </span>
+            </li>
+          );
+        })}
+      </ol>
+      <p className="mt-3 text-xs leading-relaxed text-muted">
+        The verified schedule lands here with its makespan, task count and per-robot battery share; a graph no repair
+        round can make feasible lands here as the solver-proven advice instead.
+      </p>
+    </Card>
   );
 }
 

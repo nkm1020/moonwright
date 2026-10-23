@@ -3,15 +3,18 @@
  * The verification receipt: what CP-SAT proved about the plan's schedule, as five rows with
  * green checks and counts, read from the last ok `schedule` step's payload.verification
  * (backend loop.py verification_receipt) plus the plan. A plan without a verified schedule
- * renders the red variant: the failure kind, the conflict core as chips, the hint and the
- * numbers behind it (the same presentation as the trace's core block).
+ * renders the red variant: the failure kind and the conflict core as chips, with the hint and
+ * the numbers behind a disclosure (the trace's final step shows that core in full, so one
+ * screen holds one full core), then the solver-proven advice ("What would make it feasible":
+ * PlanResult.suggestions, each change re-solved by CP-SAT) as the panel with its footer.
  */
 import type { ReactNode } from "react";
 import type { LoopStep, PlanResult, Schedule, VerificationReceipt as ReceiptData } from "@/lib/types";
 import { lastReceipt, taskGraphPayload } from "@/lib/types";
-import { fmtHours, fmtNum, fmtPercent, fmtSeconds, isFixtureModel, modelDisplayName, plural } from "@/lib/format";
+import { fmtHours, fmtNum, fmtPercent, fmtSeconds, isFixtureModel, modelDisplayName, planSuggestions, plural } from "@/lib/format";
 import { Badge, Card, IconCheck, IconX, cx } from "./Section";
-import { FailureDetails } from "./ProgressTrace";
+import { FailureDetails, isVerdict, roundsPhrase } from "./ProgressTrace";
+import { Suggestions } from "./Suggestions";
 
 export interface VerificationReceiptProps {
   plan: PlanResult;
@@ -19,10 +22,13 @@ export interface VerificationReceiptProps {
   steps?: LoopStep[];
   /** Horizon for the red variant's budget table (defaults to the plan's requirements). */
   horizonH?: number | null;
+  /** Render the solver-proven advice panel inside the red variant (default); the console
+   *  passes false when it shows that panel itself, next to the apply buttons. */
+  showAdvice?: boolean;
   className?: string;
 }
 
-export function VerificationReceipt({ plan, steps, horizonH = null, className }: VerificationReceiptProps) {
+export function VerificationReceipt({ plan, steps, horizonH = null, showAdvice = true, className }: VerificationReceiptProps) {
   const trace = steps && steps.length > 0 ? steps : plan.steps;
   if (plan.success && plan.schedule) {
     const found = lastReceipt(trace);
@@ -36,7 +42,9 @@ export function VerificationReceipt({ plan, steps, horizonH = null, className }:
       />
     );
   }
-  return <FailedCard plan={plan} horizonH={horizonH ?? plan.requirements.horizon_h} className={className} />;
+  return (
+    <FailedCard plan={plan} horizonH={horizonH ?? plan.requirements.horizon_h} showAdvice={showAdvice} className={className} />
+  );
 }
 
 /** A receipt computed from the schedule itself, for a PlanResult recorded before the backend
@@ -237,15 +245,28 @@ function BatteryPills({ receipt }: { receipt: ReceiptData }) {
   );
 }
 
-function FailedCard({ plan, horizonH, className }: { plan: PlanResult; horizonH: number; className?: string }) {
+function FailedCard({
+  plan,
+  horizonH,
+  showAdvice,
+  className,
+}: {
+  plan: PlanResult;
+  horizonH: number;
+  showAdvice: boolean;
+  className?: string;
+}) {
   const failure = plan.failure;
+  const advice = showAdvice ? planSuggestions(plan) : [];
+  const repairsOff = plan.repairs === 0 && isVerdict(failure);
   const why = !failure
     ? "The planner stopped without a failure record."
     : failure.kind === "infeasible"
-      ? "CP-SAT proved the last task graph infeasible; the conflicts below are the minimal core it extracted, with the numbers behind them."
+      ? "CP-SAT proved the last task graph infeasible; the conflicts below are the minimal core it extracted (the trace's final step has the numbers)."
       : failure.kind === "validation"
         ? "The validator rejected the last task graph before the solver ran; the conflicts below name what it found."
-        : "The planner stopped before a schedule could be proved.";
+        : "The planner stopped before a schedule could be proved; the trace's final step says why.";
+  const rounds = repairsOff ? " Repairs were off, so this first verdict was final." : "";
   return (
     <Card
       className={cx("border-fail/40", className)}
@@ -259,11 +280,13 @@ function FailedCard({ plan, horizonH, className }: { plan: PlanResult; horizonH:
       }
       aside={<Badge tone="fail">no verified schedule</Badge>}
     >
-      <div className="text-[15px] font-semibold tracking-tight text-fail">
-        Not proved after {plural(plan.repairs, "repair round")}
-      </div>
-      <p className="mt-0.5 text-xs text-muted">{why}</p>
-      {failure && <FailureDetails failure={failure} horizonH={horizonH} className="mt-3" />}
+      <div className="text-[15px] font-semibold tracking-tight text-fail">Not proved {roundsPhrase(plan)}</div>
+      <p className="mt-0.5 text-xs text-muted">
+        {why}
+        {rounds}
+      </p>
+      {failure && <FailureDetails failure={failure} horizonH={horizonH} className="mt-3" collapsed />}
+      {advice.length > 0 && <Suggestions variant="outcome" suggestions={advice} className="mt-3" />}
     </Card>
   );
 }

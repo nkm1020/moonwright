@@ -6,6 +6,10 @@
  * (Schedule) and float hours in simulator output (SimFrame/Event). Energy is Wh.
  *
  * Conflict ids (Failure.conflicts) are shared with the backend; see CONFLICT_PREFIXES.
+ *
+ * Phase 3c additions: Structure.operations (the phases the brief asks for), Suggestion /
+ * PlanResult.suggestions (solver-proven advice when no repair can work; the final failed step
+ * carries the same list in its payload) and the `volume:<structure>` advisory.
  */
 
 // ------------------------------------------------------------------ F1 requirements
@@ -32,12 +36,36 @@ export interface Site {
   depot: [number, number] | null;
 }
 
-/** Extra numeric keys (diameter_m, length_m, width_m, depth_m, height_m, thickness_m, ...) are
- *  the structure's dimensions. */
+/** The phases a brief can ask for on a structure: the validator's closed vocabulary, in work
+ *  order (inspection and staking are "survey", stripping and levelling are "grade"). */
+export const OPERATIONS = ["survey", "excavate", "grade", "haul", "compact", "sinter"] as const;
+export type Operation = (typeof OPERATIONS)[number];
+
+/** Display words of the operations (the verbs stay lower case: "sinter", "excavate"). */
+export const OPERATION_LABELS: Record<Operation, string> = {
+  survey: "survey",
+  excavate: "excavate",
+  grade: "grade",
+  haul: "haul",
+  compact: "compact",
+  sinter: "sinter",
+};
+
+/** Extra numeric keys (diameter_m, length_m, width_m, depth_m, height_m, thickness_m, and
+ *  trench_width_m / trench_depth_m for the key trench under a berm) are the structure's
+ *  dimensions; `operations` is not one (format.ts NON_DIMENSION_KEYS skips it). */
 export interface Structure {
   id: string;
   type: string;
   zone: string | null;
+  /** The phases the brief explicitly asks for on this structure (closed vocabulary,
+   *  deduplicated, order kept; [] when it names none): always present in backend JSON, absent
+   *  in recordings older than phase 3c. The validator requires a task of the right robot type
+   *  tagged with the structure for each one the fleet can staff, else the validate step fails
+   *  with `scope:<structure>` ("S2 (dust berm) lacks excavate task (its operations list
+   *  excavate)" and a hint that quotes the brief). The editable requirements card round-trips
+   *  the key to POST /plan {requirements}. */
+  operations?: Operation[];
   [dimension: string]: unknown;
 }
 
@@ -198,15 +226,32 @@ export interface StructurePayload {
   zones: number;
   grid: [number, number];
   depot: [number, number] | null;
-  /** overlapping zones, a structure in an undeclared zone, no depot, ... (never a failure) */
+  /**
+   * Never a failure. In this order: recovered notes, site warnings, dimension warnings.
+   * (a) "structure S1: operations [excavate, compact, sinter] recovered from malformed keys
+   *     ("operations': [", 'grade', 'compact', 'sinter'); check them against the brief": the
+   *     structuring model's scrambled answer was salvaged (amber: ask the user to check);
+   * (b) "structure S2 lists sinter but the fleet has no printer: no sinter task will be
+   *     required of it (add a printer or drop the operation)" (muted);
+   * (b2) "structure STR1 lists excavate but the brief line about it asks for haul, not
+   *     excavate: no excavate task will be required of it (...)" (muted);
+   * (c) "structure S2 (blast berm) has no dimensions: the planner sizes its tasks from numeric
+   *     fields such as diameter_m, length_m, width_m, depth_m or height_m and never sees the
+   *     brief, so add the brief's numbers before planning" (amber: fill them before planning);
+   * plus the older zone-overlap / undeclared-zone / no-zone / no-depot warnings (muted).
+   */
   warnings: string[];
 }
 
 /** `taskgraph` / `repair` step payload (ok): what the rate model did to the answer. */
 export interface TaskGraphPayload {
   /** "estimate:<task>: model said 10 h / 1000 Wh, rate model gives 27 h / 3000 Wh (+170%)",
-   *  or "ungrounded: no task states a quantity, ..." when the rate table could not be applied
-   *  at all (the hand-made fixtures); warnings, never conflicts */
+   *  "ungrounded: no task states a quantity, ..." when the rate table could not be applied at
+   *  all (the hand-made fixtures), or "volume:<structure>: its dimensions give 360 m3
+   *  (100 x 6 x 0.6 m) but its excavation tasks (T3 600 m2) total only 0 m3 (0%)" when the
+   *  planned m3 clearly differ from what the dimensions imply (two lines may exist for one
+   *  structure: a berm body and its key trench; never on a replan's steps); warnings, never
+   *  conflicts. format.ts parseAdvisory reads them. */
   advisories: string[];
   rate_model: boolean;
   /** tasks whose duration / energy came from the rate table (they carried a quantity) */
@@ -243,8 +288,9 @@ export interface RepairDiff {
 
 export type RepairPayload = TaskGraphPayload & { diff: RepairDiff };
 
-/** `validate` step payload: the producing step's advisories, or null when it had none. */
-export type ValidatePayload = { advisories: string[] } | null;
+/** `validate` step payload: the producing step's advisories, or null when it had none; the
+ *  final failed validate step of a failed run adds the advice (SuggestionsPayload). */
+export type ValidatePayload = ({ advisories?: string[] } & Partial<SuggestionsPayload>) | null;
 
 /** The verification receipt carried by an ok `schedule` step. */
 export interface VerificationReceipt {
@@ -282,6 +328,86 @@ export interface SchedulePayload {
   verification: VerificationReceipt;
 }
 
+// ------------------------------------------------------------------ F5 -> advice
+/** extend_horizon: a later deadline; add_robot: one more robot of a type; raise_battery: one
+ *  robot's battery raised; reduce_scope: no single change verifies, cut or defer work. */
+export type SuggestionKind = "extend_horizon" | "add_robot" | "raise_battery" | "reduce_scope";
+
+/** Row labels of the advice ("later deadline · finishing needs 86 h, ..."). */
+export const SUGGESTION_KIND_LABELS: Record<SuggestionKind, string> = {
+  extend_horizon: "later deadline",
+  add_robot: "one more robot",
+  raise_battery: "bigger battery",
+  reduce_scope: "smaller scope",
+};
+
+/** Copy of the advice block, shared by Suggestions.tsx and every place that repeats it (the
+ *  trace under the final failed step, the outcome area of a failed plan, the failed-replan
+ *  row). The kind label and the chip go on each row; the detail sentence is printed with its
+ *  words verbatim (format.ts fmtSuggestion spaces units and formats the numbers that carry
+ *  one, "5950 Wh" -> "5,950 Wh", like every other figure on the page). */
+export const SUGGESTION_COPY = {
+  heading: "What would make it feasible",
+  /** chip of a suggestion with verified: true */
+  verified: "CP-SAT verified",
+  /** chip of reduce_scope (never verified) */
+  unverified: "not solver-verified",
+  footer:
+    "Each change was re-solved by CP-SAT on the last task graph; figures are in the planning model's units (work + transit allowance)",
+  /** note of the failed-replan variant: its hours need no offset */
+  replanNote: "Hours are absolute simulator time against the brief's deadline",
+} as const;
+
+/**
+ * A resource change that would make the last task graph feasible, found by the backend
+ * (moonwright.pipeline.relax) when a plan ends without a verified schedule. `detail` is one
+ * sentence with units on every number: "EX1 needs 5950 Wh (has 5000 Wh): feasible at 62 h",
+ * "one more excavator (EX3, 5000 Wh like EX1): feasible at 62 h", "a battery of 5200 Wh on
+ * EX2 is enough (has 5000 Wh; a smaller one may be, the search ran out of time): feasible at
+ * 62 h", "finishing needs 86 h, 26 h past the 60 h deadline (CP-SAT optimal)"; a replan's
+ * add_robot reads "(EX3, 5000 Wh, a full battery)". Lists are best first, at most 4: changes
+ * that keep the deadline (raise_battery, add_robot) before extend_horizon, smaller relative
+ * change first; a lone reduce_scope when no single change verifies.
+ */
+export interface Suggestion {
+  kind: SuggestionKind;
+  detail: string;
+  /** makespan of the CP-SAT solve that proved the change; null for reduce_scope */
+  makespan_h: number | null;
+  /** add_robot: the type added; raise_battery: the robot's type */
+  robot_type: string | null;
+  /** add_robot: the new robot's id (EX3); raise_battery: the robot whose battery is raised */
+  robot_id: string | null;
+  /** add_robot: the new robot's battery; raise_battery: the battery that is enough */
+  battery_wh: number | null;
+  /** extend_horizon: the deadline that works (= makespan_h) */
+  horizon_h: number | null;
+  /** true when a CP-SAT solve on the modified requirements proved it; reduce_scope never is */
+  verified: boolean;
+}
+
+/** Shape test for one suggestion read from an untyped payload or an older recording. */
+export function isSuggestion(v: unknown): v is Suggestion {
+  if (typeof v !== "object" || v === null || Array.isArray(v)) return false;
+  const s = v as Record<string, unknown>;
+  return typeof s.kind === "string" && s.kind in SUGGESTION_KIND_LABELS && typeof s.detail === "string";
+}
+
+/**
+ * Carried by the FINAL failed step of a failed run (the validate or schedule step with
+ * ok=false that no repair could answer, or the rejected repair step that ended the last round)
+ * in the SSE "step" event itself, so the trace can render the advice before the "result"
+ * event; JSON-identical to PlanResult.suggestions; absent when there is nothing to say.
+ * Inside ReplanRecord.after.steps the same payload also carries
+ * `suggestions_time_base: "absolute"` next to its `time_base: "relative"`: replan advice is in
+ * absolute simulator hours against the brief's deadline (no offset to add); only
+ * extend_horizon / add_robot occur in replans. format.ts stepSuggestions reads it.
+ */
+export interface SuggestionsPayload {
+  suggestions: Suggestion[];
+  suggestions_time_base?: "absolute";
+}
+
 /** The closing `replan` step of every ReplanRecord.after trace (ok = a verified replan). */
 export interface ReplanOutcomePayload {
   /** a repair prompt went to Nemotron (CP-SAT alone could not finish the remaining work) */
@@ -304,11 +430,13 @@ export interface LoopStep {
   message: string | null;
   /**
    * Small stage-specific extras: StructurePayload, TaskGraphPayload (a `repair` adds
-   * `diff: RepairDiff`), ValidatePayload, SchedulePayload (the verification receipt) and
-   * ReplanOutcomePayload. Inside ReplanRecord.after.steps every payload also carries
-   * `offset_h` (planner time 0 in simulator hours) and `time_base: "relative" | "absolute"`:
-   * an ok schedule step is absolute (makespan_h and the receipt's horizon figures shifted by
-   * offset_h), validate / failed-schedule / repair steps quote planner hours (relative).
+   * `diff: RepairDiff`), ValidatePayload, SchedulePayload (the verification receipt),
+   * ReplanOutcomePayload, and SuggestionsPayload on the final failed step of a failed run
+   * (a failed validate step may carry advisories next to it). Inside ReplanRecord.after.steps
+   * every payload also carries `offset_h` (planner time 0 in simulator hours) and
+   * `time_base: "relative" | "absolute"`: an ok schedule step is absolute (makespan_h and the
+   * receipt's horizon figures shifted by offset_h), validate / failed-schedule / repair steps
+   * quote planner hours (relative), while their advice is absolute (suggestions_time_base).
    */
   payload: Record<string, unknown> | null;
 }
@@ -322,6 +450,10 @@ export interface PlanResult {
   repairs: number;
   success: boolean;
   failure: Failure | null;
+  /** Solver-proven advice of a failed run (see Suggestion); [] on success; absent in
+   *  recordings older than phase 3c. Read it through format.ts planSuggestions, which falls
+   *  back to the final failed step's payload while a run is still streaming. */
+  suggestions?: Suggestion[];
 }
 
 // ------------------------------------------------------------------ payload accessors
@@ -420,7 +552,9 @@ export interface ReplanRecord {
    *  after.requirements is what the planner was given: the surviving robots with their
    *  remaining batteries, every zone the simulator laid out declared, and horizon_h = the
    *  hours left at the event (relative); the ok schedule step's receipt quotes the brief's
-   *  deadline. */
+   *  deadline. The advice of a failed replan (after.suggestions and the final failed step's
+   *  SuggestionsPayload) is rebased the same way: absolute simulator hours against the
+   *  brief's deadline, and a spare robot is a full battery. */
   after: PlanResult;
   context: string;
   /** True when CP-SAT alone could not finish the remaining work and a repair prompt went to
