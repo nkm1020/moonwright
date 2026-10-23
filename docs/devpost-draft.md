@@ -84,13 +84,34 @@ a scope guard, and Monte Carlo robustness with replanning inside the loop.
 
 ## Results
 
-[MEASURE] 20 briefs x 3 repeats, repair loop off vs on: feasible-plan rate, repairs to
-feasibility, makespan, latency, tokens, cost per verified plan (Wilson 95% CI).
-[MEASURE] Core-vs-verdict ablation: repairs fed the minimal core vs only the verdict.
-[MEASURE] Nemotron-written schedules checked by the same verifier: violation rate and kinds.
-[MEASURE] Replanning after injected failures: solver-only success rate, escalation rate, time.
-[MEASURE] Monte Carlo on the landing-pad sortie: P(on time) and the effect of one spare per
-single-robot type.
+Every number below is a live run on Nebius Token Factory: 22 test briefs of five designed kinds
+x 3 repeats x two model arms planning from the same requirements, 66 runs per arm, every saved
+plan in the repository (`docs/eval/`).
+
+- **Final pipeline (run 4).** Nemotron 3 Ultra ended with a CP-SAT-verified plan in 86 % of runs
+  (Wilson 95 % CI 76-93 %) and with the full work in scope in 82 % (71-89 %). 55 % verified on
+  the first graph, so the repair loop, fed the solver's minimal core, added 31 points at 0.85
+  repair rounds per run. Nemotron 3 Super: 82 % verified, 77 % in scope, 45 % first try, at about
+  a fifth of the cost ($0.02 against $0.10 per plan, mean; Ultra's median $0.05). Median wall
+  time per plan with Ultra: 58 s. 326 requests, 0 errors.
+- **Honest failure.** On the three designed-impossible briefs, 7 of 9 Ultra runs ended without a
+  plan, 5 of them with CP-SAT-proven advice ("finishing needs 85 h, 25 h past the 60 h
+  deadline"); the two that verified had cut 10-40 % of the work and are counted out of scope.
+- **Measure, find, fix.** Each run exposed something the checks could not see yet: run 1 plans
+  that passed by shrinking the work (now a volume conflict), run 2 hauls scheduled before their
+  material was dug (17 of 56 verified Ultra plans; now a supply-order conflict, 0 of 57 in run
+  4), run 3 slips of the structuring model (a smaller pad the brief allows read as the full one:
+  that brief went from 0 of 3 to 3 of 3 in scope). Scored with the final checks, Ultra's
+  in-scope rate went 70 % -> 77 % -> 82 % over runs 2-4.
+- **Nemotron-written schedules.** Given the 21 verified task graphs of run 3, Nemotron 3 Ultra
+  wrote schedules that all passed the same independent checker (0 violations in 21). CP-SAT with
+  exact travel matched or beat every one and proved it optimal: shorter on 5, by up to 36 h.
+- **Replanning.** 102 robot failures injected into run 4's verified plans: CP-SAT alone recovered
+  82 (80 %, CI 72-87 %) in a median 9 ms; the other 20 provably exceed the surviving batteries,
+  the case that goes back to Nemotron.
+- [MEASURE] Core-vs-verdict ablation: repairs fed the minimal core vs only the verdict.
+- [MEASURE] Monte Carlo on the landing-pad sortie (re-recorded on the final code): P(on time)
+  and the effect of one spare per single-robot type.
 
 ## Challenges
 
@@ -104,14 +125,22 @@ single-robot type.
   instantly; a multi-worker deletion-filter fallback with a shared deadline fixed it.
 - Replanning accounting: remaining work must come from the original task definitions, the running
   task must stay locked, and a replan that silently drops a task has to be rejected.
-- [Add live-model observations from the eval: structured-output behaviour, thinking length,
-  latency of Ultra, rate limits.]
+- Reasoning shares `max_tokens` with the answer: at 16,384 tokens, 78 of 190 Ultra reasoning calls
+  were cut off before answering; at 32,768 with one re-ask at 65,536, 4 or 5 of about 125 per
+  run. Strict `json_schema` decoding held on all three models, and 1,494 requests over four runs
+  saw no error and no rate limit. Ultra produced 200-300 output tokens per second against
+  Super's 150, so the larger model was also the faster one for us.
 
 ## What we learned
 
-[MEASURE] Fill from the Results table: how often the repair loop turned an infeasible first
-graph into a verified plan, what the minimal core was worth over a bare verdict, how often
-Nemotron-written schedules violated a constraint, and how robust the landing-pad sortie is.
+- The repair loop turned a refused first graph into a verified plan in 31 of every 100 runs of
+  the final pipeline.
+- Nemotron sequences a verified graph validly; its failures are in the decomposition (45 % of
+  Ultra's first graphs in run 4 were refused: energy, supply order, horizon, scope), which is
+  exactly what the validator and the core can name.
+- Scoring a planner by "a schedule was found" overstates it: until volume, supply and the
+  structuring itself were checked against the brief, plans passed by shrinking or reordering the
+  work. Saving every plan made every new check re-scorable for free.
 
 ## Limitations and known failures
 
@@ -124,8 +153,12 @@ Nemotron-written schedules violated a constraint, and how robust the landing-pad
   placement beyond precedence.
 - The repair loop can re-scope work; scope changes are flagged in the UI, and the coverage check
   refuses graphs that drop a structure's phase, but a shallower bowl is still a planner decision.
-- [List the eval's failure cases here: briefs where no verified plan was found in three rounds,
-  and why.]
+- Failure cases in run 4: `large_fleet_pad_berm_road` (eleven robots, sintering within 17 % of
+  two printer batteries) failed 2 of 3 Ultra runs on the printer budget, one of them ending on a
+  repair that referenced a task it had deleted; a repair can also answer with an unchanged graph
+  (Super `landing_pad` #2, the same 4,782 Wh verdict three times); and the structuring model can
+  drop an operation the brief asks for, which only the coverage check against its own
+  requirements catches.
 
 ## Who would use this
 

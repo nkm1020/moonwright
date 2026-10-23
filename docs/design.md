@@ -186,8 +186,9 @@ Nemotron-written schedules (no solver) fed to the same checker to count constrai
 role (`backend/scripts/llm_log_report.py`: calls, errors, re-asks, tokens, tok/s, latency, cost,
 request ids). `backend/scripts/brief_budget.py` prices any brief with the planner's own rate table
 (per-type Wh need versus fleet, packing, bounds, canonical graphs through validator and CP-SAT), so
-the test set's kinds are arithmetic, not opinion. Results will be published here once measured;
-numbers are never quoted before they exist. The exact commands, budgets and wall times are in
+the test set's kinds are arithmetic, not opinion. Results: four live runs in
+[`docs/eval/`](eval/), each with every saved plan (run 4 is the final pipeline; the README's
+Evidence section compares runs 2-4 under the final checks with `backend/scripts/rescore_eval.py`). The exact commands, budgets and wall times are in
 [`docs/live-run-runbook.md`](docs/live-run-runbook.md).
 
 ```bash
