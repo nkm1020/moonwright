@@ -256,13 +256,18 @@ export interface StructurePayload {
   grid: [number, number];
   depot: [number, number] | null;
   /**
-   * Never a failure. In this order: recovered notes, site warnings, lift corrections,
-   * footprint corrections, dimension warnings.
+   * Never a failure. In this order: recovered notes, dropped operations, site warnings, lift
+   * corrections, footprint corrections, size corrections, dimension warnings.
    * (a) "structure S1: operations [excavate, compact, sinter] recovered from malformed keys
    *     ("operations': [", 'grade', 'compact', 'sinter'); check them against the brief": the
    *     structuring model's scrambled answer was salvaged (amber: ask the user to check);
-   * (b) "structure S2 lists sinter but the fleet has no printer: no sinter task will be
-   *     required of it (add a printer or drop the operation)" (muted);
+   * (b) phase 3j: "structure S2: operations sinter dropped: the fleet has no printer, so no
+   *     sinter task will be required of it (add a printer and the operation again to plan
+   *     it)": an operation no robot type of the fleet can perform, already dropped from the
+   *     requirements so the planner never plans it (muted; the card shows the operation as a
+   *     dashed "dropped" chip). Recordings older than phase 3j carry instead "structure S2
+   *     lists sinter but the fleet has no printer: no sinter task will be required of it (add
+   *     a printer or drop the operation)" (muted);
    * (b2) "structure STR1 lists excavate but the brief line about it asks for haul, not
    *     excavate: no excavate task will be required of it (...)" (muted);
    * (c) "structure S2 (blast berm) has no dimensions: the planner sizes its tasks from numeric
@@ -281,6 +286,14 @@ export interface StructurePayload {
    *     size too): a square or rectangle the structuring model recorded as a diameter, already
    *     written into the requirements as length_m x width_m (and min_length_m x min_width_m)
    *     (amber: check it against the brief; filed under its structure);
+   * (f) phase 3j, after the footprint corrections: "structure S1: min_diameter_m none -> 12:
+   *     the brief allows "any diameter between 12 m and 20 m that fits"": a smaller size the
+   *     brief allows, read anywhere in it and tied to its structure, already written into the
+   *     requirements, and "structure S2: diameter_m 30 dropped: the brief's entry for S2
+   *     states 30 m only as a distance ("30 m north of the pad")": a position recorded as a
+   *     size, already dropped (amber: check it against the brief; filed under its structure;
+   *     no (c) note follows for a structure left without dimensions this way, since the
+   *     brief gives it no size to add);
    * plus the older zone-overlap / undeclared-zone / no-zone / no-depot warnings (muted).
    */
   warnings: string[];

@@ -147,6 +147,51 @@ rectangle, "may shrink to 12 m by 12 m"), the structure stage does so with an am
 judgment applies it whenever the brief is known (:func:`dims_volumes`, :func:`_work_area`), so
 a saved plan is judged against the brief's square whatever its requirements recorded.
 
+Sizes (phase 3j)
+----------------
+Two more of Lightning's slips decide what a plan is judged against. low_battery_pad (kind E)
+allows "any diameter between 12 m and 20 m that fits" in a constraint, and Lightning recorded
+no ``min_diameter_m`` in 6 of 6 structurings of runs 2 and 3, so the plans that dug a 16.8 m
+bowl, inside the allowed range, were judged against 20 m (0 of 6 in scope in run 3; the
+structure prompt asks for the key, the brief_budget registry records it). And run 3 recorded
+its stockpile "30 m north of the pad" as a 30 m diameter (typed ``spoil_berm``, so its
+compaction was judged over 707 m2), run 2 as a 30 m length. :func:`with_brief_sizes` writes the
+sizes the brief states in: a smaller size it allows for a dimension the structure records
+(:func:`stated_minimums`: a range, "between 12 m and 20 m", "12 to 20 m", "12-20 m", "from" one
+only after a verb that shrinks ("extend the road from 40 m to 60 m" gives the size it grows
+from), or a smallest size, "may be reduced to 12 m", "down to 12 m", "at least 12 m", "no
+smaller than 12 m", each bound to the nearest dimension word: diameter, length, width, depth,
+deep, long, wide; "keeps its full 20 m diameter but its depth may be reduced to 0.3 m" bounds
+the depth), as ``min_<dimension>_m``, only below the recorded size and only where none is
+recorded; and every length the structure's own entry gives only as a distance dropped
+(:func:`distance_figures`: "30 m north of the pad", "15 m from the pit", "80 m away", "5 m
+beyond the rim"; never a span or an extent, "120 m from the depot to the pad", "runs 60 m from
+the array"). A statement is tied to a structure (:func:`_takers`) by the subject its own
+segment (cut at commas, brackets and conjunctions) gives it, when it gives one: the structure
+that word names by its type or by the name its entry gives it ("the bowl" is the pad Lightning
+typed ``landing_pad`` under "Landing pad bowl"), none when it names none ("the apron is at
+least 5 m wide" sizes no pad); else by the nearest name in its sentence, its own segment's,
+else an earlier segment's, the entry's own name when the search reaches it; two structures
+named by different words leave it to none ("the stockpile next to the pad may shrink to 10 m").
+With no name in its sentence the entry it stands in takes it, else a range goes by its top (the
+one structure recorded at 20 m: in low_battery_pad's constraint nothing before "or any diameter
+between 12 m and 20 m that fits" in its sentence names a structure, the bowl and the stockpile
+come after it) and a smallest size, on a line that names no structure at all, to the one
+structure that records that dimension. A statement about something else sizes nothing: the
+Site, Fleet and Deadline paragraphs are not read, a quantity of something is no size ("at least
+0.5 m of compacted fill"), and a clause about a part of a structure, the ground, a treatment or
+the way between structures ("with a crest at least 2 m wide", "loose regolith at least 40 cm
+deep", "compacted to a depth of at least 0.3 m", "the haul length to the berm is at least 40
+m") sizes only a structure whose type has that word. Each of these was read as a minimum the
+brief never allows before the review's fixes (``tests/test_sizes.py``). The structure stage
+writes the sizes with an amber note (``moonwright.pipeline.structure.correct_sizes``:
+"structure S1: min_diameter_m none -> 12: the brief allows "any diameter between 12 m and 20 m
+that fits"", "structure S2: diameter_m 30 dropped: the brief's entry for S2 states 30 m only as
+a distance ("30 m north of the pad")"), and every volume and area judgment reads them from the
+brief the same way (``brief_sizes=False`` judges the sizes as recorded;
+``scripts/rescore_eval.py`` compares the two). Of the 22 eval briefs only low_battery_pad
+states either.
+
 Supply (phase 3g)
 -----------------
 :func:`is_dig` (an excavator task in m3 that is no :func:`rehandles`), :func:`is_strip` (one in
@@ -171,18 +216,24 @@ measurement, and the table says so row by row.
 
 from __future__ import annotations
 
+import functools
 import math
 import re
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 
 from moonwright.pipeline.tags import (
+    FIGURE,
     WORDS,
     brief_lines,
+    entry_head,
     entry_line,
+    entry_owners,
+    figures_m,
     haul_target,
     name_score,
     serving_tasks,
+    states_figures,
 )
 from moonwright.schemas import (
     MAX_DURATION_H,
@@ -472,11 +523,96 @@ _LIFT_CLAUSE_SPLIT = re.compile(r"\.(?=\s|$)|[;,()]")   # keeps "0.5 m" whole
 _WIDTH_CLAUSE_SPLIT = re.compile(r"\.(?=\s|$)|[,;()]|\band\b")
 _WIDTH_WORD_RE = re.compile(r"\b(?:wide|width|base|broad|across)\b", re.IGNORECASE)
 _NOT_BASE_RE = re.compile(r"\b(?:trench|crest|key)\b", re.IGNORECASE)
-_FIGURE_RE = re.compile(r"(?<![\d.])(\d+(?:\.\d+)?)\s*(cm|m)\b", re.IGNORECASE)
 # a volume a brief line states: "about 144 cubic metres", "(about 280 cubic metres of fill)",
 # "60 m3", "1,125 m³"
 _VOLUME_FIGURE_RE = re.compile(
     r"(?<![\w.,])(\d[\d,]*(?:\.\d+)?)\s*(?:cubic\s+met(?:re|er)s?|m3|m³)(?!\w)", re.IGNORECASE)
+# sizes the brief states (phase 3j): a smaller size it allows for a dimension, a range ("any
+# diameter between 12 m and 20 m", "12 to 20 m wide", "a 12-20 m diameter", a unit on the
+# second figure at least) or a smallest size ("may be reduced to 12 m", "down to 12 m", "at
+# least 12 m", "no smaller than 12 m"), and a figure it gives only as a distance
+_SIZE_RANGE_RE = re.compile(
+    r"(?<![\w.])(?:between\s+(?P<a>\d+(?:\.\d+)?)\s*(?P<ua>cm|m)?\s+and\s+"
+    r"|(?:(?P<from_>from)\s+)?(?P<a2>\d+(?:\.\d+)?)\s*(?P<ua2>cm|m)?(?:\s+to\s+|\s*[-–—]\s*))"
+    r"(?P<b>\d+(?:\.\d+)?)\s*(?P<ub>cm|m)\b", re.IGNORECASE)
+# "from 20 m to 12 m" allows the smaller size only after a verb that shrinks or a word that
+# offers the choice ("may shrink from 20 m to 12 m", "anywhere from 12 m to 20 m"): "extend the
+# existing road from 40 m to 60 m long" and "widen the lane from 3 m to 5 m" give the size it
+# grows from (seen in review, read as a 40 m and a 3 m minimum)
+_SHRINK_RE = re.compile(r"\b(?:reduc\w*|shrink\w*|shrunk|smaller|any|anywhere)\b", re.IGNORECASE)
+_SIZE_FLOOR_RE = re.compile(
+    r"\b(?:(?:reduced|reduce|shrunk|shrink|shrinks)\s+(?:down\s+)?to|(?P<down>down\s+to)"
+    r"|at\s+least|no\s+(?:smaller|less|narrower|shorter|shallower)\s+than)\s+"
+    r"(?P<a>\d+(?:\.\d+)?)\s*(?P<ua>cm|m)\b", re.IGNORECASE)
+# "excavated down to 0.5 m", "dig the pad down to 0.4 m": a depth the dig reaches, not a size
+# the brief lets it shrink to ("the trench may go down to 0.4 m" is one)
+_DUG_DOWN_RE = re.compile(r"\b(?:(?:excavat\w*|dug|dig\w*)\b(?:\W+[^\W\d]+){0,3}|(?:cut\w*|"
+                          r"trench\w*|bored|drilled|sunk|sink\w*)\b)\W*$", re.IGNORECASE)
+# the dimension a size statement bounds: a word right after its figure ("20 m deep", "12 m in
+# diameter", "12-20 m diameter"; one the reader does not take, "2 m high", "0.3 m thick", "12 m
+# across", bounds nothing it reads), else the nearest dimension noun shortly before it, with no
+# figure, no other dimension word and no conjunction between ("any diameter between", "the
+# depth may be reduced to"; seen in review, "keeps its full 20 m diameter but its depth may be
+# reduced to 0.3 m" was read as a 0.3 m diameter, and the bowl's floor fell to nothing)
+_SIZE_KEYS = {"diameter": "diameter_m", "length": "length_m", "long": "length_m",
+              "width": "width_m", "wide": "width_m", "depth": "depth_m", "deep": "depth_m"}
+_DIM_WORDS = (r"diameter|length|width|depth|deep|long|wide|height|high|tall|thickness|thick|"
+              r"across|radius")
+_DIM_AFTER_RE = re.compile(rf"\s*(?:in\s+)?(?P<dim>{_DIM_WORDS})s?\b", re.IGNORECASE)
+_OF_RE = re.compile(r"\s+of\b", re.IGNORECASE)   # "at least 0.5 m of fill": a quantity of it
+_DIM_BEFORE_RE = re.compile(
+    r"\b(?P<dim>diameter|length|width|depth|height|thickness|radius)s?\b"
+    rf"(?:\W+(?!(?:{_DIM_WORDS}|and|but|or|while|whereas|though|although|yet)s?\b)"
+    r"[^\W\d]+){0,6}\W*$", re.IGNORECASE)
+_SIZE_CLAUSE_SPLIT = re.compile(r"\.(?=\s|$)|[;,()]")   # keeps "0.5 m" whole
+# where the subject of a size statement is looked for (:func:`_segments`): its sentence, cut
+# at a full stop or a semicolon, and in it the segments between commas, brackets and
+# conjunctions
+_SENTENCE_END = re.compile(r"\.(?=\s|$)|;")
+_SEGMENT_CUT = re.compile(r"[,()]|\b(?:and|but|or|while|whereas|though|although|yet|if|unless|"
+                          r"when|because|since)\b", re.IGNORECASE)
+# the subject a statement's own segment gives it (:func:`_subject`): the last word before it
+# that is no linking word, figure or unit ("the apron is at least 5 m wide": apron; "the
+# surveyor's stakes are at least 0.2 m deep": stakes; "the pad may drop down to": pad); one
+# that names no other thing is none ("its depth may be reduced to", "any diameter between",
+# "a smaller one", a statement that opens its segment)
+_LINKING = frozenset({
+    "is", "are", "was", "were", "be", "been", "being", "may", "might", "can", "could", "must",
+    "should", "shall", "will", "would", "also", "still", "only", "then", "now", "even", "just",
+    "not", "to", "of", "at", "s", "anywhere", "somewhere", "safely", "ideally", "preferably",
+    "nominally", "roughly", "about", "around", "approximately", "go", "goes", "get", "gets",
+    "come", "comes", "drop", "drops", "fall", "falls", "shrink", "shrinks", "narrow", "narrows",
+    "shorten", "shortens", "scaled", "taken", "brought", "back", "allowed", "permitted", "kept",
+    "keep", "keeps", "stay", "stays", "remain", "remains", "measure", "measures", "span",
+    "spans", "vary", "varies", "need", "needs", "has", "have", "dug", "excavated", "cut",
+    "built", "made", "sized", "set", "m", "cm"})
+_SIZE_SUBJECTS = frozenset({"diameter", "length", "width", "depth", "height", "thickness",
+                            "radius", "size", "footprint", "dimension", "dimensions", "one",
+                            "it", "its", "them", "all", "any", "anything", "the", "a", "an"})
+# a statement whose segment is about something other than a structure's body sizes only a
+# structure whose type has the word: a part of it ("with a crest at least 2 m wide", "on a key
+# trench at least 1 m wide", "a cable bed at least 0.3 m deep"), the ground ("loose regolith
+# at least 40 cm deep"), a treatment ("subgrade compacted to a depth of at least 0.3 m") or the
+# way between structures ("the haul length to the berm is at least 40 m"), each seen in
+# review read as a smaller size of the structure; "compacted to" stands as "compaction"
+_PART_RE = re.compile(
+    r"\b(?P<part>crest|key|trench|toe|bed|bedding|slab|layer|lift|subgrade|regolith|fines|soil|"
+    r"bedrock|haul|route|travel|path|corridor|gap|clearance|spacing|buffer|setback|margin|"
+    r"cable)s?\b|\bcompact\w*\s+to\b|\bcompaction\b", re.IGNORECASE)
+# the brief's own paragraphs about the ground, the robots and the time size no structure:
+# "**Site.** ... loose regolith at least 40 cm deep" is not the pad's smallest depth
+_NOT_SIZED_RE = re.compile(r"^\W*(?:site|fleet|deadline)\b", re.IGNORECASE)
+# a figure that places something rather than sizing it: "30 m north of the pad", "15 m from the
+# pit", "80 m away", "5 m beyond the rim"; never a span, a "to" later in its clause ("120 m
+# from the depot to the pad", a road's length), or an extent ("runs 60 m from the array", "a
+# ring extending 5 m beyond the pad edge"), each seen in review dropped as a distance
+_DISTANCE_RE = re.compile(
+    r"\s+(?:(?:north|south|east|west)(?:-?(?:east|west))?\s+of|(?P<from_>from)|away|beyond)\b",
+    re.IGNORECASE)
+_EXTENT_RE = re.compile(r"\b(?:runs?|running|ran|extend\w*|stretch\w*|reach\w*|span\w*|leads?|"
+                        r"leading|goes|going|continu\w*)\W+(?:(?:for|some|about)\s+)?$",
+                        re.IGNORECASE)
+_TO_RE = re.compile(r"\bto\b", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -692,16 +828,6 @@ def _recorded_diameter(structure: Structure) -> tuple[list[str], float] | None:
     return (keys, d[keys[0]]) if keys else None
 
 
-def _states_figures(line: str, structure: Structure) -> bool:
-    """Whether a brief line states every length figure the structure records (its ``*_m``
-    keys, the ``min_`` ones aside): its entry under a type whose words name no line."""
-    wanted = [v for k, v in structure.dims().items()
-              if k.endswith("_m") and not k.startswith("min_") and v > 0]
-    figures = _figures_m(line)
-    return bool(wanted) and all(any(math.isclose(f, w, abs_tol=1e-6) for f in figures)
-                                for w in wanted)
-
-
 def _rectangle(line: str, diameter: float) -> tuple[float, float] | None:
     """The footprint ``line`` states for a structure recorded with ``diameter``: its first
     rectangle (:func:`stated_footprint`) when the diameter is one of the two figures and the
@@ -714,7 +840,7 @@ def _rectangle(line: str, diameter: float) -> tuple[float, float] | None:
     if found is None or not any(math.isclose(diameter, f, abs_tol=1e-6) for f in found):
         return None
     alone = _FOOTPRINT_RE.sub(" ", line)
-    if any(math.isclose(diameter, f, abs_tol=1e-6) for f in _figures_m(alone)):
+    if any(math.isclose(diameter, f, abs_tol=1e-6) for f in figures_m(alone)):
         return None
     return found
 
@@ -732,18 +858,18 @@ def _footprint_line(structure: Structure, req: Requirements | None
     if entry is not None and _ROUND_RE.search(entry):
         return None
     if entry is not None and (stated_footprint(entry) is not None
-                              or _states_figures(entry, structure)):
+                              or states_figures(entry, structure)):
         found = _rectangle(entry, diameter)    # its own entry decides
         return None if found is None else (entry, found)
     lines = [line for line in brief_lines(req.source_brief)
              if line != entry and not line.lstrip().startswith("#")]
     if any(_ROUND_RE.search(line) and any(math.isclose(f, diameter, abs_tol=1e-6)
-                                           for f in _figures_m(line)) for line in lines):
+                                           for f in figures_m(line)) for line in lines):
         return None
     # every line that states its size must state the same rectangle: one without a rectangle
     # for it is its own entry under a type no line names ("Landing pad: 12 m across" beside
     # "Store: 12 m by 12 m", seen in review), and the store's square is not the pad's
-    sized = [line for line in lines if _states_figures(line, structure)]
+    sized = [line for line in lines if states_figures(line, structure)]
     rectangles = {_rectangle(line, diameter) for line in sized}
     if len(rectangles) != 1:
         return None
@@ -762,11 +888,11 @@ def footprint(structure: Structure, req: Requirements | None = None) -> tuple[fl
     no line, or a line that is not its entry (Lightning typed habitat_berm_tight_horizon's pit
     "excavate", which no line names, and "excavation_pit", whose words pick a constraint),
     the lines that state every length figure the structure records stand in for it
-    (:func:`_states_figures`) when each states the same rectangle and no round line of the
-    brief states the recorded diameter (that circle may be the structure's own): one of them
-    without a rectangle ("Landing pad: 12 m across" beside "Store: 12 m by 12 m") keeps the
-    diameter. None without the brief (``req.source_brief``), a recorded diameter or a stated
-    rectangle: no footprint is ever invented."""
+    (:func:`~moonwright.pipeline.tags.states_figures`) when each states the same rectangle
+    and no round line of the brief states the recorded diameter (that circle may be the
+    structure's own): one of them without a rectangle ("Landing pad: 12 m across" beside
+    "Store: 12 m by 12 m") keeps the diameter. None without the brief (``req.source_brief``),
+    a recorded diameter or a stated rectangle: no footprint is ever invented."""
     found = _footprint_line(structure, req)
     return None if found is None else found[1]
 
@@ -855,6 +981,342 @@ def with_judged_footprint(structure: Structure, req: Requirements | None) -> Str
     _write_pair(data, d, ("length_m", "width_m"), found)
     if least is not None:
         _write_pair(data, d, ("min_length_m", "min_width_m"), least)
+    return Structure.model_validate(data)
+
+
+# ----------------------------------------------------------------------- sizes (phase 3j)
+@dataclass(frozen=True)
+class SizeStatement:
+    """A smaller size a brief line allows for one dimension (:func:`_size_statements`):
+    ``key`` the recorded dimension it bounds ('diameter_m'), ``least`` the smallest value and,
+    for a range, ``full`` its top (metres); ``line`` is the brief line it stands on, ``quote``
+    its clause ('any diameter between 12 m and 20 m that fits'), ``at`` where the statement
+    starts in the line, ``spans`` the spans of the line its subject is looked for in, nearest
+    first (:func:`_segments`), and ``parts`` the words of its own segment that name something
+    other than a structure's body ('crest', 'regolith', 'compaction'; :data:`_PART_RE`)."""
+
+    key: str
+    least: float
+    full: float | None
+    line: str
+    quote: str
+    at: int = 0
+    spans: tuple[tuple[int, int], ...] = ()
+    parts: frozenset[str] = frozenset()
+
+
+def _metres(value: str, unit: str | None) -> float:
+    return float(value) / (100 if (unit or "m").lower() == "cm" else 1)
+
+
+def _size_key(clause: str, start: int, end: int) -> str | None:
+    """The recorded dimension a size statement at ``clause[start:end]`` bounds: the dimension
+    word right after it (:data:`_DIM_AFTER_RE`: "20 m deep", "12 m in diameter"; "2 m high"
+    bounds none the reader takes), else, unless a quantity of something follows ("at least
+    0.5 m of compacted fill"), the nearest dimension noun shortly before it, only words
+    between (:data:`_DIM_BEFORE_RE`: "any diameter between", "the depth may be reduced to");
+    None without one."""
+    m = _DIM_AFTER_RE.match(clause, end)
+    if m is None and _OF_RE.match(clause, end) is None:
+        m = _DIM_BEFORE_RE.search(clause, 0, start)
+    return None if m is None else _SIZE_KEYS.get(m["dim"].lower())
+
+
+def _singular(word: str) -> str:
+    return word[:-1] if len(word) > 3 and word.endswith("s") else word
+
+
+def _subject(text: str) -> str | None:
+    """The word the text of a statement's own segment before it gives the statement as its
+    subject, singular: the last that is no linking word, figure or unit (:data:`_LINKING`:
+    "the apron is at least 5 m wide" -> 'apron', "with a crest at least 2 m wide" -> 'crest',
+    "the pad may drop down to" -> 'pad'); None when there is none, or it names the dimension
+    itself or stands for the structure (:data:`_SIZE_SUBJECTS`: "its depth may be reduced
+    to", "any diameter between"). A verb the list lacks stands as a subject no structure has:
+    the statement then sizes nothing."""
+    words = [w for w in WORDS.findall(text.lower()) if not w.isdigit()]
+    while words and words[-1] in _LINKING:
+        words.pop()
+    if not words or words[-1] in _SIZE_SUBJECTS:
+        return None
+    return _singular(words[-1])
+
+
+def _aliases(brief: str, structures: Sequence[Structure]) -> list[frozenset[str]]:
+    """Per structure, the words of the name its own entry gives it (the name before the colon
+    of each line :func:`~moonwright.pipeline.tags.entry_owners` gives it, singular): "1.
+    Landing pad bowl: ..." names a structure Lightning typed ``landing_pad`` "bowl" too."""
+    entries = [(end, entry_owners(line, structures), line) for line in brief_lines(brief)
+               if (end := entry_head(line)) is not None]
+    return [frozenset(_singular(w) for end, owners, line in entries if any(s is o for o in owners)
+                      for w in WORDS.findall(line[:end].lower()) if not w.isdigit())
+            for s in structures]
+
+
+def _segments(line: str, start: int, end: int) -> tuple[tuple[int, int], ...]:
+    """The spans of ``line`` the size statement at ``line[start:end]`` may be about, nearest
+    first: its own segment, cut at the commas, brackets and conjunctions around it (never
+    inside it: "between 12 m and 20 m"), then each earlier segment of its sentence, back to
+    the sentence's start (a full stop or a semicolon)."""
+    s0 = max((m.end() for m in _SENTENCE_END.finditer(line, 0, start)), default=0)
+    s1 = next((m.start() for m in _SENTENCE_END.finditer(line, end)), len(line))
+    bounds = [s0]
+    for m in _SEGMENT_CUT.finditer(line, s0, s1):
+        if m.end() <= start or m.start() >= end:
+            bounds += [m.start(), m.end()]
+    bounds.append(s1)
+    spans = list(zip(bounds[::2], bounds[1::2], strict=True))
+    own = next(i for i, (a, b) in enumerate(spans) if a <= start and end <= b)
+    return tuple(reversed(spans[:own + 1]))
+
+
+@functools.lru_cache(maxsize=64)
+def _size_statements(brief: str) -> tuple[SizeStatement, ...]:
+    """Every smaller size the brief allows, in order: a range ("any diameter between 12 m and
+    20 m", "12 to 20 m wide", "a 12-20 m diameter"; "from 20 m to 12 m" only after a verb that
+    shrinks or a word that offers the choice, :data:`_SHRINK_RE`) or a smallest size ("the
+    diameter may be reduced to 12 m", "down to 12 m in diameter", "at least 12 m long", "no
+    smaller than 12 m wide"), each bound to a dimension by a word beside it
+    (:func:`_size_key`; none, none read: "keep at least 30 m from the pad"), with the spans
+    its subject is looked for in (:func:`_segments`) and the part words of its own segment
+    (:data:`_PART_RE`). "Down to" after a dig is a depth reached, not a size allowed
+    ("excavated down to 0.5 m deep"), and a range is read only when its two figures differ.
+    Headings and the Site, Fleet and Deadline paragraphs are skipped (:data:`_NOT_SIZED_RE`);
+    a hard-wrapped line reads whole."""
+    out: list[SizeStatement] = []
+    for line in brief_lines(brief):
+        if line.lstrip().startswith("#") or _NOT_SIZED_RE.match(line):
+            continue
+        cuts = [0, *(i for m in _SIZE_CLAUSE_SPLIT.finditer(line) for i in (m.start(), m.end())),
+                len(line)]
+        for c0, c1 in zip(cuts[::2], cuts[1::2], strict=True):
+            clause = line[c0:c1]
+            found: list[tuple[int, int, float, float | None]] = []
+            for m in _SIZE_RANGE_RE.finditer(clause):
+                if m["from_"] and not _SHRINK_RE.search(clause, 0, m.start()):
+                    continue
+                a, b = m["a"] or m["a2"], m["b"]
+                unit = m["ua"] or m["ua2"] or m["ub"]
+                lo, hi = sorted((_metres(a, unit), _metres(b, m["ub"])))
+                if 0 < lo < hi:
+                    found.append((m.start(), m.end(), lo, hi))
+            for m in _SIZE_FLOOR_RE.finditer(clause):
+                if m["down"] and _DUG_DOWN_RE.search(clause, 0, m.start()):
+                    continue
+                least = _metres(m["a"], m["ua"])
+                if least > 0:
+                    found.append((m.start(), m.end(), least, None))
+            for start, end, least, full in sorted(found, key=lambda f: f[0]):
+                key = _size_key(clause, start, end)
+                if key is None:
+                    continue
+                spans = _segments(line, c0 + start, c0 + end)
+                own = line[spans[0][0]:spans[0][1]]
+                parts = frozenset((m["part"] or "compaction").lower()
+                                  for m in _PART_RE.finditer(own))
+                quote = re.sub(r"^[\s\-*#>]+|[\s*]+$", "", " ".join(clause.split()))
+                quote = re.sub(r"^(?:or|and|but|so|then)\s+", "", quote, flags=re.IGNORECASE)
+                if len(quote) > 80:
+                    quote = quote[:77].rstrip() + "..."
+                out.append(SizeStatement(key=key, least=least, full=full, line=line,
+                                         quote=quote, at=c0 + start, spans=spans, parts=parts))
+    return tuple(out)
+
+
+def _named(text: str, structures: Sequence[Structure]) -> list[Structure] | None:
+    """The structure ``text`` names, as a one-item list: of those whose type words it holds
+    (:func:`~moonwright.pipeline.tags.name_score`), the one that scores best while every
+    other is named only by words it holds too ("the landing pad" beside a ``mast_pad``); []
+    when it names two by different words ("the stockpile next to the pad", seen in review
+    handing the stockpile's 10 m to the pad) or alike (two ``mast_pad``); None when it names
+    none."""
+    low = text.lower()
+    words = set(WORDS.findall(low))
+    named = [(s, key[0], {w for w in WORDS.findall(s.type.lower()) if w in words})
+             for s in structures if (key := name_score(low, words, s)) is not None]
+    if not named:
+        return None
+    best = max(named, key=lambda n: n[1])
+    if all(n is best or (n[1] < best[1] and n[2] <= best[2]) for n in named):
+        return [best[0]]
+    return []
+
+
+def _takers(st: SizeStatement, structures: Sequence[Structure],
+            aliases: Sequence[frozenset[str]] = ()) -> list[Structure]:
+    """The structure a size statement is about, as a one-item list ([] when it is about none
+    or the brief does not say which), and only if it records the statement's dimension above
+    its smallest value (for a range, at its top: the full size it runs down from) and its type
+    has every part word of the statement (:attr:`SizeStatement.parts`: "with a crest at least
+    2 m wide" sizes no berm). A subject its own segment gives it decides (:func:`_subject`):
+    the one structure that word names, by a word of its type or of the name its entry gives
+    it (``aliases``, :func:`_aliases`), none when it names none ("the apron is at least 5 m
+    wide" sizes no pad) or the segment names another. Else the subject is looked for nearest
+    first (:attr:`SizeStatement.spans`): the first segment of the statement's sentence that
+    names a structure decides it (:func:`_named`: two by different words, none), and the
+    entry the line is (:func:`~moonwright.pipeline.tags.entry_owners`) decides it when the
+    search reaches the entry's name, unless the rest of that segment names another structure
+    ("1. Landing pad: 20 m by 20 m with a spoil berm at least 2 m wide" sizes no pad). With no
+    name in its sentence: the entry the line is, else for a range the only structure recorded
+    at its top ("or any diameter between 12 m and 20 m that fits" in low_battery_pad's
+    constraint, the 20 m bowl), else for a smallest size, on a line that names no structure at
+    all, the only structure that records that dimension."""
+    def fits(s: Structure) -> bool:
+        v = s.dims().get(st.key, 0.0)
+        if v <= 0 or st.least >= v - 1e-6 or not st.parts <= set(WORDS.findall(s.type.lower())):
+            return False
+        return st.full is None or math.isclose(v, st.full, abs_tol=1e-6)
+
+    def only(found: Sequence[Structure]) -> list[Structure]:
+        return [found[0]] if len(found) == 1 and fits(found[0]) else []
+
+    owners = entry_owners(st.line, structures)
+    a, b = st.spans[0]
+    subject = _subject(st.line[a:st.at])
+    if subject is not None:
+        padded = [*aliases, *[frozenset[str]()] * (len(structures) - len(aliases))]
+        who = [s for s, alias in zip(structures, padded, strict=True)
+               if subject in alias or subject in map(_singular, WORDS.findall(s.type.lower()))]
+        named = _named(st.line[a:b], structures)
+        if len(who) > 1:      # a word two names hold: the one the segment or the entry names
+            who = [s for s in who if (named and s is named[0]) or any(s is o for o in owners)]
+        if len(who) != 1 or (named is not None and not (named and named[0] is who[0])):
+            return []
+        return only(who)
+    head = entry_head(st.line) if owners else None
+    for a, b in st.spans:
+        if head is not None and a < head <= b:        # the segment that holds the entry's name
+            named = _named(st.line[head:b], structures)
+            if named is not None and not (len(named) == 1 and any(named[0] is o for o in owners)):
+                return []
+            return only(owners)
+        named = _named(st.line[a:b], structures)
+        if named is not None:
+            return only(named)
+    if owners:
+        return only(owners)
+    if st.full is not None:
+        return only([s for s in structures if fits(s)])
+    low = st.line.lower()
+    words = set(WORDS.findall(low))
+    if any(name_score(low, words, s) is not None for s in structures):
+        return []
+    return only([s for s in structures if s.dims().get(st.key, 0.0) > 0])
+
+
+def _distance_at(entry: str, figure: re.Match[str]) -> bool:
+    """Whether a figure of an entry places something rather than sizing it
+    (:data:`_DISTANCE_RE`: "30 m north of the pad", "15 m from the pit", "80 m away", "5 m
+    beyond the rim"): never a span, a "to" later in its clause ("120 m from the depot to the
+    pad"), nor an extent (:data:`_EXTENT_RE`: "runs 60 m from the array", "extending 5 m
+    beyond the pad edge")."""
+    d = _DISTANCE_RE.match(entry, figure.end())
+    if d is None or _EXTENT_RE.search(entry, 0, figure.start()):
+        return False
+    if d["from_"]:
+        rest = _SIZE_CLAUSE_SPLIT.split(entry[d.end():], maxsplit=1)[0]
+        return _TO_RE.search(rest) is None
+    return True
+
+
+def distance_figures(structure: Structure, req: Requirements | None) -> dict[str, str]:
+    """``{key: the phrase}`` for every length a structure records that its own entry in the
+    brief (the line :func:`~moonwright.pipeline.tags.entry_owners` gives it, read whole)
+    states only as a distance (:func:`_distance_at`: "30 m north of the pad", "15 m from the
+    pit", "80 m away", "5 m beyond the rim"): a position, never a size. Seen live (run 3):
+    Lightning recorded low_battery_pad's "Spoil stockpile: pad spoil placed in a compact pile
+    30 m north of the pad" as a 30 m diameter (typed ``spoil_berm``, so its compaction was
+    judged over 707 m2), and run 2 as a 30 m length. A figure the entry also states as a size,
+    or does not state at all, stays, and so does every figure of a structure no entry is
+    given to (a constraint, "Keep the blast berm 30 m from the landing pad edge", is no
+    entry); {} without the brief."""
+    if req is None or not req.source_brief:
+        return {}
+    known = [structure, *(s for s in req.structures if s.id != structure.id)]
+    entry = next((line for line in brief_lines(req.source_brief)
+                  if any(s is structure for s in entry_owners(line, known))), None)
+    if entry is None:
+        return {}
+    out: dict[str, str] = {}
+    for key, value in structure.dims().items():
+        if not key.endswith("_m") or value <= 0:
+            continue
+        found = [m for m in FIGURE.finditer(entry)
+                 if math.isclose(_metres(m[1], m[2]), value, abs_tol=1e-6)]
+        if found and all(_distance_at(entry, m) for m in found):
+            phrase = _SIZE_CLAUSE_SPLIT.split(entry[found[0].start():])[0]
+            out[key] = " ".join(phrase.split())
+    return out
+
+
+def _as_read(structure: Structure, req: Requirements | None) -> Structure:
+    """The structure with the footprint the brief states (:func:`with_judged_footprint`) and
+    without the figures its entry gives only as distances (:func:`distance_figures`): what the
+    minimums are read against, for it and for the structures beside it."""
+    structure = with_judged_footprint(structure, req)
+    far = distance_figures(structure, req)
+    if not far:
+        return structure
+    return Structure.model_validate({k: v for k, v in structure.model_dump().items()
+                                     if k not in far})
+
+
+def stated_minimums(structure: Structure, req: Requirements | None
+                    ) -> dict[str, SizeStatement]:
+    """``{min_<dimension>_m: statement}``: the smallest size the brief allows for a dimension
+    the structure records and has no minimum for (module docstring, "Sizes"), read anywhere in
+    the brief (:func:`_size_statements`) and tied to the structure (:func:`_takers`), the
+    smallest when several lines bound one dimension; {} without the brief. Never invented: a
+    statement no dimension word binds, one about another structure or about none the brief
+    names alone, one about a part, the ground, a treatment or the way between structures
+    (:data:`_PART_RE`), one whose range top is no recorded size, or one no smaller than the
+    recorded size gives nothing."""
+    if req is None or not req.source_brief:
+        return {}
+    statements = _size_statements(req.source_brief)
+    if not statements:
+        return {}
+    me = _as_read(structure, req)
+    context = [me, *(_as_read(s, req) for s in req.structures if s.id != structure.id)]
+    aliases = _aliases(req.source_brief, context)
+    recorded = me.dims()
+    out: dict[str, SizeStatement] = {}
+    for st in statements:
+        key = f"min_{st.key}"
+        if key in recorded or not any(t is me for t in _takers(st, context, aliases)):
+            continue
+        if key not in out or st.least < out[key].least:
+            out[key] = st
+    return out
+
+
+def size_notes(structure: Structure, req: Requirements) -> list[str]:
+    """The corrections :func:`with_brief_sizes` makes, as the structure stage's warnings read
+    them: "diameter_m 30 dropped: the brief's entry for S2 states 30 m only as a distance
+    ("30 m north of the pad")", "min_diameter_m none -> 12: the brief allows "any diameter
+    between 12 m and 20 m that fits""; [] when the record stands."""
+    d = structure.dims()
+    notes = [f"{key} {qty(d[key])} dropped: the brief's entry for {structure.id} states "
+             f"{qty(d[key])} m only as a distance (\"{phrase}\")"
+             for key, phrase in distance_figures(structure, req).items()]
+    notes += [f"{key} none -> {qty(st.least)}: the brief allows \"{st.quote}\""
+              for key, st in stated_minimums(structure, req).items()]
+    return notes
+
+
+def with_brief_sizes(structure: Structure, req: Requirements | None) -> Structure:
+    """The structure with the sizes the brief states written in (module docstring, "Sizes"):
+    every length its entry gives only as a distance dropped (:func:`distance_figures`) and
+    every smaller size the brief allows for a recorded dimension written as
+    ``min_<dimension>_m`` (:func:`stated_minimums`); the structure itself when the record
+    stands."""
+    far = distance_figures(structure, req)
+    least = stated_minimums(structure, req)
+    if not far and not least:
+        return structure
+    data = {k: v for k, v in structure.model_dump().items() if k not in far}
+    for key, st in least.items():
+        data[key] = int(st.least) if float(st.least).is_integer() else st.least
     return Structure.model_validate(data)
 
 
@@ -1006,7 +1468,7 @@ def _key_trench(d: dict[str, float]) -> Shape | None:
 
 
 def dims_volumes(structure: Structure, req: Requirements | None = None, *,
-                 brief_footprint: bool = True) -> list[Shape]:
+                 brief_footprint: bool = True, brief_sizes: bool = True) -> list[Shape]:
     """Every :class:`Shape` a structure's dimensions imply, main body first: a bowl
     (``diameter_m`` x ``depth_m``) or a box (``length_m`` x ``width_m`` x ``depth_m``) is dug,
     so its phase is ``excavation``; a prism (``length_m`` x ``height_m`` [x ``width_m`` at the
@@ -1021,11 +1483,16 @@ def dims_volumes(structure: Structure, req: Requirements | None = None, *,
     12 m" pit recorded as a 12 m bowl is a 12 x 12 m box); ``brief_footprint=False`` keeps the
     footprint as recorded (``scripts/rescore_eval.py`` compares the two).
     ``min_<dimension>_m`` extras give each shape its floor (the smallest volume the brief
-    allows; :class:`Shape`). A shape whose numbers give no positive volume (``depth_m: 0`` for
+    allows; :class:`Shape`), and with ``req`` the sizes the brief states are read too
+    (:func:`with_brief_sizes`, phase 3j: a smaller size it allows anywhere, written as that
+    extra, a figure its entry gives only as a distance dropped); ``brief_sizes=False`` keeps
+    the sizes as recorded. A shape whose numbers give no positive volume (``depth_m: 0`` for
     an at-grade hardstand, a negative figure a user typed) is left out, so nothing downstream
     divides by it; so is a key trench without a stated width."""
     if brief_footprint:
         structure = with_judged_footprint(structure, req)
+    if brief_sizes:
+        structure = with_brief_sizes(structure, req)
     d = structure.dims()
     body = _body(d)
     if body is not None and body.kind in ("bowl", "box"):
@@ -1358,11 +1825,12 @@ def is_haul(task: Task) -> bool:
     return task.robot_type == "hauler" and task.unit == "m3" and (task.quantity or 0.0) > 0
 
 
-def volume_coverages(req: Requirements, graph: TaskGraph, *,
-                     brief_footprint: bool = True) -> list[VolumeCoverage]:
+def volume_coverages(req: Requirements, graph: TaskGraph, *, brief_footprint: bool = True,
+                     brief_sizes: bool = True) -> list[VolumeCoverage]:
     """One :class:`VolumeCoverage` per structure and shape (:func:`dims_volumes`, read with
     the brief and the constraints of ``req``: a recorded diameter whose entry states a
-    rectangle is that rectangle unless ``brief_footprint`` is False) that has at least one
+    rectangle is that rectangle unless ``brief_footprint`` is False, and the sizes the brief
+    states are read unless ``brief_sizes`` is False) that has at least one
     task of the shape's robot type with a quantity, in requirements order. The tasks of a
     structure are resolved exactly as the coverage check resolves them
     (:func:`moonwright.pipeline.tags.serving_tasks`: the id in any case, the type, a label
@@ -1372,8 +1840,8 @@ def volume_coverages(req: Requirements, graph: TaskGraph, *,
     structure without a volume, or without any task of the shape's type (coverage's
     business), gets nothing; a graph without quantities (the hand-made fixtures) therefore
     gets nothing."""
-    shapes = {s.id: dims_volumes(s, req, brief_footprint=brief_footprint)
-              for s in req.structures}
+    shapes = {s.id: dims_volumes(s, req, brief_footprint=brief_footprint,
+                                 brief_sizes=brief_sizes) for s in req.structures}
     if not any(shapes.values()):
         return []
     served = {s.id: serving_tasks(s, graph, req.structures) for s in req.structures}
@@ -1432,10 +1900,11 @@ def _in_pile(haul: Task, structures: Sequence[Structure]) -> bool:
 
 def _stated_m3(structure: Structure, req: Requirements) -> float | None:
     """The largest volume the brief states on the lines that state every length figure the
-    structure records (:func:`_states_figures`: its entry, whatever its type; "about 280
-    cubic metres of fill", "60 m3"); None when they state none or no brief is known."""
+    structure records (:func:`~moonwright.pipeline.tags.states_figures`: its entry, whatever
+    its type; "about 280 cubic metres of fill", "60 m3"); None when they state none or no
+    brief is known."""
     lines = [line for line in brief_lines(req.source_brief)
-             if _states_figures(line, structure)] if req.source_brief else []
+             if states_figures(line, structure)] if req.source_brief else []
     figures = [float(m[1].replace(",", "")) for line in lines
                for m in _VOLUME_FIGURE_RE.finditer(line)]
     return max(figures) if figures else None
@@ -1564,15 +2033,16 @@ def volume_advisories(req: Requirements, graph: TaskGraph) -> list[str]:
     return out
 
 
-def volume_shares(req: Requirements, graph: TaskGraph, *,
-                  brief_footprint: bool = True) -> dict[str, float]:
+def volume_shares(req: Requirements, graph: TaskGraph, *, brief_footprint: bool = True,
+                  brief_sizes: bool = True) -> dict[str, float]:
     """``{structure id: judged share}`` for every structure and shape the advisory judges
     (:attr:`VolumeCoverage.judged_share`, the smallest when a structure has several shapes;
     the fill of a stockpile-like structure is not judged), whether or not it is out of range:
-    what the eval reports as ``min_volume_share`` (``brief_footprint`` as in
-    :func:`volume_coverages`)."""
+    what the eval reports as ``min_volume_share`` (``brief_footprint`` and ``brief_sizes`` as
+    in :func:`volume_coverages`)."""
     out: dict[str, float] = {}
-    for c in volume_coverages(req, graph, brief_footprint=brief_footprint):
+    for c in volume_coverages(req, graph, brief_footprint=brief_footprint,
+                              brief_sizes=brief_sizes):
         if not c.excused:
             out[c.structure.id] = min(c.judged_share, out.get(c.structure.id, math.inf))
     return out
@@ -1722,20 +2192,11 @@ def with_judged_lifts(structure: Structure, req: Requirements) -> Structure:
     return Structure.model_validate(data)
 
 
-def _figures_m(line: str) -> list[float]:
-    """Every length figure of a line in metres ("1.2 m", "30 cm")."""
-    return [float(m[1]) / (100 if m[2].lower() == "cm" else 1) for m in _FIGURE_RE.finditer(line)]
-
-
 def _states_size(line: str, structure: Structure) -> bool:
     """Whether a brief line states every length and height figure the structure records: its
     entry under another name (Lightning typed depleted_excavators' dust berm "borrow_strip",
     whose words pick the borrow pit's entry)."""
-    d = structure.dims()
-    wanted = [d[k] for k in ("length_m", "height_m") if d.get(k, 0.0) > 0]
-    figures = _figures_m(line)
-    return bool(wanted) and all(any(math.isclose(f, w, abs_tol=1e-6) for f in figures)
-                                for w in wanted)
+    return states_figures(line, structure, ("length_m", "height_m"))
 
 
 def _width_in(line: str, width: float) -> bool:
@@ -1744,7 +2205,7 @@ def _width_in(line: str, width: float) -> bool:
     for clause in _WIDTH_CLAUSE_SPLIT.split(line):
         if not _WIDTH_WORD_RE.search(clause) or _NOT_BASE_RE.search(clause):
             continue
-        if any(math.isclose(f, width, abs_tol=1e-6) for f in _figures_m(clause)):
+        if any(math.isclose(f, width, abs_tol=1e-6) for f in figures_m(clause)):
             return True
     return False
 
@@ -1774,7 +2235,8 @@ def base_width_stated(structure: Structure, req: Requirements | None = None) -> 
 
 
 def _work_area(structure: Structure, req: Requirements | None, *,
-               brief_footprint: bool = True) -> tuple[float, bool, str] | None:
+               brief_footprint: bool = True,
+               brief_sizes: bool = True) -> tuple[float, bool, str] | None:
     """``(m2, placed, basis)``: the area compaction and sintering treat on the smallest size
     the brief allows (an ``area_m2`` extra; the floor of a dug bowl or box, the bottom when
     its walls slope; a berm's base when the brief states its width, :func:`base_width_stated`,
@@ -1782,13 +2244,17 @@ def _work_area(structure: Structure, req: Requirements | None, *,
     less): length x height, ``basis`` saying so; a flat ``length_m`` x ``width_m`` or
     ``diameter_m`` surface), whether it is a placed body, and how the area was read ('' for
     a stated size); None when the dimensions give none. A recorded diameter is read as the
-    rectangle the brief states, as :func:`dims_volumes` reads it (``brief_footprint``)."""
+    rectangle the brief states and the sizes the brief states are read, as
+    :func:`dims_volumes` reads them (``brief_footprint``, ``brief_sizes``)."""
     if brief_footprint:
         structure = with_judged_footprint(structure, req)
+    if brief_sizes:
+        structure = with_brief_sizes(structure, req)
     d = structure.dims()
     if d.get("area_m2", 0.0) > 0:
         return d["area_m2"], False, ""
-    shapes = dims_volumes(structure, req, brief_footprint=brief_footprint)
+    shapes = dims_volumes(structure, req, brief_footprint=brief_footprint,
+                          brief_sizes=brief_sizes)
     body = shapes[0] if shapes and shapes[0].kind != "trench" else None
     if body is not None:
         if body.phase == "haul" and not base_width_stated(structure, req):
@@ -1809,12 +2275,13 @@ def _work_area(structure: Structure, req: Requirements | None, *,
     return None
 
 
-def area_coverages(req: Requirements, graph: TaskGraph, *,
-                   brief_footprint: bool = True) -> list[AreaCoverage]:
+def area_coverages(req: Requirements, graph: TaskGraph, *, brief_footprint: bool = True,
+                   brief_sizes: bool = True) -> list[AreaCoverage]:
     """One :class:`AreaCoverage` per structure and area-work robot type (compactor, printer)
     with at least one task of that type with a quantity: the m2 its tasks plan against the
     structure's work area (:func:`_work_area`, a recorded diameter read as the rectangle the
-    brief states unless ``brief_footprint`` is False), times its :func:`lifts` for compaction
+    brief states unless ``brief_footprint`` is False, the sizes the brief states read unless
+    ``brief_sizes`` is False), times its :func:`lifts` for compaction
     (the count the brief states, read with ``req``). A placed body whose base width the brief
     does not state is judged on the least base it can have, as wide as it is high
     (:func:`_work_area`, :func:`base_width_stated`: access_road's berm "20 m long, 1.5 m high"
@@ -1827,7 +2294,7 @@ def area_coverages(req: Requirements, graph: TaskGraph, *,
     for s in req.structures:
         if stockpile_like(s):
             continue
-        work = _work_area(s, req, brief_footprint=brief_footprint)
+        work = _work_area(s, req, brief_footprint=brief_footprint, brief_sizes=brief_sizes)
         if work is None:
             continue
         area, placed, basis = work
@@ -1847,13 +2314,14 @@ def area_coverages(req: Requirements, graph: TaskGraph, *,
     return out
 
 
-def area_shares(req: Requirements, graph: TaskGraph, *,
-                brief_footprint: bool = True) -> dict[str, float]:
+def area_shares(req: Requirements, graph: TaskGraph, *, brief_footprint: bool = True,
+                brief_sizes: bool = True) -> dict[str, float]:
     """``{structure id: planned m2 / work area}``, the smallest over its compaction and
-    sintering: what the eval reports as ``min_area_share`` (``brief_footprint`` as in
-    :func:`area_coverages`)."""
+    sintering: what the eval reports as ``min_area_share`` (``brief_footprint`` and
+    ``brief_sizes`` as in :func:`area_coverages`)."""
     out: dict[str, float] = {}
-    for a in area_coverages(req, graph, brief_footprint=brief_footprint):
+    for a in area_coverages(req, graph, brief_footprint=brief_footprint,
+                            brief_sizes=brief_sizes):
         out[a.structure.id] = min(a.share, out.get(a.structure.id, math.inf))
     return out
 

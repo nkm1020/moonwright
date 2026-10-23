@@ -1,0 +1,518 @@
+{
+ "_note": "Every distinct structuring Nemotron 3.5 Lightning recorded in the 132 saved structurings of live runs 2 (docs/eval/2026-10-23-live-eval-run2/plans) and 3 (backend/out/eval_run3/plans), per eval brief: the structures of one requirements object in order, as saved (keys and values untouched; repeats dropped, so 102 remain). Where recorded_structures.json reads each structure alone, this reads it beside the structures it was recorded with, as the structure stage does: tests/test_sizes.py.",
+ "access_road": [
+  [
+   {"id": "S1", "type": "access_road", "zone": "Z1", "operations": ["grade", "compact"], "length_m": 120, "width_m": 4, "lifts": 0.2, "min_length_m": 120},
+   {"id": "S2", "type": "habitat_foundation", "zone": "Z2", "operations": ["excavate", "compact"], "length_m": 8, "width_m": 8, "depth_m": 0.5, "min_depth_m": 0.5},
+   {"id": "S3", "type": "protective_berm", "zone": "Z3", "operations": ["haul", "compact"], "length_m": 20, "height_m": 1.5, "min_height_m": 1.5}
+  ],
+  [
+   {"id": "S1", "type": "access_road", "zone": "Z1", "operations": ["grade", "compact"], "length_m": 120, "width_m": 4, "lifts": 0.2},
+   {"id": "S2", "type": "habitat_foundation", "zone": "Z2", "operations": ["excavate", "compact"], "length_m": 8, "width_m": 8, "depth_m": 0.5},
+   {"id": "S3", "type": "protective_berm", "zone": "Z3", "operations": ["haul", "compact"], "length_m": 20, "height_m": 1.5}
+  ],
+  [
+   {"id": "S1", "type": "road", "zone": "Z1", "operations": ["grade", "compact"], "length_m": 120, "width_m": 4, "lifts": 1, "wall_slope": "1:1"},
+   {"id": "S2", "type": "foundation", "zone": "Z2", "operations": ["excavate", "compact"], "length_m": 8, "width_m": 8, "depth_m": 0.5},
+   {"id": "S3", "type": "protective_berm", "zone": "Z3", "operations": ["haul", "compact"], "length_m": 20, "height_m": 1.5}
+  ],
+  [
+   {"id": "R1", "type": "road", "zone": "Z1", "operations": ["grade", "compact"], "length_m": 120, "width_m": 4, "thickness_m": 0.2, "lifts": 1},
+   {"id": "F1", "type": "foundation", "zone": "Z2", "operations": ["excavate", "compact"], "length_m": 8, "width_m": 8, "depth_m": 0.5},
+   {"id": "B1", "type": "spoil_berm", "zone": "Z3", "operations": ["haul", "compact"], "length_m": 20, "height_m": 1.5}
+  ]
+ ],
+ "cable_trench": [
+  [
+   {"id": "S1", "type": "cable_trench", "zone": "Z1", "operations": ["excavate", "compact"], "length_m": 150, "width_m": 0.4, "depth_m": 0.6, "thickness_m": 0.1},
+   {"id": "S2", "type": "earth_bridge", "zone": "Z2", "operations": ["haul", "compact"], "length_m": 10, "width_m": 4, "thickness_m": 0.5}
+  ],
+  [
+   {"id": "S1", "type": "cable_trench", "zone": "Z1", "operations": ["excavate", "compact"], "length_m": 150, "width_m": 0.4, "depth_m": 0.6, "lifts": [{"thickness_m": 0.1, "description": "bedding layer"}]},
+   {"id": "S2", "type": "earth_bridge", "zone": "Z2", "operations": ["haul", "compact"], "length_m": 10, "width_m": 4, "thickness_m": 0.5}
+  ],
+  [
+   {"id": "S1", "type": "trench", "zone": "Z1", "operations": ["excavate", "compact"], "length_m": 150, "width_m": 0.4, "depth_m": 0.6, "lifts": 3, "thickness_m": 0.1},
+   {"id": "S2", "type": "earth_bridge", "zone": "Z2", "operations": ["haul", "compact"], "length_m": 10, "width_m": 4, "thickness_m": 0.5}
+  ],
+  [
+   {"id": "S1", "type": "cable_trench", "zone": "Z1", "operations": ["excavate", "compact"], "length_m": 150, "width_m": 0.4, "depth_m": 0.6, "lifts": 3, "min_length_m": 50},
+   {"id": "S2", "type": "earth_bridge", "zone": "Z2", "operations": ["haul", "compact"], "length_m": 10, "width_m": 4, "thickness_m": 0.5, "min_length_m": 10}
+  ],
+  [
+   {"id": "S1", "type": "cable_trench", "zone": "Z1", "operations": ["excavate", "compact"], "length_m": 150, "width_m": 0.4, "depth_m": 0.6, "lifts": 3},
+   {"id": "S2", "type": "earth_bridge", "zone": "Z2", "operations": ["haul", "compact"], "length_m": 10, "width_m": 4, "thickness_m": 0.5}
+  ]
+ ],
+ "crater_ramp": [
+  [
+   {"id": "S1", "type": "access_ramp", "zone": "Z1", "operations": ["excavate", "haul", "compact"], "length_m": 40, "width_m": 5, "depth_m": 1.2, "lifts": 4, "min_length_m": 10},
+   {"id": "S2", "type": "turnaround", "zone": "Z2", "operations": ["compact"], "length_m": 10, "width_m": 10},
+   {"id": "S3", "type": "landing_pad", "zone": "Z3", "operations": ["compact"], "length_m": 8, "width_m": 8}
+  ],
+  [
+   {"id": "S1", "type": "access_ramp", "zone": "Z1", "operations": ["excavate", "haul", "compact"], "length_m": 40, "width_m": 5, "depth_m": 1.2, "lifts": 4, "wall_slope": "15 percent grade"},
+   {"id": "S2", "type": "rim_turnaround", "zone": "Z2", "operations": ["compact"], "length_m": 10, "width_m": 10},
+   {"id": "S3", "type": "floor_landing", "zone": "Z3", "operations": ["compact"], "length_m": 8, "width_m": 8}
+  ],
+  [
+   {"id": "S1", "type": "access_ramp", "zone": "Z1", "operations": ["excavate", "haul", "compact"], "length_m": 40, "width_m": 5, "depth_m": 1.2, "lifts": 4, "min_length_m": 40},
+   {"id": "S2", "type": "turnaround", "zone": "Z2", "operations": ["compact"], "length_m": 10, "width_m": 10, "min_length_m": 10, "min_width_m": 10},
+   {"id": "S3", "type": "landing_pad", "zone": "Z3", "operations": ["compact"], "length_m": 8, "width_m": 8, "min_length_m": 8, "min_width_m": 8}
+  ],
+  [
+   {"id": "S1", "type": "ramp", "zone": "Z1", "operations": ["excavate", "haul", "compact"], "length_m": 40, "width_m": 5, "depth_m": 1.2, "min_length_m": 10},
+   {"id": "S2", "type": "turnaround", "zone": "Z2", "operations": ["compact"], "length_m": 10, "width_m": 10},
+   {"id": "S3", "type": "pad", "zone": "Z3", "operations": ["compact"], "length_m": 8, "width_m": 8}
+  ],
+  [
+   {"id": "R1", "type": "access_ramp", "zone": "Z1", "operations": ["excavate", "haul", "compact"], "length_m": 40, "width_m": 5, "depth_m": 1.2},
+   {"id": "R2", "type": "turnaround", "zone": "Z2", "operations": ["compact"], "length_m": 10, "width_m": 10},
+   {"id": "R3", "type": "landing_pad", "zone": "Z3", "operations": ["compact"], "length_m": 8, "width_m": 8}
+  ],
+  [
+   {"id": "R1", "type": "access_ramp", "zone": "Z1", "operations": ["excavate", "haul", "compact"], "length_m": 40, "width_m": 5, "depth_m": 1.2, "min_length_m": 40, "wall_slope": "1:1"},
+   {"id": "R2", "type": "turnaround", "zone": "Z2", "operations": ["compact"], "length_m": 10, "width_m": 10, "thickness_m": 0.3},
+   {"id": "R3", "type": "landing_pad", "zone": "Z3", "operations": ["compact"], "length_m": 8, "width_m": 8, "thickness_m": 0.3}
+  ]
+ ],
+ "depleted_excavators": [
+  [
+   {"id": "STR1", "type": "stockpile", "zone": "Z1", "operations": ["excavate", "compact"], "diameter_m": 12, "depth_m": 0.5, "thickness_m": 0.3},
+   {"id": "STR2", "type": "spoil_berm", "zone": "Z2", "operations": ["haul", "compact"], "length_m": 60, "height_m": 1.2, "width_m": 3, "trench_width_m": 1.2, "trench_depth_m": 0.8},
+   {"id": "STR3", "type": "borrow_strip", "zone": "Z3", "operations": ["excavate"], "length_m": 8, "width_m": 8, "depth_m": 0.9}
+  ],
+  [
+   {"id": "S1", "type": "stockpile", "zone": "Z1", "operations": ["excavate", "compact"], "diameter_m": 12, "depth_m": 0.5},
+   {"id": "S2", "type": "borrow_strip", "zone": "Z2", "operations": ["excavate", "haul", "compact"], "length_m": 60, "height_m": 1.2, "width_m": 3, "trench_width_m": 1.2, "trench_depth_m": 0.8},
+   {"id": "S3", "type": "borrow_pit", "zone": "Z3", "operations": ["excavate"], "length_m": 8, "width_m": 8, "depth_m": 0.9}
+  ],
+  [
+   {"id": "S1", "type": "stockpile", "zone": "Z1", "operations": ["excavate", "compact"], "diameter_m": 12, "depth_m": 0.5},
+   {"id": "S2", "type": "spoil_berm", "zone": "Z2", "operations": ["haul", "compact"], "length_m": 60, "height_m": 1.2, "width_m": 3, "trench_width_m": 1.2, "trench_depth_m": 0.8},
+   {"id": "S3", "type": "borrow_strip", "zone": "Z3", "operations": ["excavate"], "length_m": 8, "width_m": 8, "depth_m": 0.9}
+  ],
+  [
+   {"id": "S1", "type": "stockpile", "zone": "Z1", "operations": ["excavate", "compact"], "diameter_m": 12, "depth_m": 0.5, "thickness_m": 0.0},
+   {"id": "S2", "type": "spoil_berm", "zone": "Z2", "operations": ["haul", "compact"], "length_m": 60, "height_m": 1.2, "width_m": 3, "trench_width_m": 1.2, "trench_depth_m": 0.8, "lifts": 1},
+   {"id": "S3", "type": "borrow_strip", "zone": "Z3", "operations": ["excavate"], "length_m": 8, "width_m": 8, "depth_m": 0.9}
+  ],
+  [
+   {"id": "S1", "type": "stockpile", "zone": "Z1", "operations": ["excavate", "compact"], "diameter_m": 12, "depth_m": 0.5, "thickness_m": 0.1},
+   {"id": "S2", "type": "spoil_berm", "zone": "Z2", "operations": ["haul", "compact"], "length_m": 60, "height_m": 1.2, "width_m": 3, "trench_width_m": 1.2, "trench_depth_m": 0.8},
+   {"id": "S3", "type": "borrow_strip", "zone": "Z3", "operations": ["excavate"], "length_m": 8, "width_m": 8, "depth_m": 0.9}
+  ],
+  [
+   {"id": "S1", "type": "stockpile", "zone": "Z1", "operations": ["excavate", "compact"], "diameter_m": 12, "depth_m": 0.5, "thickness_m": 0.3},
+   {"id": "S2", "type": "borrow_strip", "zone": "Z2", "operations": ["haul", "grade", "compact"], "length_m": 60, "height_m": 1.2, "width_m": 3, "trench_width_m": 1.2, "trench_depth_m": 0.8},
+   {"id": "S3", "type": "borrow_pit", "zone": "Z3", "operations": ["excavate"], "length_m": 8, "width_m": 8, "depth_m": 0.9}
+  ]
+ ],
+ "four_mast_pads": [
+  [
+   {"id": "PAD1", "type": "mast_pad", "zone": "Z1", "operations": ["survey", "grade", "excavate", "compact"], "diameter_m": 8, "length_m": 8, "height_m": 0.2, "depth_m": 1},
+   {"id": "PAD2", "type": "mast_pad", "zone": "Z2", "operations": ["survey", "grade", "excavate", "compact"], "diameter_m": 8, "length_m": 8, "height_m": 0.2, "depth_m": 1},
+   {"id": "PAD3", "type": "mast_pad", "zone": "Z3", "operations": ["survey", "grade", "excavate", "compact"], "diameter_m": 8, "length_m": 8, "height_m": 0.2, "depth_m": 1},
+   {"id": "PAD4", "type": "mast_pad", "zone": "Z4", "operations": ["survey", "grade", "excavate", "compact"], "diameter_m": 8, "length_m": 8, "height_m": 0.2, "depth_m": 1}
+  ],
+  [
+   {"id": "PAD1", "type": "mast_pad", "zone": "Z1", "operations": ["survey", "grade", "excavate", "compact"], "diameter_m": 8, "length_m": 8, "depth_m": 1, "thickness_m": 0.2},
+   {"id": "PAD2", "type": "mast_pad", "zone": "Z2", "operations": ["survey", "grade", "excavate", "compact"], "diameter_m": 8, "length_m": 8, "depth_m": 1, "thickness_m": 0.2},
+   {"id": "PAD3", "type": "mast_pad", "zone": "Z3", "operations": ["survey", "grade", "excavate", "compact"], "diameter_m": 8, "length_m": 8, "depth_m": 1, "thickness_m": 0.2},
+   {"id": "PAD4", "type": "mast_pad", "zone": "Z4", "operations": ["survey", "grade", "excavate", "compact"], "diameter_m": 8, "length_m": 8, "depth_m": 1, "thickness_m": 0.2}
+  ],
+  [
+   {"id": "M1", "type": "mast_pad", "zone": "Z1", "operations": ["survey", "grade", "excavate", "compact"], "diameter_m": 8, "length_m": 8, "depth_m": 1, "thickness_m": 0.2},
+   {"id": "M2", "type": "mast_pad", "zone": "Z2", "operations": ["survey", "grade", "excavate", "compact"], "diameter_m": 8, "length_m": 8, "depth_m": 1, "thickness_m": 0.2},
+   {"id": "M3", "type": "mast_pad", "zone": "Z3", "operations": ["survey", "grade", "excavate", "compact"], "diameter_m": 8, "length_m": 8, "depth_m": 1, "thickness_m": 0.2},
+   {"id": "M4", "type": "mast_pad", "zone": "Z4", "operations": ["survey", "grade", "excavate", "compact"], "diameter_m": 8, "length_m": 8, "depth_m": 1, "thickness_m": 0.2}
+  ],
+  [
+   {"id": "M1", "type": "mast_pad", "zone": "Z1", "operations": ["survey", "grade", "excavate", "compact", "sinter"], "length_m": 8, "width_m": 8, "depth_m": 1},
+   {"id": "M2", "type": "mast_pad", "zone": "Z2", "operations": ["survey", "grade", "excavate", "compact", "sinter"], "length_m": 8, "width_m": 8, "depth_m": 1},
+   {"id": "M3", "type": "mast_pad", "zone": "Z3", "operations": ["survey", "grade", "excavate", "compact", "sinter"], "length_m": 8, "width_m": 8, "depth_m": 1},
+   {"id": "M4", "type": "mast_pad", "zone": "Z4", "operations": ["survey", "grade", "excavate", "compact", "sinter"], "length_m": 8, "width_m": 8, "depth_m": 1}
+  ],
+  [
+   {"id": "M1", "type": "mast_pad", "zone": "Z1", "operations": ["survey", "grade", "excavate", "compact"], "diameter_m": 8, "length_m": 8, "depth_m": 1, "wall_slope": "1:1"},
+   {"id": "M2", "type": "mast_pad", "zone": "Z2", "operations": ["survey", "grade", "excavate", "compact"], "diameter_m": 8, "length_m": 8, "depth_m": 1, "wall_slope": "1:1"},
+   {"id": "M3", "type": "mast_pad", "zone": "Z3", "operations": ["survey", "grade", "excavate", "compact"], "diameter_m": 8, "length_m": 8, "depth_m": 1, "wall_slope": "1:1"},
+   {"id": "M4", "type": "mast_pad", "zone": "Z4", "operations": ["survey", "grade", "excavate", "compact"], "diameter_m": 8, "length_m": 8, "depth_m": 1, "wall_slope": "1:1"}
+  ],
+  [
+   {"id": "PAD1", "type": "mast_pad", "zone": "Z1", "operations": ["survey", "grade", "excavate", "compact"], "diameter_m": 8, "length_m": 8, "depth_m": 1, "wall_slope": "1:1"},
+   {"id": "PAD2", "type": "mast_pad", "zone": "Z2", "operations": ["survey", "grade", "excavate", "compact"], "diameter_m": 8, "length_m": 8, "depth_m": 1, "wall_slope": "1:1"},
+   {"id": "PAD3", "type": "mast_pad", "zone": "Z3", "operations": ["survey", "grade", "excavate", "compact"], "diameter_m": 8, "length_m": 8, "depth_m": 1, "wall_slope": "1:1"},
+   {"id": "PAD4", "type": "mast_pad", "zone": "Z4", "operations": ["survey", "grade", "excavate", "compact"], "diameter_m": 8, "length_m": 8, "depth_m": 1, "wall_slope": "1:1"}
+  ]
+ ],
+ "front_loaded_excavation": [
+  [
+   {"id": "S1", "type": "stockpile", "zone": "Z1", "operations": ["excavate", "compact", "survey"], "diameter_m": 30, "depth_m": 0.4, "thickness_m": 0.3},
+   {"id": "S2", "type": "spoil_berm", "zone": "Z2", "operations": ["haul", "compact"], "length_m": 70, "height_m": 2, "width_m": 4}
+  ],
+  [
+   {"id": "S1", "type": "excavator", "zone": "Z1", "operations": ["excavate", "survey"], "diameter_m": 30, "depth_m": 0.4, "lifts": 1},
+   {"id": "S2", "type": "spool_berm", "zone": "Z2", "operations": ["haul", "compact"], "length_m": 70, "height_m": 2, "width_m": 4}
+  ],
+  [
+   {"id": "S1", "type": "pad", "zone": "Z1", "operations": ["excavate", "survey"], "diameter_m": 30, "depth_m": 0.4},
+   {"id": "S2", "type": "spoil_berm", "zone": "Z2", "operations": ["haul", "compact"], "length_m": 70, "height_m": 2, "width_m": 4}
+  ]
+ ],
+ "habitat_berm_tight_horizon": [
+  [
+   {"id": "S1", "type": "foundation_pit", "zone": "Z1", "operations": ["excavate", "compact"], "diameter_m": 12, "length_m": 12, "depth_m": 1.0},
+   {"id": "S2", "type": "berm", "zone": "Z2", "operations": ["haul", "compact", "survey"], "length_m": 70, "height_m": 2, "width_m": 4},
+   {"id": "S3", "type": "borrow_strip", "zone": "Z3", "operations": ["excavate"], "length_m": 40, "width_m": 6, "depth_m": 0.5}
+  ],
+  [
+   {"id": "S1", "type": "excavate", "zone": "Z1", "operations": ["survey", "excavate", "compact"], "diameter_m": 12, "depth_m": 1.0, "min_diameter_m": 12, "min_depth_m": 1.0},
+   {"id": "S2", "type": "spoil_berm", "zone": "Z2", "operations": ["haul", "compact", "survey"], "length_m": 70, "height_m": 2, "width_m": 4, "lifts": 1},
+   {"id": "S3", "type": "borrow_strip", "zone": "Z3", "operations": ["excavate", "haul"], "length_m": 40, "width_m": 6, "depth_m": 0.5, "min_length_m": 40, "min_width_m": 6, "min_depth_m": 0.5}
+  ],
+  [
+   {"id": "S1", "type": "excavate", "zone": "Z1", "operations": ["survey", "excavate", "compact"], "diameter_m": 12, "length_m": 12, "depth_m": 1.0, "min_length_m": 12, "min_depth_m": 1.0},
+   {"id": "S2", "type": "spoil_berm", "zone": "Z2", "operations": ["haul", "compact", "sinter"], "length_m": 70, "height_m": 2, "width_m": 4, "lifts": 1},
+   {"id": "S3", "type": "borrow_strip", "zone": "Z3", "operations": ["excavate", "haul"], "length_m": 40, "width_m": 6, "depth_m": 0.5, "min_length_m": 40, "min_width_m": 6, "min_depth_m": 0.5}
+  ],
+  [
+   {"id": "S1", "type": "excavation_pit", "zone": "Z1", "operations": ["survey", "excavate", "compact"], "diameter_m": 12, "length_m": 12, "depth_m": 1.0, "lifts": 1},
+   {"id": "S2", "type": "berm", "zone": "Z2", "operations": ["haul", "compact", "sinter", "survey"], "length_m": 70, "height_m": 2, "width_m": 4, "lifts": 1},
+   {"id": "S3", "type": "borrow_strip", "zone": "Z3", "operations": ["excavate", "haul"], "length_m": 40, "width_m": 6, "depth_m": 0.5}
+  ]
+ ],
+ "habitat_foundation": [
+  [
+   {"id": "F1", "type": "foundation_pit", "zone": "Z1", "operations": ["excavate", "compact", "sinter"], "diameter_m": 12, "length_m": 12, "depth_m": 1.0, "thickness_m": 0.2},
+   {"id": "D1", "type": "perimeter_drainage_trench", "zone": "Z2", "operations": ["excavate", "haul", "compact", "survey"], "length_m": 56, "trench_width_m": 0.4, "trench_depth_m": 0.6}
+  ],
+  [
+   {"id": "F1", "type": "foundation_pit", "zone": "Z1", "operations": ["excavate", "compact", "sinter"], "diameter_m": 12, "length_m": 12, "depth_m": 1.0, "thickness_m": 0.2},
+   {"id": "D1", "type": "perimeter_drainage_trench", "zone": "Z2", "operations": ["excavate", "haul", "compact", "survey"], "length_m": 56, "width_m": 0.4, "depth_m": 0.6}
+  ],
+  [
+   {"id": "F1", "type": "excavation", "zone": "Z1", "operations": ["excavate", "compact", "sinter"], "diameter_m": 12, "length_m": 12, "depth_m": 1.0, "thickness_m": 0.2},
+   {"id": "F2", "type": "berm", "zone": "Z2", "operations": ["haul", "compact", "survey"], "length_m": 56, "width_m": 0.4, "trench_depth_m": 0.6, "trench_width_m": 0.4}
+  ],
+  [
+   {"id": "F1", "type": "excavation", "zone": "Z1", "operations": ["excavate", "compact", "sinter"], "diameter_m": 12, "depth_m": 1.0, "thickness_m": 0.2},
+   {"id": "F2", "type": "berm", "zone": "Z2", "operations": ["excavate", "haul", "compact", "survey"], "length_m": 56, "trench_width_m": 0.4, "trench_depth_m": 0.6}
+  ]
+ ],
+ "instrument_pad": [
+  [
+   {"id": "INST1", "type": "instrument_pad", "zone": "Z1", "operations": ["survey", "grade", "compact"], "diameter_m": 10, "length_m": 10, "width_m": 10, "thickness_m": 0.15},
+   {"id": "SPOIL1", "type": "spoil_berm", "zone": "Z1", "operations": ["haul"], "length_m": 10, "width_m": 10}
+  ],
+  [
+   {"id": "S1", "type": "instrument_pad", "zone": "Z1", "operations": ["survey", "grade", "compact"], "diameter_m": 10, "length_m": 10, "width_m": 10}
+  ],
+  [
+   {"id": "S1", "type": "instrument_pad", "zone": "Z1", "operations": ["survey", "grade", "compact"], "length_m": 10, "width_m": 10, "thickness_m": 0.15}
+  ],
+  [
+   {"id": "INST1", "type": "instrument_pad", "zone": "Z1", "operations": ["survey", "grade", "compact"], "diameter_m": 10, "length_m": 10, "width_m": 10, "thickness_m": 0.15, "lifts": 1, "wall_slope": "1:1"}
+  ]
+ ],
+ "isru_stockpile": [
+  [
+   {"id": "S1", "type": "borrow_strip", "zone": "Z1", "operations": ["survey", "excavate"], "length_m": 20, "width_m": 10, "depth_m": 0.35},
+   {"id": "S2", "type": "stockpile", "zone": "Z2", "operations": ["haul", "compact"], "length_m": 25, "width_m": 20, "height_m": 0.5}
+  ],
+  [
+   {"id": "S1", "type": "borrow_strip", "zone": "Z1", "operations": ["survey", "excavate"], "length_m": 20, "width_m": 10, "depth_m": 0.35, "min_length_m": 20, "min_width_m": 10, "min_depth_m": 0.35},
+   {"id": "S2", "type": "stockpile", "zone": "Z2", "operations": ["haul", "compact"], "length_m": 25, "width_m": 10, "height_m": 2, "min_length_m": 25, "min_width_m": 10, "min_height_m": 2}
+  ],
+  [
+   {"id": "S1", "type": "borrow_strip", "zone": "Z1", "operations": ["survey", "excavate"], "length_m": 20, "width_m": 10, "depth_m": 0.35, "min_length_m": 20, "min_width_m": 10, "min_depth_m": 0.35},
+   {"id": "S2", "type": "stockpile", "zone": "Z2", "operations": ["haul", "compact"], "length_m": 25, "width_m": null, "height_m": null, "depth_m": null, "thickness_m": null},
+   {"id": "S3", "type": "stockpile", "zone": "Z3", "operations": [], "length_m": null, "width_m": null, "height_m": null, "depth_m": null, "thickness_m": null}
+  ],
+  [
+   {"id": "S1", "type": "borrow_strip", "zone": "Z1", "operations": ["survey", "excavate"], "length_m": 20, "width_m": 10, "depth_m": 0.35, "min_length_m": 20, "min_width_m": 10, "min_depth_m": 0.35},
+   {"id": "S2", "type": "stockpile", "zone": "Z2", "operations": ["haul", "compact"], "length_m": 25, "width_m": null, "height_m": null, "thickness_m": null},
+   {"id": "S3", "type": "stockpile", "zone": "Z3", "operations": [], "length_m": null, "width_m": null, "height_m": null, "thickness_m": null}
+  ]
+ ],
+ "landing_pad": [
+  [
+   {"id": "S1", "type": "landing_pad", "zone": "Z1", "operations": ["excavate", "compact", "sinter"], "diameter_m": 20, "depth_m": 0.4, "thickness_m": 0.3},
+   {"id": "S2", "type": "spoil_berm", "zone": "Z2", "operations": ["haul", "compact", "sinter"], "length_m": 60, "height_m": 2.5, "width_m": 4}
+  ],
+  [
+   {"id": "S1", "type": "landing_pad", "zone": "Z1", "operations": ["excavate", "grade", "compact", "sinter"], "diameter_m": 20, "depth_m": 0.4, "thickness_m": 0.3},
+   {"id": "S2", "type": "spoil_berm", "zone": "Z2", "operations": ["haul", "compact", "sinter"], "length_m": 60, "height_m": 2.5, "width_m": 4}
+  ],
+  [
+   {"id": "PAD1", "type": "landing_pad", "zone": "Z1", "operations": ["excavate", "grade", "compact", "sinter"], "diameter_m": 20, "depth_m": 0.4, "thickness_m": 0.3},
+   {"id": "BERM1", "type": "blast_berm", "zone": "Z2", "operations": ["haul", "compact", "sinter"], "length_m": 60, "height_m": 2.5, "width_m": 4, "trench_width_m": 0, "trench_depth_m": 0}
+  ],
+  [
+   {"id": "S1", "type": "landing_pad", "zone": "Z1", "operations": ["excavate", "grade", "compact", "sinter"], "diameter_m": 20, "depth_m": 0.4, "thickness_m": 0.3},
+   {"id": "S2", "type": "blast_berm", "zone": "Z2", "operations": ["haul", "compact", "sinter"], "length_m": 60, "height_m": 2.5, "width_m": 4}
+  ],
+  [
+   {"id": "S1", "type": "landing_pad", "zone": "Z1", "operations": ["excavate", "grade", "compact", "sinter"], "diameter_m": 20, "depth_m": 0.4, "thickness_m": 0.3},
+   {"id": "S2", "type": "blast_berm", "zone": "Z2", "operations": ["haul", "compact", "sinter"], "length_m": 60, "height_m": 2.5, "width_m": 4, "trench_width_m": 0, "trench_depth_m": 0}
+  ]
+ ],
+ "large_fleet_pad_berm_road": [
+  [
+   {"id": "S1", "type": "landing_pad", "zone": "Z1", "operations": ["excavate", "compact", "sinter"], "diameter_m": 30, "depth_m": 0.4, "thickness_m": 0.3},
+   {"id": "S2", "type": "spoil_berm", "zone": "Z2", "operations": ["haul", "compact", "sinter"], "length_m": 90, "height_m": 2.5, "width_m": 5, "trench_width_m": 0, "trench_depth_m": 0},
+   {"id": "S3", "type": "stockpile", "zone": "Z3", "operations": ["haul"], "length_m": 100, "width_m": 5},
+   {"id": "S4", "type": "access_road", "zone": "Z4", "operations": ["grade", "compact"], "length_m": 100, "width_m": 5}
+  ],
+  [
+   {"id": "S1", "type": "landing_pad", "zone": "Z1", "operations": ["excavate", "compact", "sinter"], "diameter_m": 30, "depth_m": 0.4, "thickness_m": 0.3},
+   {"id": "S2", "type": "spoil_berm", "zone": "Z2", "operations": ["haul", "compact", "sinter"], "length_m": 90, "height_m": 2.5, "width_m": 5, "trench_width_m": 0, "trench_depth_m": 0},
+   {"id": "S3", "type": "stockpile", "zone": "Z3", "operations": ["haul"], "length_m": 100, "width_m": 5}
+  ],
+  [
+   {"id": "S1", "type": "landing_pad", "zone": "Z1", "operations": ["excavate", "compact", "sinter"], "diameter_m": 30, "depth_m": 0.4, "thickness_m": 0.3},
+   {"id": "S2", "type": "spoil_berm", "zone": "Z2", "operations": ["haul", "compact", "sinter"], "length_m": 90, "height_m": 2.5, "width_m": 5, "trench_width_m": 0.7, "trench_depth_m": 0.45},
+   {"id": "S3", "type": "access_road", "zone": "Z3", "operations": ["grade", "compact"], "length_m": 100, "width_m": 5}
+  ],
+  [
+   {"id": "S1", "type": "landing_pad", "zone": "Z1", "operations": ["excavate", "compact", "sinter"], "diameter_m": 30, "depth_m": 0.4, "thickness_m": 0.3},
+   {"id": "S2", "type": "blast_berm", "zone": "Z2", "operations": ["haul", "compact", "sinter"], "length_m": 90, "height_m": 2.5, "width_m": 5, "trench_width_m": 0, "trench_depth_m": 0},
+   {"id": "S3", "type": "access_road", "zone": "Z3", "operations": ["grade", "haul", "compact"], "length_m": 100, "width_m": 5}
+  ],
+  [
+   {"id": "S1", "type": "landing_pad", "zone": "Z1", "operations": ["excavate", "compact", "sinter"], "diameter_m": 30, "depth_m": 0.4, "thickness_m": 0.3},
+   {"id": "S2", "type": "blast_berm", "zone": "Z2", "operations": ["haul", "compact", "sinter"], "length_m": 90, "height_m": 2.5, "width_m": 5, "trench_width_m": 0, "trench_depth_m": 0},
+   {"id": "S3", "type": "access_road", "zone": "Z3", "operations": ["grade", "compact"], "length_m": 100, "width_m": 5}
+  ],
+  [
+   {"id": "PAD", "type": "landing_pad", "zone": "Z1", "operations": ["excavate", "compact", "sinter"], "diameter_m": 30, "depth_m": 0.4, "thickness_m": 0.3},
+   {"id": "BERM", "type": "spoil_berm", "zone": "Z2", "operations": ["haul", "compact", "sinter"], "length_m": 90, "height_m": 2.5, "width_m": 5, "trench_width_m": 0, "trench_depth_m": 0},
+   {"id": "ROAD", "type": "access_road", "zone": "Z3", "operations": ["grade", "compact"], "length_m": 100, "width_m": 5}
+  ]
+ ],
+ "low_battery_pad": [
+  [
+   {"id": "S1", "type": "landing_pad", "zone": "Z1", "operations": ["excavate", "compact"], "diameter_m": 20, "depth_m": 0.5},
+   {"id": "S2", "type": "stockpile", "zone": "Z2", "operations": ["haul", "compact"], "diameter_m": 10, "height_m": 3}
+  ],
+  [
+   {"id": "S1", "type": "landing_pad", "zone": "Z1", "operations": ["excavate", "compact"], "diameter_m": 20, "depth_m": 0.5},
+   {"id": "S2", "type": "stockpile", "zone": "Z2", "operations": ["haul", "compact"], "length_m": 30}
+  ],
+  [
+   {"id": "S1", "type": "landing_pad_bowl", "zone": "Z1", "operations": ["excavate", "compact"], "diameter_m": 20, "depth_m": 0.5},
+   {"id": "S2", "type": "spoil_berm", "zone": "Z2", "operations": ["haul", "compact"], "diameter_m": 30}
+  ],
+  [
+   {"id": "S1", "type": "landing_pad_bowl", "zone": "Z1", "operations": ["excavate", "compact"], "diameter_m": 20, "depth_m": 0.5},
+   {"id": "S2", "type": "stockpile", "zone": "Z2", "operations": ["haul", "compact"], "note": "Spoil stockpile 30 m north of pad, shaped for later berm fill"}
+  ],
+  [
+   {"id": "S1", "type": "landing_pad_bowl", "zone": "Z1", "operations": ["excavate", "compact"], "diameter_m": 20, "depth_m": 0.5},
+   {"id": "S2", "type": "spoil_stockpile", "zone": "Z2", "operations": ["haul", "compact"], "diameter_m": 5, "height_m": 3}
+  ]
+ ],
+ "one_surveyor_three_structures": [
+  [
+   {"id": "H1", "type": "hardstand", "zone": "Z1", "operations": ["survey", "grade", "compact"], "length_m": 12, "width_m": 12, "thickness_m": 0.25},
+   {"id": "B1", "type": "spoil_berm", "zone": "Z2", "operations": ["haul", "compact"], "length_m": 40, "height_m": 1.5},
+   {"id": "A1", "type": "apron", "zone": "Z3", "operations": ["survey", "grade", "compact", "sinter"], "length_m": 20, "width_m": 10, "thickness_m": 0.15}
+  ],
+  [
+   {"id": "S1", "type": "hardstand", "zone": "Z1", "operations": ["survey", "grade", "compact"], "length_m": 12, "width_m": 12, "thickness_m": 0.25},
+   {"id": "S2", "type": "spoil_berm", "zone": "Z2", "operations": ["haul", "compact"], "length_m": 40, "height_m": 1.5},
+   {"id": "S3", "type": "apron", "zone": "Z3", "operations": ["survey", "grade", "compact", "sinter"], "length_m": 20, "width_m": 10, "thickness_m": 0.15}
+  ],
+  [
+   {"id": "H1", "type": "hardstand", "zone": "Z1", "operations": ["survey", "grade", "compact"], "length_m": 12, "width_m": 12},
+   {"id": "B1", "type": "spoil_berm", "zone": "Z2", "operations": ["haul", "compact"], "length_m": 40, "height_m": 1.5},
+   {"id": "A1", "type": "apron", "zone": "Z3", "operations": ["survey", "grade", "compact", "sinter"], "length_m": 20, "width_m": 10, "thickness_m": 0.15}
+  ],
+  [
+   {"id": "S1", "type": "hardstand", "zone": "Z1", "operations": ["survey", "grade", "compact"], "length_m": 12, "width_m": 12},
+   {"id": "S2", "type": "spoil_berm", "zone": "Z2", "operations": ["haul", "compact"], "length_m": 40, "height_m": 1.5},
+   {"id": "S3", "type": "apron", "zone": "Z3", "operations": ["survey", "grade", "compact", "sinter"], "length_m": 20, "width_m": 10, "thickness_m": 0.15}
+  ],
+  [
+   {"id": "H1", "type": "hardstand", "zone": "Z1", "operations": ["survey", "grade", "compact"], "length_m": 12, "width_m": 12},
+   {"id": "B1", "type": "spoil_berm", "zone": "Z2", "operations": ["haul", "compact"], "length_m": 40, "height_m": 1.5},
+   {"id": "A1", "type": "apron", "zone": "Z3", "operations": ["survey", "excavate", "compact", "sinter"], "length_m": 20, "width_m": 10, "thickness_m": 0.15}
+  ]
+ ],
+ "propellant_pit_and_berm": [
+  [
+   {"id": "PIT", "type": "pit", "zone": "Z1", "operations": ["excavate", "survey", "compact", "sinter"], "diameter_m": 8, "depth_m": 2, "wall_slope": "1:1", "thickness_m": 0.2},
+   {"id": "BERM", "type": "berm", "zone": "Z2", "operations": ["haul", "compact"], "length_m": 30, "height_m": 2.5, "width_m": 4},
+   {"id": "HAUL_LANE", "type": "lane", "zone": "Z3", "operations": ["grade", "compact"], "length_m": 40, "width_m": 5}
+  ],
+  [
+   {"id": "S1", "type": "storage_pit", "zone": "Z1", "operations": ["excavate", "compact", "sinter"], "diameter_m": 8, "depth_m": 2, "wall_slope": "1:1", "thickness_m": 0.2},
+   {"id": "S2", "type": "protective_berm", "zone": "Z2", "operations": ["haul", "compact"], "length_m": 30, "height_m": 2.5, "trench_width_m": 0, "trench_depth_m": 0},
+   {"id": "S3", "type": "haul_lane", "zone": "Z3", "operations": ["grade", "haul", "compact"], "length_m": 40, "width_m": 5}
+  ],
+  [
+   {"id": "S1", "type": "Storage pit", "zone": "Z1", "operations": ["excavate", "compact", "sinter"], "diameter_m": 8, "depth_m": 2, "wall_slope": "1:1", "thickness_m": 0.2},
+   {"id": "S2", "type": "Protective berm", "zone": "Z2", "operations": ["haul", "compact"], "length_m": 30, "height_m": 2.5, "width_m": 4, "trench_width_m": 0.7, "trench_depth_m": 0.45},
+   {"id": "S3", "type": "Haul lane", "zone": "Z3", "operations": ["grade", "haul", "compact"], "length_m": 40, "width_m": 5}
+  ],
+  [
+   {"id": "PIT", "type": "pit", "zone": "Z1", "operations": ["excavate", "compact", "sinter"], "diameter_m": 8, "depth_m": 2, "wall_slope": "1:1", "thickness_m": 0.2},
+   {"id": "BERM", "type": "borrow_strip", "zone": "Z2", "operations": ["haul", "compact"], "length_m": 30, "height_m": 2.5},
+   {"id": "HAUL_LANE", "type": "haul_lane", "zone": "Z3", "operations": ["grade", "compact"], "length_m": 40, "width_m": 5}
+  ],
+  [
+   {"id": "PIT", "type": "excavation", "zone": "Z1", "operations": ["excavate", "survey", "compact", "sinter"], "diameter_m": 8, "depth_m": 2, "wall_slope": "1:1", "thickness_m": 0.2, "lifts": 1},
+   {"id": "BERM", "type": "spoil_berm", "zone": "Z2", "operations": ["haul", "compact", "sinter"], "length_m": 30, "height_m": 2.5, "width_m": 4, "trench_width_m": 0.7, "trench_depth_m": 0.45},
+   {"id": "HAUL_LANE", "type": "haul_lane", "zone": "Z3", "operations": ["grade", "compact"], "length_m": 40, "width_m": 5}
+  ],
+  [
+   {"id": "PIT", "type": "pit", "zone": "Z1", "operations": ["excavate", "survey", "compact", "sinter"], "diameter_m": 8, "depth_m": 2, "wall_slope": "1:1", "thickness_m": 0.2},
+   {"id": "BERM", "type": "borrow_strip", "zone": "Z2", "operations": ["haul", "compact"], "length_m": 30, "height_m": 2.5, "width_m": 4},
+   {"id": "HAUL_LANE", "type": "haul_lane", "zone": "Z3", "operations": ["grade", "compact"], "length_m": 40, "width_m": 5}
+  ]
+ ],
+ "road_and_pad": [
+  [
+   {"id": "S1", "type": "road", "zone": "Z1", "operations": ["grade", "compact"], "length_m": 200, "width_m": 5},
+   {"id": "S2", "type": "pad", "zone": "Z2", "operations": ["excavate", "compact", "sinter"], "diameter_m": 15, "depth_m": 0.3, "thickness_m": 0.2},
+   {"id": "S3", "type": "windrow", "zone": "Z3", "operations": ["grade", "compact"]}
+  ],
+  [
+   {"id": "S1", "type": "road", "zone": "Z1", "operations": ["grade", "compact"], "length_m": 200, "width_m": 5},
+   {"id": "S2", "type": "pad", "zone": "Z2", "operations": ["excavate", "compact", "sinter"], "diameter_m": 15, "depth_m": 0.3},
+   {"id": "S3", "type": "windrow", "zone": "Z3", "operations": ["grade", "compact"]}
+  ]
+ ],
+ "shielding_mound": [
+  [
+   {"id": "S1", "type": "shielding_mound", "zone": "Z1", "operations": ["haul", "compact", "sinter"], "diameter_m": 4, "height_m": 2, "thickness_m": 1.5, "lifts": 3, "min_thickness_m": 1.5},
+   {"id": "S2", "type": "borrow_pit", "zone": "Z2", "operations": ["excavate", "grade"], "length_m": 15, "width_m": 10, "depth_m": 1}
+  ],
+  [
+   {"id": "S1", "type": "shielding_mound", "zone": "Z1", "operations": ["excavate", "haul", "compact", "sinter"], "diameter_m": 4, "height_m": 2, "thickness_m": 1.5, "lifts": 3, "min_thickness_m": 1.5},
+   {"id": "S2", "type": "borrow_pit", "zone": "Z2", "operations": ["excavate", "grade"], "length_m": 15, "width_m": 10, "depth_m": 1}
+  ],
+  [
+   {"id": "S1", "type": "shielding_mound", "zone": "Z1", "operations": ["excavate", "haul", "compact", "sinter"], "diameter_m": 4, "height_m": 2, "thickness_m": 1.5, "lifts": 3},
+   {"id": "S2", "type": "borrow_pit", "zone": "Z2", "operations": ["excavate", "grade"], "length_m": 15, "width_m": 10, "depth_m": 1}
+  ],
+  [
+   {"id": "S1", "type": "shielding_mound", "zone": "Z1", "operations": ["excavate", "haul", "compact", "sinter"], "diameter_m": 4, "height_m": 1.5, "thickness_m": 1.5, "lifts": 3},
+   {"id": "S2", "type": "borrow_pit", "zone": "Z2", "operations": ["excavate", "grade"], "length_m": 15, "width_m": 10, "depth_m": 1}
+  ]
+ ],
+ "small_fleet_long_berm": [
+  [
+   {"id": "BERM", "type": "spool_berm", "zone": "Z1", "operations": ["haul", "compact", "survey"], "length_m": 100, "height_m": 2, "width_m": 3.5},
+   {"id": "BORROW", "type": "borrow_strip", "zone": "Z2", "operations": ["excavate"], "length_m": 100, "width_m": 6, "depth_m": 0.6}
+  ],
+  [
+   {"id": "B1", "type": "protective_berm", "zone": "Z1", "operations": ["excavate", "haul", "compact", "survey"], "length_m": 100, "height_m": 2, "width_m": 3.5, "min_length_m": 100, "min_height_m": 2},
+   {"id": "B2", "type": "borrow_strip", "zone": "Z2", "operations": ["excavate"], "length_m": 100, "width_m": 6, "depth_m": 0.6, "min_length_m": 100, "min_width_m": 6, "min_depth_m": 0.6}
+  ],
+  [
+   {"id": "BERM", "type": "protective_berm", "zone": "Z1", "operations": ["excavate", "haul", "compact", "survey"], "length_m": 100, "height_m": 2, "width_m": 3.5, "lifts": 2, "wall_slope": "1:1"},
+   {"id": "BSTRIP", "type": "borrow_strip", "zone": "Z2", "operations": ["excavate"], "length_m": 100, "width_m": 6, "depth_m": 0.6}
+  ],
+  [
+   {"id": "BERM", "type": "protective_berm", "zone": "Z1", "operations": ["grade", "compact", "survey"], "length_m": 100, "height_m": 2, "width_m": 3.5, "lifts": 2, "wall_slope": "1:1"},
+   {"id": "BORROW", "type": "borrow_strip", "zone": "Z2", "operations": ["excavate", "haul"], "length_m": 100, "width_m": 6, "depth_m": 0.6}
+  ],
+  [
+   {"id": "BERM", "type": "protective_berm", "zone": "Z1", "operations": ["grade", "compact", "survey"], "length_m": 100, "height_m": 2, "width_m": 3.5, "lifts": 2, "wall_slope": "1:1"},
+   {"id": "BORROW", "type": "borrow_strip", "zone": "Z2", "operations": ["excavate"], "length_m": 100, "width_m": 6, "depth_m": 0.6}
+  ],
+  [
+   {"id": "B1", "type": "protective_berm", "zone": "Z1", "operations": ["excavate", "haul", "compact", "survey"], "length_m": 100, "height_m": 2, "width_m": 3.5, "lifts": 2, "wall_slope": "1:1"},
+   {"id": "B2", "type": "borrow_strip", "zone": "Z2", "operations": ["excavate"], "length_m": 100, "width_m": 6, "depth_m": 0.6}
+  ]
+ ],
+ "solar_array_pad": [
+  [
+   {"id": "S1", "type": "solar_array_pad", "zone": "Z1", "operations": ["survey", "excavate", "grade", "compact"], "length_m": 30, "width_m": 18, "depth_m": 0.3, "lifts": 2},
+   {"id": "S2", "type": "anchor_trench", "zone": "Z1", "operations": ["excavate", "survey", "compact"], "length_m": 30, "width_m": 0.5, "depth_m": 0.5}
+  ],
+  [
+   {"id": "S1", "type": "Solar array pad", "zone": "Z1", "operations": ["survey", "excavate", "grade", "compact"], "length_m": 30, "width_m": 18, "thickness_m": 0.3, "lifts": 2},
+   {"id": "S2", "type": "Anchor trench", "zone": "Z1", "operations": ["excavate", "survey", "compact"], "length_m": 30, "width_m": 0.5, "depth_m": 0.5}
+  ],
+  [
+   {"id": "S1", "type": "solar_array_pad", "zone": "Z1", "operations": ["survey", "excavate", "grade", "compact"], "diameter_m": null, "length_m": 30, "width_m": 18, "height_m": null, "depth_m": null, "thickness_m": null, "lifts": 2, "wall_slope": null},
+   {"id": "S2", "type": "anchor_trench", "zone": "Z1", "operations": ["excavate", "survey"], "length_m": 30, "width_m": 0.5, "depth_m": 0.5, "trench_width_m": null, "trench_depth_m": null, "min_length_m": null, "min_width_m": null, "min_depth_m": null, "lifts": null, "wall_slope": null}
+  ],
+  [
+   {"id": "S1", "type": "solar_array_pad", "zone": "Z1", "operations": ["survey", "excavate", "grade", "haul", "compact", "sinter"], "length_m": 30, "width_m": 18, "thickness_m": 0.3, "lifts": 2},
+   {"id": "S2", "type": "anchor_trench", "zone": "Z2", "operations": ["survey", "excavate", "compact"], "length_m": 30, "width_m": 0.5, "depth_m": 0.5}
+  ],
+  [
+   {"id": "S1", "type": "pad", "zone": "Z1", "operations": ["survey", "excavate", "grade", "compact", "sinter"], "diameter_m": null, "length_m": 30, "width_m": 18, "depth_m": null, "height_m": null, "thickness_m": null, "trench_width_m": null, "trench_depth_m": null, "lifts": 2, "wall_slope": null},
+   {"id": "S2", "type": "trench", "zone": "Z2", "operations": ["survey", "excavate", "compact"], "length_m": 30, "width_m": 0.5, "depth_m": 0.5, "height_m": null, "diameter_m": null, "thickness_m": null, "trench_width_m": 0.5, "trench_depth_m": 0.5, "lifts": null, "wall_slope": null}
+  ]
+ ],
+ "three_pads_in_order": [
+  [
+   {"id": "S1", "type": "stockpile", "zone": "Z1", "operations": ["survey", "excavate", "compact"], "diameter_m": 14, "depth_m": 0.4},
+   {"id": "S2", "type": "stockpile", "zone": "Z2", "operations": ["survey", "excavate", "compact"], "diameter_m": 14, "depth_m": 0.4},
+   {"id": "S3", "type": "stockpile", "zone": "Z3", "operations": ["survey", "excavate", "compact"], "diameter_m": 14, "depth_m": 0.4}
+  ],
+  [
+   {"id": "S1", "type": "stockpile", "zone": "Z1", "operations": ["survey", "excavate", "grade", "compact"], "diameter_m": 14, "depth_m": 0.4},
+   {"id": "S2", "type": "stockpile", "zone": "Z2", "operations": ["survey", "excavate", "grade", "compact"], "diameter_m": 14, "depth_m": 0.4},
+   {"id": "S3", "type": "stockpile", "zone": "Z3", "operations": ["survey", "excavate", "grade", "compact"], "diameter_m": 14, "depth_m": 0.4}
+  ],
+  [
+   {"id": "S1", "type": "Cargo pad", "zone": "Z1", "operations": ["survey", "excavate", "compact"], "diameter_m": 14, "depth_m": 0.4},
+   {"id": "S2", "type": "Cargo pad", "zone": "Z2", "operations": ["survey", "excavate", "compact"], "diameter_m": 14, "depth_m": 0.4},
+   {"id": "S3", "type": "Cargo pad", "zone": "Z3", "operations": ["survey", "excavate", "compact"], "diameter_m": 14, "depth_m": 0.4}
+  ]
+ ],
+ "tight_battery": [
+  [
+   {"id": "S1", "type": "landing_pad", "zone": "Z1", "operations": ["excavate", "compact"], "diameter_m": 20, "depth_m": 0.6},
+   {"id": "S2", "type": "blast_berm", "zone": "Z2", "operations": ["haul", "compact", "excavate"], "length_m": 60, "height_m": 2.5, "width_m": 4, "trench_width_m": 0.5, "trench_depth_m": 0.5},
+   {"id": "S3", "type": "stockpile", "zone": "Z3", "operations": ["grade"], "length_m": 30, "width_m": 8}
+  ],
+  [
+   {"id": "S1", "type": "landing_pad", "zone": "Z1", "operations": ["excavate", "compact"], "diameter_m": 20, "depth_m": 0.6},
+   {"id": "S2", "type": "blast_berm", "zone": "Z2", "operations": ["haul", "compact", "sinter"], "length_m": 60, "height_m": 2.5, "width_m": 4, "trench_width_m": 0.5, "trench_depth_m": 0.5},
+   {"id": "S3", "type": "stockpile", "zone": "Z3", "operations": ["haul"], "length_m": 30, "width_m": 8}
+  ],
+  [
+   {"id": "S1", "type": "landing_pad", "zone": "Z1", "operations": ["excavate", "compact"], "diameter_m": 20, "depth_m": 0.6},
+   {"id": "S2", "type": "blast_berm", "zone": "Z2", "operations": ["haul", "compact", "excavate"], "length_m": 60, "height_m": 2.5, "width_m": 4, "trench_width_m": 0.5, "trench_depth_m": 0.5},
+   {"id": "S3", "type": "stockpile", "zone": "Z3", "operations": [], "length_m": 30, "width_m": 8}
+  ],
+  [
+   {"id": "S1", "type": "landing_pad", "zone": "Z1", "operations": ["excavate", "compact"], "diameter_m": 20, "depth_m": 0.6},
+   {"id": "S2", "type": "blast_berm", "zone": "Z2", "operations": ["haul", "compact"], "length_m": 60, "height_m": 2.5, "width_m": 4, "trench_width_m": 0.5, "trench_depth_m": 0.5},
+   {"id": "S3", "type": "approach_apron", "zone": "Z3", "operations": ["grade", "haul"], "length_m": 30, "width_m": 8}
+  ]
+ ],
+ "two_pads_one_printer": [
+  [
+   {"id": "PAD_A", "type": "stockpile", "zone": "Z1", "operations": ["survey", "excavate", "compact", "sinter"], "diameter_m": 15, "depth_m": 0.4, "thickness_m": 0.25},
+   {"id": "PAD_B", "type": "stockpile", "zone": "Z2", "operations": ["survey", "excavate", "compact", "sinter"], "diameter_m": 15, "depth_m": 0.4, "thickness_m": 0.25},
+   {"id": "BERM", "type": "spoil_berm", "zone": "Z3", "operations": ["haul", "compact", "sinter"], "length_m": 40, "height_m": 2, "thickness_m": 0.25}
+  ],
+  [
+   {"id": "PAD_A", "type": "stockpile", "zone": "Z1", "operations": ["excavate", "compact", "sinter", "survey"], "diameter_m": 15, "depth_m": 0.4, "thickness_m": 0.25},
+   {"id": "PAD_B", "type": "stockpile", "zone": "Z2", "operations": ["excavate", "compact", "sinter", "survey"], "diameter_m": 15, "depth_m": 0.4, "thickness_m": 0.25},
+   {"id": "BERM", "type": "spoil_berm", "zone": "Z3", "operations": ["haul", "compact", "sinter"], "length_m": 40, "height_m": 2, "trench_width_m": 0.7, "trench_depth_m": 0.45, "crest_thickness_m": 0.25}
+  ],
+  [
+   {"id": "PAD_A", "type": "stockpile", "zone": "Z1", "operations": ["excavate", "compact", "sinter"], "diameter_m": 15, "depth_m": 0.4, "thickness_m": 0.25},
+   {"id": "PAD_B", "type": "stockpile", "zone": "Z2", "operations": ["excavate", "compact", "sinter"], "diameter_m": 15, "depth_m": 0.4, "thickness_m": 0.25},
+   {"id": "BERM", "type": "spoil_berm", "zone": "Z3", "operations": ["haul", "compact", "sinter"], "length_m": 40, "height_m": 2, "trench_width_m": 0.7, "trench_depth_m": 0.45}
+  ],
+  [
+   {"id": "PAD_A", "type": "cargo_pad", "zone": "Z1", "operations": ["excavate", "compact", "sinter", "survey"], "diameter_m": 15, "depth_m": 0.4, "thickness_m": 0.25},
+   {"id": "PAD_B", "type": "cargo_pad", "zone": "Z2", "operations": ["excavate", "compact", "sinter", "survey"], "diameter_m": 15, "depth_m": 0.4, "thickness_m": 0.25},
+   {"id": "BERM", "type": "blast_berm", "zone": "Z3", "operations": ["haul", "compact", "sinter", "survey"], "length_m": 40, "height_m": 2, "trench_width_m": 0.7, "trench_depth_m": 0.45}
+  ],
+  [
+   {"id": "PAD_A", "type": "cargo_pad", "zone": "Z1", "operations": ["excavate", "compact", "sinter", "survey"], "diameter_m": 15, "depth_m": 0.4, "thickness_m": 0.25},
+   {"id": "PAD_B", "type": "cargo_pad", "zone": "Z2", "operations": ["excavate", "compact", "sinter", "survey"], "diameter_m": 15, "depth_m": 0.4, "thickness_m": 0.25},
+   {"id": "BERM", "type": "blast_berm", "zone": "Z3", "operations": ["haul", "compact", "sinter"], "length_m": 40, "height_m": 2, "trench_width_m": null, "trench_depth_m": null}
+  ]
+ ]
+}

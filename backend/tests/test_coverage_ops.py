@@ -4,8 +4,9 @@
 (closed vocabulary: survey, excavate, grade, haul, compact, sinter). The validator requires a
 task of the right robot type for each one the fleet can staff, on top of the structure-type
 heuristic; the ``scope:<structure>`` hint names the operation, quotes the brief where it can
-and says which robot task to add; an operation no robot of the fleet can perform is a site
-warning, never a conflict; the prompts state the rules the validator checks; and the three
+and says which robot task to add; an operation no robot of the fleet can perform is never a
+conflict (a site warning until phase 3j, since then dropped from the requirements by the
+structure stage with a note); the prompts state the rules the validator checks; and the three
 hand-made fixtures declare operations their briefs ask for and their recorded graphs serve.
 """
 
@@ -26,7 +27,7 @@ from moonwright.llm.prompts import (
     structure_messages,
     taskgraph_messages,
 )
-from moonwright.pipeline.structure import site_warnings
+from moonwright.pipeline.structure import operation_warnings, site_warnings
 from moonwright.pipeline.validate import (
     brief_evidence,
     missing_operations,
@@ -218,7 +219,10 @@ def test_declared_operation_without_a_task_is_a_scope_conflict_quoting_the_brief
             ) in failure.hint
 
 
-def test_declared_operation_the_fleet_cannot_staff_is_a_site_warning_not_a_conflict() -> None:
+def test_declared_operation_the_fleet_cannot_staff_is_never_a_conflict() -> None:
+    """Never required, and since phase 3j dropped from the requirements by the structure stage
+    with a note (``tests/test_unstaffed_operations.py``); a list edited by hand that names it
+    again is still judged without it."""
     r = req(*NO_PRINTER, structures=(pad(), berm("haul", "compact", "sinter")))
     g = graph(*pad_tasks("sinter"), *berm_tasks("sinter", "survey"))
     assert validate_graph(r, g, coverage=True) is None
@@ -226,17 +230,15 @@ def test_declared_operation_the_fleet_cannot_staff_is_a_site_warning_not_a_confl
     assert missing_phases(r, r.structures[1], berm_tasks("sinter", "survey")) == []
     assert missing_operations(r, r.structures[1], []) == ["haul", "compact"]  # sinter skipped
     assert unstaffed_operations(r, r.structures[1]) == [("sinter", "printer")]
-    assert site_warnings(r) == [
-        ("structure S2 lists sinter but the fleet has no printer: no sinter task will be "
-         "required of it (add a printer or drop the operation)"),
+    assert site_warnings(r) == []
+    assert operation_warnings(r) == [
+        ("structure S2: operations sinter dropped: the fleet has no printer, so no sinter task "
+         "will be required of it (add a printer and the operation again to plan it)"),
     ]
-    # one warning per (structure, operation), structures in order; nothing with the printer
+    # one note per structure, structures in order; nothing with the printer
     two = req(*NO_PRINTER, structures=(pad("sinter"), berm("sinter", "survey")))
-    assert [w.split(":")[0] for w in site_warnings(two)] == [
-        "structure S1 lists sinter but the fleet has no printer",
-        "structure S2 lists sinter but the fleet has no printer",
-    ]
-    assert site_warnings(req(*FLEET, structures=(pad("sinter"), berm("sinter")))) == []
+    assert [w.split(":")[0] for w in operation_warnings(two)] == ["structure S1", "structure S2"]
+    assert operation_warnings(req(*FLEET, structures=(pad("sinter"), berm("sinter")))) == []
     # the moment a printer joins the fleet the same berm tasks are short of the sinter one
     with_printer = req(*FLEET, structures=(pad(), berm("haul", "compact", "sinter")))
     assert must_fail(with_printer, graph(*pad_tasks(), *berm_tasks("sinter", "survey"))) \

@@ -4,10 +4,17 @@ Hard geometry rules (zone centres and depot inside the grid, radius bounds, uniq
 live in :class:`moonwright.schemas.Site`, so a bad answer is re-asked by the client with the
 validation error. What survives the schema is checked here for the soft rules the prompt
 states, and the findings go into the step's ``payload["warnings"]`` for the UI; they never
-fail the stage because the simulator copes with all of them. The same list carries an
-operation a structure lists (``Structure.operations``, phase 3c) that no robot of the fleet
-can perform: the coverage check skips it rather than ask for the impossible, so the planner
-is told here that the brief's ask will go unplanned unless the fleet changes.
+fail the stage because the simulator copes with all of them.
+
+An operation a structure lists (``Structure.operations``, phase 3c) that no robot of the
+fleet can perform is dropped from the requirements (:func:`correct_operations`, phase 3j).
+It used to stay listed beside a warning that "no sinter task will be required of it": in the
+live habitat berm demo (tries 2 and 3) Lightning listed ``sinter`` on the berm, which the
+brief never asks for and no printer of the fleet could do, the task-graph model planned a
+printer task for it and the validator answered ``capability:T14`` twice. The planner never
+sees the brief, so what the requirements list is what it plans; the note keeps what the
+warning said ("structure S2: operations sinter dropped: the fleet has no printer, so no
+sinter task will be required of it (add a printer and the operation again to plan it)").
 
 Two defences against a small model's malformed answers (seen live in phase 3c) run before the
 soft checks: :func:`recover_operations` salvages ``operations`` that strict JSON-schema
@@ -42,6 +49,20 @@ that calls the structure round, or states the diameter apart from the pair, keep
 amber warning ("structure S1: diameter_m 12 -> 12 m x 12 m: the brief's entry for S1 states a
 12 m by 12 m footprint"), and the volume and area checks read the same rectangle from the
 brief at judge time.
+
+So are the sizes the brief states (:func:`correct_sizes`, phase 3j). A smaller size the brief
+allows anywhere is read and tied to its structure: low_battery_pad (kind E) allows "any
+diameter between 12 m and 20 m that fits" in a constraint, Lightning recorded no
+``min_diameter_m`` in 6 of 6 structurings of runs 2 and 3, and the eval judged the plans that
+dug a 16.8 m bowl, inside the allowed range, against 20 m (0 of 6 in scope in run 3). The
+structure stage writes ``min_diameter_m: 12`` with an amber note ("structure S1:
+min_diameter_m none -> 12: the brief allows "any diameter between 12 m and 20 m that
+fits""). A figure the structure's entry gives only as a distance is dropped: run 3 recorded
+the stockpile "30 m north of the pad" as a 30 m diameter ("structure S2: diameter_m 30
+dropped: the brief's entry for S2 states 30 m only as a distance ("30 m north of the
+pad")"), and the note stands for the one :func:`dimension_warnings` would add, since the
+brief gives the stockpile no size to add. The volume and area checks read both from the brief
+at judge time (:func:`moonwright.pipeline.rates.with_brief_sizes`).
 """
 
 from __future__ import annotations
@@ -49,18 +70,23 @@ from __future__ import annotations
 import math
 import re
 import time
+from collections.abc import Collection
 from typing import get_args
 
 from moonwright.llm.base import LLMClient, LLMError, answer_failure
 from moonwright.llm.prompts import structure_messages
 from moonwright.pipeline.rates import (
+    distance_figures,
     footprint_note,
     lift_note,
+    size_notes,
+    with_brief_sizes,
     with_judged_footprint,
     with_judged_lifts,
 )
 from moonwright.pipeline.validate import unstaffed_operations, unsupported_operations
 from moonwright.schemas import LoopStep, Operation, Requirements
+from moonwright.text import an, join_and
 
 OPERATIONS: tuple[str, ...] = get_args(Operation)
 _OPERATION_SET = frozenset(OPERATIONS)
@@ -72,11 +98,11 @@ _YES = frozenset({"yes", "true", "required", "asked", "y"})
 def site_warnings(req: Requirements) -> list[str]:
     """Soft problems of a structured brief (empty when it is clean): overlapping zones, a
     structure whose zone is not declared (the simulator will place it), a structure without a
-    zone, an operation a structure lists that the fleet has no robot type for (the coverage
-    check will not require it), an operation a structure lists that the brief does not ask
-    for while it asks for the alternative (``excavate`` on a berm "built from a borrow strip";
-    not required either, see :func:`moonwright.pipeline.validate.unsupported_operations`), no
-    depot (the simulator uses the grid's bottom centre)."""
+    zone, an operation a structure lists that the brief does not ask for while it asks for the
+    alternative (``excavate`` on a berm "built from a borrow strip"; not required, see
+    :func:`moonwright.pipeline.validate.unsupported_operations`), no depot (the simulator uses
+    the grid's bottom centre). An operation the fleet has no robot type for is no longer a
+    warning here: :func:`correct_operations` drops it and says so."""
     out: list[str] = []
     zones = req.site.zones
     for i, a in enumerate(zones):
@@ -91,10 +117,6 @@ def site_warnings(req: Requirements) -> list[str]:
             out.append(f"structure {s.id} has no zone")
         elif s.zone not in declared:
             out.append(f"structure {s.id} names zone {s.zone}, which the site does not declare")
-        for op, robot_type in unstaffed_operations(req, s):
-            out.append(f"structure {s.id} lists {op} but the fleet has no {robot_type}: no "
-                       f"{op} task will be required of it (add a {robot_type} or drop the "
-                       "operation)")
         for op, instead in unsupported_operations(req, s):
             out.append(f"structure {s.id} lists {op} but the brief line about it asks for "
                        f"{instead}, not {op}: no {op} task will be required of it (drop the "
@@ -102,6 +124,45 @@ def site_warnings(req: Requirements) -> list[str]:
     if req.site.depot is None:
         out.append("no depot given; robots start at the bottom centre of the grid")
     return out
+
+
+def operation_warnings(req: Requirements) -> list[str]:
+    """One note per structure that lists an operation no robot type of the fleet can perform
+    (:func:`moonwright.pipeline.validate.unstaffed_operations`): "structure S2: operations
+    sinter dropped: the fleet has no printer, so no sinter task will be required of it (add a
+    printer and the operation again to plan it)"; "structure S1: operations survey and sinter
+    dropped: the fleet has no surveyor and no printer, so no survey or sinter task will be
+    required of it (add a surveyor and a printer and the operations again to plan them)".
+    Empty when the fleet staffs every listed operation; never a failure. Reads only
+    (:func:`correct_operations` applies them)."""
+    out: list[str] = []
+    for s in req.structures:
+        dropped = unstaffed_operations(req, s)
+        if not dropped:
+            continue
+        ops = [op for op, _ in dropped]
+        types = list(dict.fromkeys(robot_type for _, robot_type in dropped))
+        lacks = " and ".join(f"no {robot_type}" for robot_type in types)
+        them = ("the operations again to plan them" if len(ops) > 1
+                else "the operation again to plan it")
+        out.append(f"structure {s.id}: operations {join_and(ops)} dropped: the fleet has "
+                   f"{lacks}, so no {' or '.join(ops)} task will be required of it (add "
+                   f"{join_and([an(t) for t in types])} and {them})")
+    return out
+
+
+def correct_operations(req: Requirements) -> list[str]:
+    """Drop from ``req`` every operation a structure lists that no robot type of the fleet can
+    perform (module docstring) and return the notes of :func:`operation_warnings` for the
+    structures changed; the coverage check and the requirements card then read the list the
+    planner plans from."""
+    warnings = operation_warnings(req)
+    if warnings:
+        req.structures = [
+            s.model_copy(update={"operations": [op for op in s.operations if op not in dropped]})
+            if (dropped := {op for op, _ in unstaffed_operations(req, s)}) else s
+            for s in req.structures]
+    return warnings
 
 
 def recover_operations(req: Requirements) -> list[str]:
@@ -147,15 +208,18 @@ def recover_operations(req: Requirements) -> list[str]:
     return notes
 
 
-def dimension_warnings(req: Requirements) -> list[str]:
+def dimension_warnings(req: Requirements, placed: Collection[str] = ()) -> list[str]:
     """One warning per structure without a single numeric dimension. The task-graph model
     sizes every task from these fields and never sees the brief, so a structure without them
     gets invented quantities; never a failure, the user can add the numbers in the
-    requirements card."""
+    requirements card. A structure of ``placed`` (the ids whose recorded figures
+    :func:`correct_sizes` dropped as distances) gets none: its entry gives no size to add, and
+    the note on the drop already says so (seen in review: run 3 #1's stockpile, "30 m north of
+    the pad", read "add the brief's numbers before planning" under an amber lead)."""
     return [f"structure {s.id} ({s.type}) has no dimensions: the planner sizes its tasks from "
             "numeric fields such as diameter_m, length_m, width_m, depth_m or height_m and "
             "never sees the brief, so add the brief's numbers before planning"
-            for s in req.structures if not s.dims()]
+            for s in req.structures if not s.dims() and s.id not in placed]
 
 
 def lift_warnings(req: Requirements) -> list[str]:
@@ -199,6 +263,28 @@ def correct_footprints(req: Requirements) -> list[str]:
     return warnings
 
 
+def size_warnings(req: Requirements) -> list[str]:
+    """One warning per size the brief states that the record lacks or contradicts
+    (:func:`moonwright.pipeline.rates.size_notes`): "structure S1: min_diameter_m none -> 12:
+    the brief allows "any diameter between 12 m and 20 m that fits"", "structure S2:
+    diameter_m 30 dropped: the brief's entry for S2 states 30 m only as a distance ("30 m north
+    of the pad")". Empty without a brief or when every size stands; never a failure. Reads
+    only (:func:`correct_sizes` applies them)."""
+    return [f"structure {s.id}: {note}" for s in req.structures for note in size_notes(s, req)]
+
+
+def correct_sizes(req: Requirements) -> list[str]:
+    """Write the sizes the brief states into ``req`` (module docstring;
+    :func:`moonwright.pipeline.rates.with_brief_sizes`: a figure an entry gives only as a
+    distance dropped, a smaller size the brief allows written as ``min_<dimension>_m``) and
+    return the warnings of :func:`size_warnings` for the corrections made; nothing changes
+    without a brief."""
+    warnings = size_warnings(req)
+    if warnings:
+        req.structures = [with_brief_sizes(s, req) for s in req.structures]
+    return warnings
+
+
 def _operation_words(value: object) -> list[str]:
     if isinstance(value, str):
         return [w for w in _WORDS.findall(value.lower()) if w in _OPERATION_SET]
@@ -230,8 +316,10 @@ def structure_brief(client: LLMClient, brief: str, *, key: str) -> tuple[Require
             usage=getattr(e, "usage", None), failure=answer_failure(e),
         )
     req.source_brief = brief
-    warnings = [*recover_operations(req), *site_warnings(req), *correct_lifts(req),
-                *correct_footprints(req), *dimension_warnings(req)]
+    warnings = [*recover_operations(req), *correct_operations(req), *site_warnings(req),
+                *correct_lifts(req), *correct_footprints(req)]
+    placed = {s.id for s in req.structures if distance_figures(s, req)}
+    warnings += [*correct_sizes(req), *dimension_warnings(req, placed)]
     return req, LoopStep(
         stage="structure", ok=True, duration_s=time.perf_counter() - t0, usage=usage,
         message=f"{len(req.structures)} structures, {len(req.robots)} robots, horizon {req.horizon_h}h",

@@ -8,10 +8,13 @@
  * and reads as prose ("20 m diameter · min diameter 12 m · 0.4 m deep", the smallest size a
  * brief allows editable like any dimension) with the task graph's work under it once a plan
  * exists, one figure per operation; the structuring stage's notes (operations recovered from a
- * scrambled answer, a structure without dimensions, an operation the fleet cannot staff, zone
- * geometry) head the card; validation mirrors the backend's pydantic limits. The static demo
- * shows the card read-only: the fields keep their values at full contrast, the add / remove /
- * edit affordances are gone, and the plan button replays the recorded run.
+ * scrambled answer, a structure without dimensions, an operation the fleet cannot staff and
+ * was dropped, a size read from the brief, zone geometry) head the card; validation mirrors
+ * the backend's pydantic limits. An operation chip agrees with the coverage check: one the
+ * current fleet has no robot type for reads "not required", and one the structuring stage
+ * dropped for that reason stays visible, dashed, as "dropped". The static demo shows the card
+ * read-only: the fields keep their values at full contrast, the add / remove / edit
+ * affordances are gone, and the plan button replays the recorded run.
  */
 import { createContext, useContext, useMemo, useState, type ReactNode } from "react";
 import type { LoopStep, Operation, Requirements, Robot, Site, Structure, Task, Unit } from "@/lib/types";
@@ -352,16 +355,21 @@ function stepWarnings(step: LoopStep | null): string[] {
 // ------------------------------------------------------------------ structuring notes
 /** The shapes of StructurePayload.warnings, told apart by their opening words: operations
  *  salvaged from a scrambled structuring answer, a structure without a single dimension, an
- *  operation no robot type can staff, an operation the brief line does not ask for, a lift
- *  count corrected to the brief (phase 3g), a recorded diameter corrected to the rectangle the
- *  brief states (phase 3i), zone / depot geometry; anything else is "other". */
+ *  operation no robot type can staff (a recording older than phase 3j) or one dropped for
+ *  that reason (phase 3j), an operation the brief line does not ask for, a lift count
+ *  corrected to the brief (phase 3g), a recorded diameter corrected to the rectangle the brief
+ *  states (phase 3i), a smaller size the brief allows and a figure it gives only as a
+ *  distance (phase 3j), zone / depot geometry; anything else is "other". */
 export type WarningShape =
   | "recovered"
   | "no_dimensions"
   | "unstaffed"
+  | "dropped"
   | "unsupported"
   | "lifts"
   | "footprint"
+  | "minimum"
+  | "distance"
   | "geometry"
   | "other";
 
@@ -373,8 +381,8 @@ export interface CardWarning {
   lead: string | null;
   /** the structure the note names ("structure S2 ..."), null for a site-wide one */
   structure: string | null;
-  /** the operation an unstaffed / unsupported note is about */
-  operation: Operation | null;
+  /** the operations an unstaffed / dropped / unsupported note is about */
+  operations: Operation[];
   /** the sentence as shown: an amber note drops the clause its lead already says */
   text: string;
   raw: string;
@@ -385,15 +393,20 @@ export const WARNING_LEADS = {
   no_dimensions: "Add the brief's dimensions before planning",
   lifts: "Check the lift count against the brief",
   footprint: "Check the footprint against the brief",
+  minimum: "Check the smallest size against the brief",
+  distance: "Check the dimensions against the brief",
 } as const;
 
 const WARNING_SHAPES: [WarningShape, RegExp][] = [
   ["recovered", /^structure \S+: operations \[[^\]]*\] recovered from malformed keys/],
   ["no_dimensions", /^structure \S+ (?:\([^)]*\) )?has no dimensions\b/],
   ["unstaffed", /^structure \S+ lists \S+ but the fleet has no /],
+  ["dropped", /^structure \S+: operations .+? dropped: the fleet has no /],
   ["unsupported", /^structure \S+ lists \S+ but the brief line about it asks for /],
   ["lifts", /^structure \S+: (?:lifts|lift_count|compaction_lifts) \S+ -> \d+: /],
   ["footprint", /^structure \S+: (?:min_)?diameter_m [^:]*-> \S+ m x \S+ m(?:, at least \S+ m x \S+ m)?: /],
+  ["minimum", /^structure \S+: min_\w+_m none -> \S+: /],
+  ["distance", /^structure \S+: \w+_m \S+ dropped: the brief's entry for \S+ states \S+ m only as a distance/],
   ["geometry", /^(?:zones \S+ and \S+ overlap\b|structure \S+ (?:has no zone\b|names zone )|no depot\b)/],
 ];
 
@@ -402,7 +415,12 @@ export function classifyWarning(raw: string): CardWarning {
   const text = raw.trim();
   const shape = WARNING_SHAPES.find(([, re]) => re.test(text))?.[0] ?? "other";
   const structure = /^structure (\S+?):?(?:\s|$)/.exec(text)?.[1] ?? null;
-  const op = /^structure \S+ lists (\S+) but /.exec(text)?.[1] ?? null;
+  // "lists sinter but ..." (unstaffed, unsupported); "operations survey and sinter dropped"
+  const named =
+    /^structure \S+ lists (\S+) but /.exec(text)?.[1] ??
+    /^structure \S+: operations (.+?) dropped: /.exec(text)?.[1] ??
+    "";
+  const operations = named.split(/,\s*|\s+and\s+/).filter(isOperation);
   const lead =
     shape === "recovered"
       ? WARNING_LEADS.recovered
@@ -412,14 +430,18 @@ export function classifyWarning(raw: string): CardWarning {
           ? WARNING_LEADS.lifts
           : shape === "footprint"
             ? WARNING_LEADS.footprint
-            : null;
+            : shape === "minimum"
+              ? WARNING_LEADS.minimum
+              : shape === "distance"
+                ? WARNING_LEADS.distance
+                : null;
   const shown =
     shape === "recovered"
       ? text.replace(/;\s*check them against the brief\.?$/, "")
       : shape === "no_dimensions"
         ? text.replace(/,\s*so add the brief's numbers before planning\.?$/, "")
         : text;
-  return { shape, tone: lead ? "warn" : "muted", lead, structure, operation: isOperation(op) ? op : null, text: shown, raw };
+  return { shape, tone: lead ? "warn" : "muted", lead, structure, operations, text: shown, raw };
 }
 
 /** The structure step's warnings as the card lists them: amber notes first, order kept. */
@@ -551,6 +573,8 @@ export function RequirementsCard({
 
   const typeCounts = new Map<string, number>();
   for (const r of value.robots) typeCounts.set(r.type || "?", (typeCounts.get(r.type || "?") ?? 0) + 1);
+  // exact, as the validator compares robot types
+  const fleetTypes = new Set(value.robots.map((r) => r.type));
 
   return (
     <Section
@@ -722,6 +746,7 @@ export function RequirementsCard({
                     structure={s}
                     index={i}
                     zoneIds={zoneIds}
+                    fleetTypes={fleetTypes}
                     duplicate={duplicateStructures.has(s.id)}
                     work={tasks ? structureWork(tasksByStructure.get(s.id) ?? []) : null}
                     hasPlan={Boolean(tasks)}
@@ -1134,10 +1159,22 @@ function RemoveButton({ onClick, label }: { onClick: () => void; label: string }
 
 const OP_CHIP = "inline-flex items-center rounded border px-1.5 py-px font-mono text-[11px] leading-[18px]";
 
+/** The robot type an operation needs (backend validate.py _CANONICAL_TYPE): the coverage
+ *  check never requires an operation the fleet has no robot of this type for. */
+const OPERATION_ROBOT: Record<Operation, string> = {
+  survey: "surveyor",
+  excavate: "excavator",
+  grade: "excavator",
+  haul: "hauler",
+  compact: "compactor",
+  sinter: "printer",
+};
+
 function StructureRow({
   structure,
   index,
   zoneIds,
+  fleetTypes,
   duplicate,
   work,
   hasPlan,
@@ -1148,6 +1185,8 @@ function StructureRow({
   structure: Structure;
   index: number;
   zoneIds: string[];
+  /** the robot types of the fleet as the card holds it now */
+  fleetTypes: Set<string>;
   duplicate: boolean;
   /** "5 tasks · 46 h · 5,800 Wh · 126 m³" when a task graph exists. */
   work: string | null;
@@ -1166,11 +1205,28 @@ function StructureRow({
   const summary = structureSummary(structure);
   const name = structure.id || `structure ${index + 1}`;
   const recovered = warnings.some((w) => w.shape === "recovered");
-  /** operation -> why no task will be required of it (no robot type can staff it, or the
-   *  brief line asks for another operation): the chip reads dashed with the note as tooltip */
+  /** operation -> why no task will be required of it (no robot type of the fleet can staff
+   *  it, or the brief line asks for another operation): the chip reads dashed with the note as
+   *  tooltip. The fleet is read as the card holds it now, so the chip agrees with the coverage
+   *  check after an edit (a printer removed, an operation listed again). */
   const notRequired = new Map<Operation, string>();
   for (const w of warnings) {
-    if (w.operation && (w.shape === "unstaffed" || w.shape === "unsupported")) notRequired.set(w.operation, w.text);
+    if (w.shape === "unstaffed" || w.shape === "unsupported") {
+      for (const op of w.operations) notRequired.set(op, w.text);
+    }
+  }
+  for (const op of ops) {
+    const robot = OPERATION_ROBOT[op];
+    if (!fleetTypes.has(robot)) {
+      notRequired.set(op, `the fleet has no ${robot}: no ${op} task will be required of it`);
+    }
+  }
+  /** operations the structuring stage dropped (the fleet had no robot for them) and the card
+   *  does not list again: shown dashed, the note as tooltip */
+  const dropped = new Map<Operation, string>();
+  for (const w of warnings) {
+    if (w.shape !== "dropped") continue;
+    for (const op of w.operations) if (!ops.includes(op)) dropped.set(op, w.text);
   }
   return (
     <li className="rounded-md border border-white/10 bg-surface/60 p-3">
@@ -1246,7 +1302,15 @@ function StructureRow({
                 </span>
               );
             })}
-        {!editingOps && ops.length === 0 && <span className="text-[11px] text-dim">none stated in the brief</span>}
+        {!editingOps &&
+          [...dropped].map(([op, note]) => (
+            <span key={`dropped-${op}`} title={note} className={cx(OP_CHIP, "border-dashed border-white/15 text-dim")}>
+              {operationLabel(op)} · dropped
+            </span>
+          ))}
+        {!editingOps && ops.length === 0 && dropped.size === 0 && (
+          <span className="text-[11px] text-dim">none stated in the brief</span>
+        )}
         {!locked && (
           <button
             type="button"
