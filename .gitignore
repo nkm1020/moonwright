@@ -28,3 +28,6 @@ next-env.d.ts
 
 # os / editors
 .DS_Store
+
+# local Claude Code session state
+.claude/scheduled_tasks.lock

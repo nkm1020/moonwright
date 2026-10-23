@@ -100,33 +100,41 @@ role (`backend/.env.example`).
 Live runs on Token Factory, 22 test briefs of five designed kinds (comfortable, battery-split,
 deadline-bound, impossible, re-scope allowed; the arithmetic of each is in
 [docs/eval-briefs.md](docs/eval-briefs.md)), three repeats, both model arms on the same
-requirements. Every run's plan is saved in the repository.
+requirements. Every run's plan is saved in the repository, and each run was scored again with the
+final checks, so the columns are judged alike.
 
-| Nemotron 3 Ultra, 66 live runs | Run 1 | Run 2 |
-| --- | --- | --- |
-| Ended with a CP-SAT-verified plan | 85 % | 85 % (74-92 %) |
-| ... with the full work in scope | 45 % | 74 % (63-83 %) |
-| Verified on the first graph (no repair) | 70 % | 62 % |
-| Reasoning answers cut at the token limit | 78 of 190 | 4 of 121 |
-| Cost per plan (median / mean) | n/a | $0.05 / $0.09 |
+| Nemotron 3 Ultra, 66 live runs each | Run 2 | Run 3 | Run 4 (final pipeline) |
+| --- | --- | --- | --- |
+| Ended with a CP-SAT-verified plan | 85 % | 89 % | 86 % (76-93 %) |
+| ... with the full work in scope | 70 % | 77 % | 82 % (71-89 %) |
+| ... and no haul before its material is dug | 50 % | 74 % | 82 % |
+| Verified on the first graph (no repair) | 62 % | 50 % | 55 % |
+| Reasoning answers cut at the token limit | 4 of 121 | 5 of 125 | 5 of 127 |
+| Cost per plan (median / mean) | $0.05 / $0.09 | $0.07 / $0.10 | $0.05 / $0.10 |
 
-* **The repair loop is worth 23 points**: 62 % of runs verify on the first graph, 85 % after at most
-  three repairs fed the solver's core.
-* **Impossible briefs fail honestly.** On the three designed-impossible briefs, 7 of 9 Ultra runs ended
-  without a plan rather than shrink the work, 6 of them with CP-SAT-proven advice. Run 1's Super
-  arm had "verified" one of them 3 of 3 times by digging about half of the pad's volume; the volume check now
-  refuses that.
-* **Why run 2 differs from run 1**: the models had been satisfying the solver by shrinking the work
-  (a 20 m pad dug as a 12 m one). Volume became a hard conflict, and "in scope" now means 95 % of
-  every volume and area the brief states.
-* **What run 2 could not see.** CP-SAT schedules only the precedence edges it is given, so a haul
-  with no edge to its dig could start before the material existed. Rescoring run 2's saved plans
-  with the supply-order check added afterwards, 17 of 56 verified Ultra plans (14 of 51 Super) did
-  exactly that; the validator now rejects it and the repair loop adds the missing edges
-  ([rescored rows](docs/eval/2026-10-23-live-eval-run2/eval.rescored.csv)).
+* **The repair loop is worth 31 points**: in run 4, 55 % of runs verify on the first graph and 86 %
+  after at most three repairs fed the solver's core.
+* **Impossible briefs fail honestly.** On the three designed-impossible briefs, 7 of 9 Ultra runs
+  ended without a plan rather than shrink the work, 5 of them with CP-SAT-proven advice; the other
+  two verified only by cutting 10-40 % of the work, which the scope row counts as out of scope.
+* **Each run found what the checks could not see yet.** Run 1's plans passed by shrinking the work
+  (a 20 m pad dug as a 12 m one), so volume became a hard conflict. In run 2, 17 of 56 verified
+  Ultra plans hauled material before it was dug, because CP-SAT schedules only the edges it is
+  given; the supply-order check made that a conflict, and none of run 4's 57 verified plans does
+  it. Run 3 exposed the structuring model's slips (a smaller pad the brief allows read as the full
+  one, a distance recorded as a diameter, operations the fleet cannot perform); the structure stage
+  now corrects them from the brief, and the re-scope brief went from 0 of 3 to 3 of 3 in scope.
+* **Optimal means optimal.** Given a verified task graph, Nemotron 3 Ultra writes a valid schedule
+  itself (21 of 21 passed the same independent checker), but CP-SAT with exact travel matches or
+  beats every one and proves it: shorter on 5, by up to 36 h. When no schedule exists, only the
+  solver can say why.
+* **Robot failures are absorbed by the solver.** On run 4's plans, CP-SAT alone replanned 82 of 102
+  injected failures (80 %) in a median 9 ms; the other 20 are provably beyond the surviving
+  batteries, which is when Nemotron is asked to re-scope.
 
 Runs: [run 1](docs/eval/2026-10-23-live-eval-run1.md) (before the volume check),
-[run 2](docs/eval/2026-10-23-live-eval-run2/README.md) with all 198 saved plans. Method:
+[run 2](docs/eval/2026-10-23-live-eval-run2/README.md), [run 3](docs/eval/2026-10-23-live-eval-run3/README.md),
+[run 4](docs/eval/2026-10-24-live-eval-run4/README.md), each with its saved plans. Method:
 [docs/design.md#evaluation](docs/design.md#evaluation).
 
 ## Run it
@@ -135,9 +143,9 @@ Offline, no API key: the demo briefs replay live Nemotron runs recorded on Token
 
 ```bash
 cd backend && uv sync
-uv run moonwright plan examples/briefs/landing_pad.md --llm fixture       # one repair, verified at 89 h
+uv run moonwright plan examples/briefs/landing_pad.md --llm fixture       # one repair, verified at 87 h
 uv run moonwright plan examples/briefs/front_loaded.md --llm fixture      # no plan; CP-SAT-proven advice: 85 h
-uv run moonwright simulate out/landing_pad.plan.json --fail EX2@10        # a robot fails at hour 10
+uv run moonwright simulate out/landing_pad.plan.json --fail EX1@10        # the digging robot fails at hour 10
 uv run moonwright montecarlo out/landing_pad.plan.json --runs 200 --seed 1
 uv run moonwright serve                                                   # API on :8000
 cd ../frontend && pnpm install && pnpm dev                                # UI on :3000
