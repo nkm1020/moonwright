@@ -23,6 +23,7 @@ from moonwright.schemas import MWH_PER_WH
 # major and minor) and the variant, whatever the vendor prefix and the size suffix
 _NEMOTRON_RE = re.compile(r"nemotron-(\d+)(?:[_.](\d+))?-(ultra|super|lightning|nano)",
                           re.IGNORECASE)
+_LEAD_FIGURE_RE = re.compile(r"\d[\d,]*")   # '1,300' of '1,300 m3 berm', '11' of '11.5 m3'
 
 
 def whole_wh(mwh: int) -> int:
@@ -79,8 +80,16 @@ def plural(count: int, noun: str) -> str:
 
 
 def an(noun: str) -> str:
-    """'an excavator', 'a hauler'."""
-    return f"an {noun}" if noun[:1].lower() in "aeiou" else f"a {noun}"
+    """'an excavator', 'a hauler'; a phrase that opens with a figure takes the article of the
+    figure read aloud (the footprint note's 'an 8 m by 8 m footprint', 'a 12 m by 12 m
+    footprint'; 'an 80 m3 berm', 'an 11 m3 trench', 'an 18,000 m3 pit', 'a 180 m3 pit')."""
+    figure = _LEAD_FIGURE_RE.match(noun)
+    if figure is not None:
+        head = figure.group().split(",")[0]
+        vowel = head.startswith("8") or head in ("11", "18")
+    else:
+        vowel = noun[:1].lower() in "aeiou"
+    return f"an {noun}" if vowel else f"a {noun}"
 
 
 def join_and(parts: Sequence[str]) -> str:

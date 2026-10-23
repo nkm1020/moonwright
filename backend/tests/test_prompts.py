@@ -3,7 +3,10 @@ example hygiene and ``min_<dimension>_m`` rule, the volume rules the task-graph 
 prompts share with the validator, the repair prompt's per-conflict edits, the advisories
 section of :func:`repair_messages`, and a length snapshot so a later edit sees its growth.
 Phase 3g adds the supply-order rule of the task-graph prompt, the repair prompt's
-``supply:<haul>`` edit and the structure prompt's definition of ``lifts``."""
+``supply:<haul>`` edit and the structure prompt's definition of ``lifts``; phase 3i the
+``volume:<structure>`` edit for both directions (a shortfall, a double count), the 175 %
+threshold and a berm's fill (length x height x base width / 2: live plans hauled its box),
+paid for by the shorter gloss."""
 
 from __future__ import annotations
 
@@ -23,7 +26,7 @@ from moonwright.llm.prompts import (
     structure_messages,
     taskgraph_messages,
 )
-from moonwright.pipeline.rates import RATE_TABLE_TEXT, VOLUME_HIGH, VOLUME_LOW
+from moonwright.pipeline.rates import RATE_TABLE_TEXT, VOLUME_DOUBLE, VOLUME_HIGH, VOLUME_LOW
 from moonwright.schemas import Failure, Requirements, Robot, Site, Task, TaskGraph, Zone
 
 EXAMPLES = Path(__file__).resolve().parents[1] / "examples"
@@ -33,9 +36,12 @@ BRIEFS = sorted((EXAMPLES / "briefs").glob("*.md")) + sorted((EXAMPLES / "eval")
 # the 5,500-character cap test_coverage_ops holds the three planning prompts to
 PHASE_3D = {"STRUCTURE_SYSTEM": 3601, "TASKGRAPH_SYSTEM": 5219, "REPAIR_SYSTEM": 4989}
 # the snapshot: prompt text without the rate table (which ``rates.py`` owns), +-2 %; phase 3g
-# paid for its rules (supply order, the supply edit, lifts) with cuts, so the totals barely move
-SNAPSHOT = {"STRUCTURE_SYSTEM": 3949, "COVERAGE_RULES": 1937, "TASKGRAPH_SYSTEM": 4455,
-            "REPAIR_SYSTEM": 4605}
+# paid for its rules (supply order, the supply edit, lifts) with cuts, so the totals barely
+# move; phase 3i's 175 % threshold and a berm's fill in place of "never a berm twice" (+44 net
+# in COVERAGE_RULES, so in both planning prompts) are paid for in REPAIR_SYSTEM by the shorter
+# two-way volume gloss (5,481 characters: under the cap and the 5,488 of PHASE_3D + 10 %)
+SNAPSHOT = {"STRUCTURE_SYSTEM": 3949, "COVERAGE_RULES": 1981, "TASKGRAPH_SYSTEM": 4499,
+            "REPAIR_SYSTEM": 4611}
 
 REQ = Requirements(
     site=Site(zones=[Zone(id="Z1", center=(10, 10)), Zone(id="Z2", center=(30, 10))]),
@@ -136,7 +142,9 @@ def test_coverage_rules_state_the_volume_contract_for_both_planning_prompts():
         "15 cm of fines over 10 x 10 m: strip 100 m2",
         ("a cut deeper than 0.2 m, a bowl, pit, trench or borrow strip is excavation in m3 "
          "for its FULL volume from the dimensions"),
-        "Haul each volume once (fill = the placed body's m3, spoil = the dug m3), never a berm twice",
+        # phase 3i: the berm's fill the validator measures (live plans hauled its box twice over)
+        ("Haul each volume once (fill = the placed body's m3, a berm's length x height x base "
+         "width / 2; spoil = the dug m3)"),
         "Planned m3 must match the dimensions",
         "plan the full work anyway and say so in notes (the solver proves it and proposes the fix)",
         "never shrink it",
@@ -145,9 +153,10 @@ def test_coverage_rules_state_the_volume_contract_for_both_planning_prompts():
         "The parts SUM to the structure's total, never repeat it",
     ):
         assert text in rules, text
-    # the thresholds quoted are the validator's (rates.VOLUME_LOW / VOLUME_HIGH)
+    # the thresholds quoted are the validator's (rates.VOLUME_LOW / VOLUME_HIGH / VOLUME_DOUBLE)
     assert f"under {round(VOLUME_LOW * 100)} % is rejected" in rules
     assert f"over {round(VOLUME_HIGH * 100)} % flagged" in rules
+    assert f"from {round(VOLUME_DOUBLE * 100)} % rejected" in rules
 
 
 def test_taskgraph_prompt_keeps_its_pricing_rule_and_shape():
@@ -183,9 +192,9 @@ REPAIR_EDITS = [
      ("a phase, a listed operation or a whole structure went missing: add the missing task of "
       "the right robot type (the hint names it), never delete required work")),
     ("quantity:<task>", "state it in a priced unit"),
+    # phase 3i: both directions, a shortfall and a double count (live: a berm hauled as its box)
     ("volume:<structure>",
-     ("add the missing m3 as excavator / hauler tasks (the hint says how much), never shrink "
-      "the work")),
+     "(planned m3 off the dimensions) -> add or cut m3 as the hint says, never shrink the body"),
     ("supply:<haul>", "add `after` edges from the digs that supply it"),
     ("missing:<task> / changed:<task> / locked:<task>", "keep those tasks as they were"),
 ]

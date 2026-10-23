@@ -27,6 +27,21 @@ kept when the entry names lifts without a count we can read) and says so in a wa
 requirements card shows in amber ("structure S1: lifts 4 -> 1: the brief's entry for S1 states
 no lift count we can read"), so the planner plans the count the eval's area check judges
 (:func:`moonwright.pipeline.rates.lifts`).
+
+A square or rectangular footprint recorded as a diameter is corrected the same way
+(:func:`correct_footprints`, phase 3i): in the saved structurings of live runs 2 and 3
+Lightning wrote the "12 m by 12 m" pit of habitat_foundation and habitat_berm_tight_horizon,
+instrument_pad's "10 m by 10 m" pad and four_mast_pads' "each 8 m by 8 m" pads as
+``diameter_m`` (beside a ``length_m``, once with an invented ``min_diameter_m``), and a 12 m
+pit read as a bowl is 113.1 m3 of 144 (78.5 %), above the 70 % conflict, so the planner
+under-dug it. The structure stage writes the rectangle the structure's own entry states into
+the requirements (:func:`moonwright.pipeline.rates.with_judged_footprint`: ``diameter_m`` and
+``min_diameter_m`` dropped, ``length_m`` x ``width_m`` the brief's, ``min_length_m`` x
+``min_width_m`` only where a recorded minimum and the entry state a smaller rectangle; an entry
+that calls the structure round, or states the diameter apart from the pair, keeps it) with an
+amber warning ("structure S1: diameter_m 12 -> 12 m x 12 m: the brief's entry for S1 states a
+12 m by 12 m footprint"), and the volume and area checks read the same rectangle from the
+brief at judge time.
 """
 
 from __future__ import annotations
@@ -38,7 +53,12 @@ from typing import get_args
 
 from moonwright.llm.base import LLMClient, LLMError, answer_failure
 from moonwright.llm.prompts import structure_messages
-from moonwright.pipeline.rates import lift_note, with_judged_lifts
+from moonwright.pipeline.rates import (
+    footprint_note,
+    lift_note,
+    with_judged_footprint,
+    with_judged_lifts,
+)
 from moonwright.pipeline.validate import unstaffed_operations, unsupported_operations
 from moonwright.schemas import LoopStep, Operation, Requirements
 
@@ -158,6 +178,27 @@ def correct_lifts(req: Requirements) -> list[str]:
     return warnings
 
 
+def footprint_warnings(req: Requirements) -> list[str]:
+    """One warning per structure whose recorded diameter the brief corrects to a rectangle
+    (:func:`moonwright.pipeline.rates.footprint_note`): "structure S1: diameter_m 12 -> 12 m x
+    12 m: the brief's entry for S1 states a 12 m by 12 m footprint". Empty without a brief or
+    when no entry states a rectangle for a recorded diameter; never a failure. Reads only
+    (:func:`correct_footprints` applies them)."""
+    return [f"structure {s.id}: {note}" for s in req.structures
+            if (note := footprint_note(s, req)) is not None]
+
+
+def correct_footprints(req: Requirements) -> list[str]:
+    """Write the rectangle each structure's entry in the brief states over its recorded
+    diameter into ``req`` (:func:`moonwright.pipeline.rates.with_judged_footprint`) and return
+    the warnings of :func:`footprint_warnings` for the corrections made; nothing changes
+    without a brief."""
+    warnings = footprint_warnings(req)
+    if warnings:
+        req.structures = [with_judged_footprint(s, req) for s in req.structures]
+    return warnings
+
+
 def _operation_words(value: object) -> list[str]:
     if isinstance(value, str):
         return [w for w in _WORDS.findall(value.lower()) if w in _OPERATION_SET]
@@ -190,7 +231,7 @@ def structure_brief(client: LLMClient, brief: str, *, key: str) -> tuple[Require
         )
     req.source_brief = brief
     warnings = [*recover_operations(req), *site_warnings(req), *correct_lifts(req),
-                *dimension_warnings(req)]
+                *correct_footprints(req), *dimension_warnings(req)]
     return req, LoopStep(
         stage="structure", ok=True, duration_s=time.perf_counter() - t0, usage=usage,
         message=f"{len(req.structures)} structures, {len(req.robots)} robots, horizon {req.horizon_h}h",

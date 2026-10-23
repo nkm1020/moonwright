@@ -415,8 +415,10 @@ def test_simulate_prints_replan_advice_in_absolute_hours(landing_pad_plan, tmp_p
 class TestRescoreEval:
     """``rescore_eval.py`` on a tiny synthetic eval directory: a crater ramp verified with each
     10 m segment compacted once (out of scope under the recorded "lifts: 4", in scope under
-    the brief), the live habitat plan whose berm hauls wait for no dig, a run that kept no plan,
-    a row whose plan file is gone and one whose plan file is cut short."""
+    the brief), the live habitat plan whose berm hauls wait for no dig and move the 560 m3 box of
+    the 280 m3 berm (a double count since phase 3i) and whose "12 m by 12 m" pit Lightning recorded
+    as a 12 m diameter (dug as the 113 m3 bowl: out of scope against the brief's 144 m3), a run
+    that kept no plan, a row whose plan file is gone and one whose plan file is cut short."""
 
     COLUMNS = ("brief", "condition", "repeat", "success", "in_scope", "min_volume_share",
                "min_area_share", "plan_path")
@@ -477,24 +479,38 @@ class TestRescoreEval:
         out = tmp_path / "elsewhere" / "rescored.csv"
         assert module.main([str(source), "--out", str(out)]) == 0
         printed = capsys.readouterr().out
-        assert ("| `ultra/loop_on` | 2 | 2 (100%) | 1 (50%) -> 2 (100%) | 1 (50%) | 1 of 2 | "
-                "0 of 2 | 0 |") in printed
+        assert ("| `ultra/loop_on` | 2 | 2 (100%) | 1 (50%) -> 1 (50%) | 1 (50%) | 1 of 2 | "
+                "1 of 2 | 1 | 0 of 2 | 0 |") in printed
         assert ("| `super/loop_on` | 3 | 2 (67%) | 1 (33%) -> 1 (33%) | 1 (33%) | 0 of 2 | "
-                "0 of 2 | 3 |") in printed
-        assert "in_scope changed in 1 row(s):" in printed
+                "0 of 2 | 0 | 0 of 2 | 3 |") in printed
+        assert "in_scope changed in 2 row(s):" in printed
         assert "crater_ramp ultra/loop_on #1: False -> True (min_area_share 0.25 -> 1.0)" in printed
+        assert ("habitat_berm_tight_horizon ultra/loop_on #1: True -> False (volume:S1: its "
+                "excavation tasks cover 113 of 144 m3 (78 %), under the 95 % a plan in scope "
+                "covers)") in printed
         assert "verified plans the supply check rejects: 1" in printed
         assert "habitat_berm_tight_horizon ultra/loop_on #1: supply:T7, supply:T8" in printed
+        assert "verified plans the double-count check rejects: 1" in printed
+        assert "habitat_berm_tight_horizon ultra/loop_on #1: S2 560 of 280 m3 (200 %)" in printed
+        assert "footprint judgment changed in 1 plan(s):" in printed
+        assert ("habitat_berm_tight_horizon ultra/loop_on #1: S1 volume 0.999 -> 0.785, area "
+                "0.999 -> 0.785 (in scope True -> False)") in printed
         assert not (source / "eval.rescored.csv").exists()
         rows = list(csv.DictReader(out.open()))
         assert list(rows[0]) == [*self.COLUMNS, "in_scope_before", "min_volume_share_before",
                                  "min_area_share_before", "supply_conflicts", "supply_hauls",
-                                 "supply_advisories", "scope_gaps"]
+                                 "supply_advisories", "scope_gaps", "double_counts",
+                                 "double_structures", "footprint_changes"]
         ramp, habitat, unplanned, gone, cut = rows
         assert (ramp["in_scope_before"], ramp["in_scope"]) == ("False", "True")
         assert (ramp["min_area_share_before"], ramp["min_area_share"]) == ("0.25", "1.0")
+        assert (ramp["double_counts"], ramp["footprint_changes"]) == ("0", "")
         assert (habitat["supply_conflicts"], habitat["supply_hauls"]) == ("2", "T7 T8")
-        assert habitat["in_scope"] == "True" and habitat["scope_gaps"] == ""
+        assert (habitat["double_counts"], habitat["double_structures"]) == (
+            "1", "S2 560 of 280 m3 (200 %)")
+        assert habitat["footprint_changes"] == "S1 volume 0.999 -> 0.785, area 0.999 -> 0.785"
+        assert (habitat["in_scope"], habitat["min_volume_share"]) == ("False", "0.785")
+        assert habitat["scope_gaps"].startswith("volume:S1: its excavation tasks cover 113 of 144 m3")
         # rows without a readable plan keep their values
         assert (unplanned["in_scope"], unplanned["supply_conflicts"]) == ("False", "0")
         assert (gone["in_scope"], gone["min_area_share"]) == ("True", "1.0")

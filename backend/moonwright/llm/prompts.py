@@ -52,6 +52,20 @@ capped system prompt and says how to read it: a berm "built from pad spoil" whos
 more than the pad yields is the brief's own arithmetic, so the body keeps its m3 (what
 :data:`COVERAGE_RULES` asks) and no dig is invented; the note is answered only by waiting for
 more of the digs that feed it.
+
+Double counts (phase 3i): in 3 of 3 live tries Nemotron 3 Ultra's first landing-pad graph hauled
+2 x 120 m3 into the 120 m3 berm, and 2 of the 3 repairs answered the advisory and the supply
+note by inventing a 114 m3 borrow pit (240 m3 less the pad's 125.7 m3 of spoil). 240 m3 is the
+berm's 40 x 1.5 x 4 m box: the planner never saw how a berm's m3 is computed, and the verified
+double counts of runs 2 and 3 say so in their basis fields ("560 m3 / 2 = 280 m3" for a 70 x 2
+x 4 m berm the validator, and the brief, put at 280 m3). So :data:`COVERAGE_RULES` gives the
+placed body's fill of a berm, length x height x base width / 2 (paid for by its "never a berm
+twice", which "haul each volume once" already says), and quotes the new threshold beside the
+70 % and the 150 %; from 175 % of the largest volume the validator rejects the plan with
+``volume:<structure>`` (``moonwright.pipeline.validate``, "Volume"), whose hint quotes the
+section, so :data:`REPAIR_SYSTEM`'s volume gloss covers both directions ("planned m3 off the
+dimensions -> add or cut m3 as the hint says, never shrink the body": shorter than the
+shortfall-only gloss it replaces, whose "as excavator / hauler tasks" the hint already says).
 """
 
 from __future__ import annotations
@@ -137,15 +151,15 @@ COVERAGE_RULES = """
   are robots of that type whenever its total is more than 60 m3 or more than 300 m2, so no
   task exceeds a battery. The parts SUM to the structure's total, never repeat it: 300 m3 of
   berm fill on two haulers is 2 x 150 m3, each part's basis stating its share ("300 m3 / 2 =
-  150 m3"). Haul each volume once (fill = the placed body's m3, spoil = the dug m3), never a
-  berm twice.
+  150 m3"). Haul each volume once (fill = the placed body's m3, a berm's length x height x
+  base width / 2; spoil = the dug m3).
 - Volumes: an excavator m2 task is a surface layer at most 0.2 m thick (strip, grade; 15 cm
   of fines over 10 x 10 m: strip 100 m2); a cut deeper than 0.2 m, a bowl, pit, trench or
   borrow strip is excavation in m3 for its FULL volume from the dimensions. Planned m3 must
-  match the dimensions (under 70 % is rejected, over 150 % flagged); when the fleet cannot
-  carry the full volume, plan the full work anyway and say so in notes (the solver proves
-  it and proposes the fix), never shrink it; a min_<dimension>_m is the smaller size the
-  brief allows."""
+  match the dimensions (under 70 % is rejected, over 150 % flagged, from 175 % rejected);
+  when the fleet cannot carry the full volume, plan the full work anyway and say so in notes
+  (the solver proves it and proposes the fix), never shrink it; a min_<dimension>_m is the
+  smaller size the brief allows."""
 
 TASKGRAPH_SYSTEM = DOMAIN + """
 
@@ -198,8 +212,8 @@ Rules:
   scope:<structure> -> a phase, a listed operation or a whole structure went missing: add the
   missing task of the right robot type (the hint names it), never delete required work.
   quantity:<task> -> state it in a priced unit.
-  volume:<structure> (planned m3 below the dimensions) -> add the missing m3 as excavator /
-  hauler tasks (the hint says how much), never shrink the work.
+  volume:<structure> (planned m3 off the dimensions) -> add or cut m3 as the hint says,
+  never shrink the body.
   supply:<haul> (too little dug before it) -> add `after` edges from the digs that supply it; to
   hold a deadline, split hauls so each part waits only for the dig part feeding it, and dig
   separate sources on separate excavators in parallel; never delete a dig-to-haul edge to

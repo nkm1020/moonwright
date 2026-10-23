@@ -46,11 +46,12 @@ the script's assumptions in mind:
   of stripping, a 300 m3 berm hauled twice), and the volume advisory never reached the repair
   prompt. The validator now rejects a whole plan whose tasks cover less than 70 % of the
   smallest volume a structure's dimensions allow (`volume:<structure>`, with a hint that says
-  how many m3 to add); an excess (hauled or dug 1.5 times over) stays an advisory, and the fill
-  of a stockpile is judged neither way. Every `lazy` and `split` graph below covers its volumes
-  and is in scope (the script prices the same shapes as `moonwright.pipeline.rates.dims_volumes`,
-  and a test holds the two together, the brief's own text included); the `shrunk` graphs fail
-  `volume:` wherever a dig is deeper than the 0.2 m an m2 task strips. So a D brief's re-scope
+  how many m3 to add); an excess (hauled or dug 1.5 times over) stays an advisory up to 175 %
+  (phase 3i, below), and the fill of a stockpile is judged neither way. Every `lazy` and
+  `split` graph below covers its volumes and is in scope (the script prices the same shapes as
+  `moonwright.pipeline.rates.dims_volumes`, and a test holds the two together, the brief's own
+  text included); the `shrunk` graphs fail `volume:` wherever a dig is deeper than the 0.2 m an
+  m2 task strips. So a D brief's re-scope
   ends in a `volume:` conflict before any energy verdict, the repair prompt tells a type that
   cannot carry its work to keep it whole (it used to say "trim or move it"), and the run ends on
   the energy verdict and the advice: the outcome D is designed for. A repair that trims the
@@ -103,6 +104,44 @@ the script's assumptions in mind:
   `split`, `fine`, `serial`, `shrunk`) passes the check; `road_and_pad`'s windrows are
   "grading spoil pushed" by the grader, which the registry plans as an excavator m2 pass
   instead of a haul.
+* **A square is never a circle (phase 3i).** Lightning recorded the "12 m by 12 m" pit of
+  `habitat_foundation` and `habitat_berm_tight_horizon`, `instrument_pad`'s "10 m by 10 m" pad
+  and `four_mast_pads`' "each 8 m by 8 m" pads as `diameter_m` in runs 2 and 3, and a 12 m
+  bowl is 113.1 m3 of the brief's 144 (78.5 %, above the 70 % conflict): plans dug the bowl
+  and counted in scope. The structure stage now writes the rectangle the structure's own entry
+  states (two length figures joined by "by", "x" or "×", never a size and a depth, a count or
+  the parts of the work, "3 x 50 m segments"; never in an entry that calls the structure
+  circular, round, a bowl or by its diameter or radius; and only when the recorded diameter is
+  one of the figures and stands nowhere else in the entry) as `length_m` x `width_m`, with
+  `min_length_m` x `min_width_m` only where the entry states a smaller rectangle for a recorded
+  minimum, and an amber note; the volume and area checks read it from the brief whenever they
+  judge a plan, saved ones included. Every other brief's recorded structures are untouched (the
+  circular pads of `landing_pad`, `depleted_excavators`, `front_loaded_excavation` and the
+  rest, `road_and_pad`'s pad beside a "30 m by 30 m level patch"). Rescored, the six habitat
+  plans per arm read 78 % and leave the in-scope count, and so does one `four_mast_pads` plan
+  per arm that compacted each 8 m square pad over its inscribed circle. `four_mast_pads`'
+  recorded `depth_m: 1` is its anchor hole's depth, so its pads are judged as 64 m3 boxes (they
+  were 50.3 m3 bowls): both readings are the structuring's error, not the brief's 20 cm of
+  fines.
+* **A double-counted dig or haul is a conflict (phase 3i).** The landing-pad demo's first graph
+  hauled 2 x 120 m3 into its 120 m3 berm in 3 of 3 live tries: 240 m3 is the berm's 40 x 1.5 x
+  4 m box, twice the triangular section the volume check measures (and the briefs state:
+  `habitat_berm_tight_horizon`'s 70 x 2 x 4 m berm is "about 280 cubic metres of fill"), and
+  two repairs answered the notes with a 114 m3 borrow pit the brief never mentions. 12 of the
+  14 verified plans of runs 2 and 3 that hauled a berm at 200 % sized it the same way
+  ("560 m3 / 2 = 280 m3"). The task-graph prompts now give a berm's fill (length x height x
+  base width / 2), and dig or haul parts summing to 175 % (+1 m3) of the largest volume the
+  brief allows are `volume:<structure>` on a whole plan, the detail quoting the section and
+  the hint the cut ("its fill is length x height x base width / 2 (40 x 1.5 x 4 / 2 = 120 m3),
+  not the box; cut the S2 hauls to 120 m3 in total (for example 2 x 60 m3) ... never add a dig
+  the brief does not ask for"); 150-175 % stays the advisory. The largest volume is the
+  dimensions', or a larger one the brief states on the structure's line (`isru_stockpile`'s
+  "about 200 cubic metres" over the one 70 m3 strip Lightning recorded); nothing is judged on a
+  berm whose base width the brief does not state (`propellant_pit_and_berm`'s, recorded 4 m
+  wide from the structure prompt's example), a stockpile, or a haul staged in a pile. Every
+  canonical graph passes; rescored, 3 of 56 verified Ultra and 3 of 51 Super plans of run 2 are
+  double counts (`habitat_berm_tight_horizon`'s 560 m3 box for its 280 m3 berm, one
+  `large_fleet_pad_berm_road` plan's 1,125 m3 for 562.5 m3).
 * **Bounds ignore transit.** CP-SAT adds a whole-hour transit allowance per task and
   0.5 Wh per grid cell, so a verified makespan of the canonical graphs sits a few hours above
   `LB`; the `lazy` / `split` makespans quoted here include it.
@@ -271,7 +310,10 @@ outcomes); `--no-solve` skips the graphs; `--time-limit` bounds each CP-SAT solv
   that every `lazy` and `split` graph covers the volumes the validator measures while the
   `shrunk` re-scope of a D brief is a `volume:` conflict, and that every `lazy`, `split`,
   `fine`, `serial` and `shrunk` graph passes the supply check (each haul after the digs or
-  strips its fill comes from). A brief
+  strips its fill comes from); `backend/tests/test_double_count.py` that none of them is a
+  double count and `backend/tests/test_footprints.py` that only the four rectangle briefs'
+  recorded diameters are corrected (every structure Lightning recorded in runs 2 and 3 is in
+  `backend/tests/data/recorded_structures.json`). A brief
   whose numbers drift out of its kind fails the test; a new brief must be registered in
   `BRIEF_STRUCTURES`, classified, and given its letter in `backend/examples/eval/kinds.json`,
   which `moonwright eval --briefs examples/eval` picks up for its per-kind table (the test

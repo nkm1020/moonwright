@@ -68,8 +68,23 @@ footprint (the rate table's m2 row is a surface layer up to 0.2 m, so a 10 x 10 
 is covered 120 of 360 m3). A plan below :data:`VOLUME_LOW` of the smallest volume the brief
 allows is a shortfall: an advisory here (:func:`volume_advisories`) and, on a whole plan,
 the validator's ``volume:<structure>`` conflict (:func:`volume_shortfalls`); a plan above
-:data:`VOLUME_HIGH` of the largest ("hauled twice over") stays an advisory. What the review
-of phase 3e made exact:
+:data:`VOLUME_HIGH` of the largest ("dug 1.6 times over") stays an advisory, and from
+:data:`VOLUME_DOUBLE` of the largest volume the brief allows (plus :data:`VOLUME_DOUBLE_M3`)
+it is a double count, the validator's conflict again (:func:`volume_double_counts`, phase
+3i). Live, Nemotron 3 Ultra's first graph of the landing-pad demo hauled 2 x 120 m3 into the
+120 m3 berm in 3 of 3 tries: 240 m3 is the berm's 40 x 1.5 x 4 m box, twice the triangular
+section the check measures. The advisory did not stop it, and 2 of the 3 repairs answered the
+notes with a 114.34 m3 borrow pit the brief never mentions (240 - 125.66 m3 of pad spoil: the
+box again). The basis fields of the verified plans of runs 2 and 3 that hauled a berm at
+200 % say the same: 12 of 14 sized the berm as its length x height x base width ("560 m3 / 2 =
+280 m3" for habitat_berm_tight_horizon's 70 x 2 x 4 m berm, which its brief puts at about 280
+cubic metres) and split that box evenly; the other 2 are ambiguous. The task-graph prompts now
+give a berm's fill (length x height x base width / 2) and the verdict quotes the section. The
+largest volume a double count is judged against is the dimensions', or a larger one the brief
+states on the structure's line (:func:`_largest_m3`); none where the brief bounds none (a berm
+whose base width it does not state, walls sloped by an unstated ratio), and a haul staged in a
+pile for a later haul of the body counts once (:class:`VolumeCoverage`, ``staged``).
+What the review of phase 3e made exact:
 
 * Only what the brief states is judged. The floor comes from ``min_<dimension>_m`` extras
   (a brief that lets the work shrink); a bowl or box whose walls slope (:func:`wall_slope`:
@@ -106,6 +121,32 @@ on the 1:1 section the volume check assumes nor on a width the structure stage c
 elsewhere; without one, on the least base it can have, as wide as it is high (length x
 height), so a sliver of compaction on a width-less berm is still a gap.
 
+Footprints (phase 3i)
+---------------------
+Nemotron 3.5 Lightning records a square footprint as a diameter: in the saved structurings of
+live runs 2 and 3, the "12 m by 12 m" pit of habitat_foundation and habitat_berm_tight_horizon
+(3 of 3 in run 3), the "10 m by 10 m" instrument_pad and the "each 8 m by 8 m" mast pads of
+four_mast_pads came back as ``diameter_m`` (some beside a ``length_m``, one with an invented
+``min_diameter_m``). A 12 m pit read as a bowl holds 113.1 m3, not 144 (pi/4, 78.5 %), above
+the 70 % conflict, so the planner under-dug and the eval judged the plan in scope against the
+wrong floor. :func:`footprint` reads the rectangle the structure's own entry states
+(:func:`stated_footprint`: two length figures joined by "by", "x" or "×", the entry read
+whole; never a size and a depth, a count times a length, nor the size of the parts of the work
+or of a section: "3 x 50 m segments", "a 1.2 m by 0.8 m trench section"), never in an entry
+that calls the structure round (diameter, circular, round, radius, ring, bowl), and only when
+the recorded diameter is one of its figures and stands nowhere else in the entry, so a figure
+pair about something else ("a 20 m pad ... centred in a 20 m by 30 m cleared apron") is no
+footprint; Lightning's verb-like types ("excavate", "excavation_pit") that name no entry are
+matched by the lines that state the structure's recorded size, when every one of them states
+the same rectangle. :func:`with_judged_footprint` writes it in (``diameter_m`` and
+``min_diameter_m`` dropped, ``length_m`` x ``width_m`` the brief's figures; ``min_length_m`` x
+``min_width_m`` only where a recorded ``min_diameter_m`` and the entry state a smaller
+rectangle, "may shrink to 12 m by 12 m"), the structure stage does so with an amber note
+(``moonwright.pipeline.structure.correct_footprints``: "structure S1: diameter_m 12 -> 12 m x
+12 m: the brief's entry for S1 states a 12 m by 12 m footprint"), and every volume and area
+judgment applies it whenever the brief is known (:func:`dims_volumes`, :func:`_work_area`), so
+a saved plan is judged against the brief's square whatever its requirements recorded.
+
 Supply (phase 3g)
 -----------------
 :func:`is_dig` (an excavator task in m3 that is no :func:`rehandles`), :func:`is_strip` (one in
@@ -131,10 +172,17 @@ from __future__ import annotations
 
 import math
 import re
-from collections.abc import Collection, Mapping
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 
-from moonwright.pipeline.tags import WORDS, brief_lines, entry_line, name_score, serving_tasks
+from moonwright.pipeline.tags import (
+    WORDS,
+    brief_lines,
+    entry_line,
+    haul_target,
+    name_score,
+    serving_tasks,
+)
 from moonwright.schemas import (
     MAX_DURATION_H,
     MAX_ENERGY_WH,
@@ -145,12 +193,13 @@ from moonwright.schemas import (
     Unit,
     to_mwh,
 )
-from moonwright.text import join_and, pct, plural, qty
+from moonwright.text import an, join_and, pct, plural, qty
 
 ADVISORY_THRESHOLD = 0.5   # relative deviation of the model's estimate that earns an advisory
 VOLUME_LOW = 0.7           # volume:<structure> when the planned m3 are below this share of the
-VOLUME_HIGH = 1.5          # smallest volume the brief allows (a conflict), or above this
-#                            multiple of the dimensions' volume (an advisory)
+VOLUME_HIGH = 1.5          # smallest volume the brief allows (a conflict), above this multiple
+VOLUME_DOUBLE = 1.75       # of the largest one (an advisory), or at this multiple of it plus
+VOLUME_DOUBLE_M3 = 1.0     # this many m3 or more (a double count: a conflict again)
 _CEIL_EPS = 1e-9           # 2.1 / 0.7 is 3.0000000000000004 in floats: do not ceil that to 4
 UNGROUNDED_ADVISORY = (
     "ungrounded: no task states a quantity, so every duration_h and energy_wh is the model's "
@@ -363,6 +412,29 @@ _DEGREES_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(?:°|deg)", re.IGNORECASE)
 _SLOPE_CLAUSE_SPLIT = re.compile(r"\.(?=\s|$)|[;,\n()]")   # keeps "1:1" and "0.5 m" whole
 _WALL_RATIO_MAX = 4.0      # a ratio up to 4:1 reads as a wall slope without the word "wall";
 #                            a flatter one ("graded at 1:50") is a surface gradient
+# a rectangular footprint: two length figures joined by "by", "x" or "×", a unit on one of them
+# at least ("12 m by 12 m", "10 x 10 m", "40 m by 6 m", "30 m x 18 m", "120 cm by 80 cm"), or
+# the first two of three ("12 x 12 x 1 m": length, width, depth); a pair whose second figure
+# is a depth, a height or a length alone ("a bowl 20 m by 0.4 m deep", "20 m by 0.4 m, deep",
+# "2 x 60 m long") is none, nor is a count times a volume ("2 x 60 m3": no length unit), nor a
+# pair that sizes the parts of the work or a section ("laid as 3 x 50 m segments", "a 1.2 m by
+# 0.8 m trench section", "sintered in 2 m x 2 m tiles"; seen in review, each read as a
+# footprint)
+_BY = r"\s*(?:\bby\b|x|×)\s*"
+_FOOTPRINT_RE = re.compile(
+    rf"(?<![\w.])(?P<a>\d+(?:\.\d+)?)\s*(?P<ua>cm|m)?{_BY}(?P<b>\d+(?:\.\d+)?)\s*(?P<ub>cm|m)?"
+    rf"(?:{_BY}(?P<c>\d+(?:\.\d+)?)\s*(?P<uc>cm|m)?)?(?!\w|\.\d)",
+    re.IGNORECASE)
+_DEPTH_WORD_RE = re.compile(r"\s*,?\s*(?:deep|high|tall|thick|long)\b", re.IGNORECASE)
+_PART_WORD_RE = re.compile(   # up to two words, then a noun for parts of the work or a section
+    r"(?:\s+[a-z]+){0,2}?\s+(?:segments?|sections?|cross-sections?|strips|lengths|bays|tiles"
+    r"|panels|blocks|cells|rows|runs|passes|lifts|layers)\b", re.IGNORECASE)
+# an entry that calls its structure round states no rectangle, whatever pair it holds
+# ("circular, 20 m diameter", "a circular bowl 12 m in diameter", "a 20 m bowl ... centred in a
+# 20 m by 30 m apron"; "around the pit" and "bearing slab" are no such words)
+_ROUND_RE = re.compile(r"\b(?:diameters?|circular|circles?|round|radius|radii|rings?|bowls?)\b",
+                       re.IGNORECASE)
+_DIAMETER_KEYS = ("diameter_m", "min_diameter_m")
 _LIFT_KEYS = ("lifts", "lift_count", "compaction_lifts")
 _MAX_LIFTS = 10
 _COUNT_WORDS = {"one": 1, "single": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
@@ -400,6 +472,10 @@ _WIDTH_CLAUSE_SPLIT = re.compile(r"\.(?=\s|$)|[,;()]|\band\b")
 _WIDTH_WORD_RE = re.compile(r"\b(?:wide|width|base|broad|across)\b", re.IGNORECASE)
 _NOT_BASE_RE = re.compile(r"\b(?:trench|crest|key)\b", re.IGNORECASE)
 _FIGURE_RE = re.compile(r"(?<![\d.])(\d+(?:\.\d+)?)\s*(cm|m)\b", re.IGNORECASE)
+# a volume a brief line states: "about 144 cubic metres", "(about 280 cubic metres of fill)",
+# "60 m3", "1,125 m³"
+_VOLUME_FIGURE_RE = re.compile(
+    r"(?<![\w.,])(\d[\d,]*(?:\.\d+)?)\s*(?:cubic\s+met(?:re|er)s?|m3|m³)(?!\w)", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -431,7 +507,9 @@ class Shape:
     (``phase`` "haul") has neither. ``floor_area_m2`` is the area compaction or sintering
     treats on the floor shape (the bottom of sloped walls, a berm's base; 0 when unknown).
     ``excess_judged`` is False when the numbers bound no largest volume (sloped walls of an
-    unstated ratio). ``kind`` is bowl / box / trench / prism.
+    unstated ratio). ``kind`` is bowl / box / trench / prism. ``box`` is a triangular prism's
+    length x height x base width ("40 x 1.5 x 4"), the box its section is half of (phase 3i:
+    live plans sized berms as that box and hauled twice the prism); '' for every other shape.
     """
 
     m3: float
@@ -447,6 +525,7 @@ class Shape:
     floor_area_m2: float = 0.0
     excess_judged: bool = True
     head: str = ""
+    box: str = ""
 
     @property
     def ranged(self) -> bool:
@@ -567,6 +646,217 @@ def wall_slope(structure: Structure, req: Requirements | None = None) -> Slope |
     return None
 
 
+def stated_footprints(line: str | None) -> list[tuple[float, float]]:
+    """Every rectangle a brief line states, ``(first, second)`` in metres, in order: each pair
+    of length figures joined by "by", "x" or "×" (:data:`_FOOTPRINT_RE`: "12 m by 12 m", "10 x
+    10 m", "40 m by 6 m", "30 m x 18 m", the first two of "12 x 12 x 1 m", cm converted), never
+    a figure and a depth ("a bowl 20 m by 0.4 m deep"), a count times a length or a volume ("2
+    x 60 m long", "2 x 60 m3") nor the size of the parts of the work or of a section
+    (:data:`_PART_WORD_RE`: "3 x 50 m segments", "a 1.2 m by 0.8 m trench section"); [] when
+    the line states none, or calls its structure round (:data:`_ROUND_RE`: "circular, 20 m
+    diameter", "a circular bowl 12 m in diameter", "a 20 m bowl"), whatever pair it also
+    holds."""
+    if not line or _ROUND_RE.search(line):
+        return []
+    out: list[tuple[float, float]] = []
+    for m in _FOOTPRINT_RE.finditer(line):
+        second_unit = m["ub"] or m["uc"]
+        first_unit = m["ua"] or second_unit
+        if first_unit is None:
+            continue                       # no length unit: a count, a duration
+        if m["c"] is None and _DEPTH_WORD_RE.match(line, m.end()):
+            continue                       # "20 m by 0.4 m deep": a size and a depth
+        if _PART_WORD_RE.match(line, m.end()):
+            continue                       # "3 x 50 m segments": the parts of the work
+        first = float(m["a"]) / (100 if first_unit.lower() == "cm" else 1)
+        second = float(m["b"]) / (100 if (second_unit or first_unit).lower() == "cm" else 1)
+        if first > 0 and second > 0:
+            out.append((first, second))
+    return out
+
+
+def stated_footprint(line: str | None) -> tuple[float, float] | None:
+    """The rectangular footprint a brief line states: the first of :func:`stated_footprints`;
+    None when it states none or calls its structure round."""
+    found = stated_footprints(line)
+    return found[0] if found else None
+
+
+def _recorded_diameter(structure: Structure) -> tuple[list[str], float] | None:
+    """``(keys, value)``: the diameter keys a structure records (``diameter_m``,
+    ``min_diameter_m``) and the figure a footprint must contain, the plain diameter when it
+    is there; None without either."""
+    d = structure.dims()
+    keys = [k for k in _DIAMETER_KEYS if k in d]
+    return (keys, d[keys[0]]) if keys else None
+
+
+def _states_figures(line: str, structure: Structure) -> bool:
+    """Whether a brief line states every length figure the structure records (its ``*_m``
+    keys, the ``min_`` ones aside): its entry under a type whose words name no line."""
+    wanted = [v for k, v in structure.dims().items()
+              if k.endswith("_m") and not k.startswith("min_") and v > 0]
+    figures = _figures_m(line)
+    return bool(wanted) and all(any(math.isclose(f, w, abs_tol=1e-6) for f in figures)
+                                for w in wanted)
+
+
+def _rectangle(line: str, diameter: float) -> tuple[float, float] | None:
+    """The footprint ``line`` states for a structure recorded with ``diameter``: its first
+    rectangle (:func:`stated_footprint`) when the diameter is one of the two figures and the
+    line states that figure nowhere outside its figure pairs; None otherwise. Seen in review:
+    in "a 20 m bowl excavated 0.4 m deep, centred in a 20 m by 30 m cleared apron" the pair
+    sizes the apron, and read as the pad's footprint it asked for a 240 m3 box instead of the
+    125.7 m3 bowl (a bowl is a round word too, :data:`_ROUND_RE`; "a 20 m pad" in its place
+    is caught here)."""
+    found = stated_footprint(line)
+    if found is None or not any(math.isclose(diameter, f, abs_tol=1e-6) for f in found):
+        return None
+    alone = _FOOTPRINT_RE.sub(" ", line)
+    if any(math.isclose(diameter, f, abs_tol=1e-6) for f in _figures_m(alone)):
+        return None
+    return found
+
+
+def _footprint_line(structure: Structure, req: Requirements | None
+                    ) -> tuple[str, tuple[float, float]] | None:
+    """``(line, (length, width))``: the brief line that states the rectangle of a structure
+    recorded with a diameter, and that rectangle (:func:`footprint`); None when there is
+    none."""
+    recorded = _recorded_diameter(structure)
+    if recorded is None or req is None or not req.source_brief:
+        return None
+    diameter = recorded[1]
+    entry = entry_line(req.source_brief, structure)
+    if entry is not None and _ROUND_RE.search(entry):
+        return None
+    if entry is not None and (stated_footprint(entry) is not None
+                              or _states_figures(entry, structure)):
+        found = _rectangle(entry, diameter)    # its own entry decides
+        return None if found is None else (entry, found)
+    lines = [line for line in brief_lines(req.source_brief)
+             if line != entry and not line.lstrip().startswith("#")]
+    if any(_ROUND_RE.search(line) and any(math.isclose(f, diameter, abs_tol=1e-6)
+                                           for f in _figures_m(line)) for line in lines):
+        return None
+    # every line that states its size must state the same rectangle: one without a rectangle
+    # for it is its own entry under a type no line names ("Landing pad: 12 m across" beside
+    # "Store: 12 m by 12 m", seen in review), and the store's square is not the pad's
+    sized = [line for line in lines if _states_figures(line, structure)]
+    rectangles = {_rectangle(line, diameter) for line in sized}
+    if len(rectangles) != 1:
+        return None
+    found = rectangles.pop()
+    return None if found is None else (sized[0], found)
+
+
+def footprint(structure: Structure, req: Requirements | None = None) -> tuple[float, float] | None:
+    """The rectangle the brief states for a structure that records a diameter (module
+    docstring, "Footprints"): ``(length, width)`` in metres from the structure's own entry
+    (:func:`~moonwright.pipeline.tags.entry_line`, read whole; :func:`stated_footprint`), only
+    when the recorded diameter is one of its two figures and the entry states that figure
+    nowhere else (:func:`_rectangle`: "a 20 m pad ... centred in a 20 m by 30 m apron" is no
+    20 x 30 m box). An entry that calls the structure round keeps the diameter, and so does an
+    entry that states the structure's recorded size without a pair. When the type's words name
+    no line, or a line that is not its entry (Lightning typed habitat_berm_tight_horizon's pit
+    "excavate", which no line names, and "excavation_pit", whose words pick a constraint),
+    the lines that state every length figure the structure records stand in for it
+    (:func:`_states_figures`) when each states the same rectangle and no round line of the
+    brief states the recorded diameter (that circle may be the structure's own): one of them
+    without a rectangle ("Landing pad: 12 m across" beside "Store: 12 m by 12 m") keeps the
+    diameter. None without the brief (``req.source_brief``), a recorded diameter or a stated
+    rectangle: no footprint is ever invented."""
+    found = _footprint_line(structure, req)
+    return None if found is None else found[1]
+
+
+def _stated_minimum(structure: Structure, line: str,
+                    found: tuple[float, float]) -> tuple[float, float] | None:
+    """The smaller rectangle ``line`` states after the footprint ``found`` for a structure that
+    records ``min_diameter_m``: the first later pair that holds the recorded minimum and
+    covers less ("20 m by 20 m ...; it may shrink to 12 m by 12 m"); None without a recorded
+    minimum or such a pair (an invented ``min_diameter_m`` equal to the diameter, run 3: no
+    minimum)."""
+    least = structure.dims().get("min_diameter_m")
+    if least is None:
+        return None
+    for pair in stated_footprints(line)[1:]:
+        if (any(math.isclose(least, f, abs_tol=1e-6) for f in pair)
+                and pair[0] * pair[1] < found[0] * found[1]):
+            return pair
+    return None
+
+
+def _judged_footprint(structure: Structure, req: Requirements | None
+                      ) -> tuple[tuple[float, float], tuple[float, float] | None] | None:
+    """``(footprint, minimum)`` of :func:`footprint` and :func:`_stated_minimum`; None when the
+    brief states no rectangle for the structure."""
+    found = _footprint_line(structure, req)
+    if found is None:
+        return None
+    line, pair = found
+    return pair, _stated_minimum(structure, line, pair)
+
+
+def footprint_note(structure: Structure, req: Requirements) -> str | None:
+    """The correction of a structure's recorded diameter to the rectangle the brief states
+    (:func:`footprint`), as the structure stage's warning reads it: "diameter_m 12 -> 12 m x
+    12 m: the brief's entry for S1 states a 12 m by 12 m footprint" ("diameter_m 12,
+    min_diameter_m 12 -> ..." when both were recorded; "diameter_m 20, min_diameter_m 12 -> 20
+    m x 20 m, at least 12 m x 12 m: ... states a 20 m by 20 m footprint, at least 12 m by 12 m"
+    when the entry states the smaller rectangle too); None when the brief states no rectangle
+    for it."""
+    judged = _judged_footprint(structure, req)
+    recorded = _recorded_diameter(structure)
+    if judged is None or recorded is None:
+        return None
+    found, least = judged
+    d = structure.dims()
+    keys = ", ".join(f"{k} {qty(d[k])}" for k in recorded[0])
+    a, b = (qty(x) for x in found)
+    floor_x = floor_by = ""
+    if least is not None:
+        lo_a, lo_b = (qty(x) for x in least)
+        floor_x, floor_by = f", at least {lo_a} m x {lo_b} m", f", at least {lo_a} m by {lo_b} m"
+    return (f"{keys} -> {a} m x {b} m{floor_x}: the brief's entry for {structure.id} states "
+            f"{an(f'{a} m by {b} m footprint')}{floor_by}")
+
+
+def _write_pair(data: dict[str, object], recorded: dict[str, float], keys: tuple[str, str],
+                pair: tuple[float, float]) -> None:
+    """Write ``pair`` under ``keys`` into ``data`` (a structure's dump), leaving a recorded pair
+    that agrees as it is, in either order; a whole figure is written as an integer."""
+
+    def same(x: float | None, y: float) -> bool:
+        return x is not None and math.isclose(x, y, abs_tol=1e-6)
+
+    was = (recorded.get(keys[0]), recorded.get(keys[1]))
+    if same(was[0], pair[1]) and same(was[1], pair[0]):
+        return
+    for key, value, old in zip(keys, pair, was, strict=True):
+        if not same(old, value):
+            data[key] = int(value) if float(value).is_integer() else value
+
+
+def with_judged_footprint(structure: Structure, req: Requirements | None) -> Structure:
+    """The structure with the footprint of :func:`footprint` written in: ``diameter_m`` and
+    ``min_diameter_m`` dropped, ``length_m`` and ``width_m`` the brief's first and second
+    figure, and ``min_length_m`` x ``min_width_m`` only where a recorded ``min_diameter_m``
+    and the entry state a smaller rectangle (:func:`_stated_minimum`; a recorded pair that
+    agrees stays, in either order); the structure itself when the brief states no rectangle
+    for it."""
+    judged = _judged_footprint(structure, req)
+    if judged is None:
+        return structure
+    found, least = judged
+    data = {k: v for k, v in structure.model_dump().items() if k not in _DIAMETER_KEYS}
+    d = structure.dims()
+    _write_pair(data, d, ("length_m", "width_m"), found)
+    if least is not None:
+        _write_pair(data, d, ("min_length_m", "min_width_m"), least)
+    return Structure.model_validate(data)
+
+
 def _bowl_m3(diameter: float, depth: float, ratio: float | None = None, *,
              rim: bool = True) -> float:
     """A bowl ``diameter`` across and ``depth`` deep: vertical walls without ``ratio``, else
@@ -678,7 +968,8 @@ def _body(d: dict[str, float], slope: Slope | None = None) -> Shape | None:
             floor_m3=0.5 * lo["height_m"] * lo["width_m"] * lo["length_m"],
             floor_how=(f"{qty(lo['length_m'])} m long, {qty(lo['height_m'])} m high, "
                        f"{qty(lo['width_m'])} m wide at the base, triangular section"),
-            kind="prism", floor_area_m2=lo["length_m"] * lo["width_m"], head=f"dimensions {how}")
+            kind="prism", floor_area_m2=lo["length_m"] * lo["width_m"], head=f"dimensions {how}",
+            box=f"{qty(d['length_m'])} x {qty(d['height_m'])} x {qty(d['width_m'])}")
     if {"length_m", "height_m"} <= d.keys():
         how = f"{_span(d, 'length_m')} m long, {_span(d, 'height_m')} m high, 1:1 slopes"
         return Shape(
@@ -713,7 +1004,8 @@ def _key_trench(d: dict[str, float]) -> Shape | None:
         floor_area_m2=least_length * width, head=f"its key trench is {size}")
 
 
-def dims_volumes(structure: Structure, req: Requirements | None = None) -> list[Shape]:
+def dims_volumes(structure: Structure, req: Requirements | None = None, *,
+                 brief_footprint: bool = True) -> list[Shape]:
     """Every :class:`Shape` a structure's dimensions imply, main body first: a bowl
     (``diameter_m`` x ``depth_m``) or a box (``length_m`` x ``width_m`` x ``depth_m``) is dug,
     so its phase is ``excavation``; a prism (``length_m`` x ``height_m`` [x ``width_m`` at the
@@ -723,11 +1015,16 @@ def dims_volumes(structure: Structure, req: Requirements | None = None) -> list[
     vertical unless :func:`wall_slope` finds them sloped (an extra, or with ``req`` the
     structure's own entry in the brief or a constraint); a berm's section is triangular
     (``height^2`` with 1:1 slopes when no base width is given: the steepest a dumped berm
-    stands, so the least it holds). ``min_<dimension>_m`` extras give each shape its floor
-    (the smallest volume the brief allows; :class:`Shape`). A shape whose numbers give no
-    positive volume (``depth_m: 0`` for an at-grade hardstand, a negative figure a user
-    typed) is left out, so nothing downstream divides by it; so is a key trench without a
-    stated width."""
+    stands, so the least it holds). With ``req`` a recorded diameter whose entry states a
+    rectangle is read as that rectangle (:func:`with_judged_footprint`, phase 3i: a "12 m by
+    12 m" pit recorded as a 12 m bowl is a 12 x 12 m box); ``brief_footprint=False`` keeps the
+    footprint as recorded (``scripts/rescore_eval.py`` compares the two).
+    ``min_<dimension>_m`` extras give each shape its floor (the smallest volume the brief
+    allows; :class:`Shape`). A shape whose numbers give no positive volume (``depth_m: 0`` for
+    an at-grade hardstand, a negative figure a user typed) is left out, so nothing downstream
+    divides by it; so is a key trench without a stated width."""
+    if brief_footprint:
+        structure = with_judged_footprint(structure, req)
     d = structure.dims()
     body = _body(d)
     if body is not None and body.kind in ("bowl", "box"):
@@ -793,9 +1090,21 @@ class VolumeCoverage:
     deeper than the stripped layer, ``deep_share`` is the digs alone over the floor's volume
     below that layer (the stripping credit cannot stand in for the dig), and
     ``judged_share`` the smaller of the two, what every test reads (under
-    :data:`VOLUME_LOW`: ``short``). ``share_full`` (the digs over the largest volume the
-    dimensions allow, without the credit: stripping a pad and then digging its whole bowl
-    is the normal sequence) is the over-scope test. ``excused``: the fill of a
+    :data:`VOLUME_LOW`: ``short``). ``share_full`` (``excess_m3``: the digs, or the hauls bar
+    those staged in a pile, over the largest volume the dimensions allow, without the credit:
+    stripping a pad and then digging its whole bowl is the normal sequence) is the over-scope
+    test: above :data:`VOLUME_HIGH` ``over`` (an advisory). ``doubled`` (a conflict, phase
+    3i) is ``excess_m3`` at :data:`VOLUME_DOUBLE` of ``largest_m3`` plus
+    :data:`VOLUME_DOUBLE_M3` or more: ``largest_m3`` is the largest volume the brief allows
+    for the shape (:func:`_largest_m3`), None where it bounds none. ``staged`` are the hauls
+    of a placed body that drop their material in a pile
+    (:func:`~moonwright.pipeline.tags.haul_target`: a zone no structure claims, or a
+    stockpile-like structure's, as the supply check reads them) for a later haul of the body
+    to bring on: the shortfall counts them as the coverage check does, the over-scope tests do
+    not, since the leg that brings the pile on to the body is the one that fills it (seen in
+    review: pad spoil hauled to a stockpile and on to the berm, both legs tagged with the
+    berm, read as a double count). A haul into a pile that no other haul of the body waits for
+    is the body's haul (its tag says so; a haul lane's zone, say). ``excused``: the fill of a
     stockpile-like structure (:func:`stockpile_like`) has no scope to judge either way.
     """
 
@@ -809,6 +1118,8 @@ class VolumeCoverage:
     area_m2: float
     sources: tuple[str, ...] = ()
     source_m3: float | None = None
+    staged: tuple[str, ...] = ()
+    largest_m3: float | None = None
 
     @property
     def counted_m3(self) -> float:
@@ -851,8 +1162,22 @@ class VolumeCoverage:
                    self.shape.deep_floor_m3 - self.cubic_m3)
 
     @property
+    def excess_m3(self) -> float:
+        """The m3 the over-scope tests count: :attr:`cubic_m3` without the hauls staged in a
+        pile."""
+        staged = sum(t.quantity or 0.0 for t, r in zip(self.tasks, self.roles, strict=True)
+                     if r == "dig" and t.id in self.staged)
+        return self.cubic_m3 - staged
+
+    @property
     def share_full(self) -> float:
-        return self.cubic_m3 / self.shape.m3
+        return self.excess_m3 / self.shape.m3
+
+    @property
+    def share_largest(self) -> float:
+        """``excess_m3`` over the largest volume the brief allows (``largest_m3``; the
+        dimensions' largest where the brief bounds none): the double count's share."""
+        return self.excess_m3 / (self.largest_m3 or self.shape.m3)
 
     @property
     def short(self) -> bool:
@@ -861,6 +1186,20 @@ class VolumeCoverage:
     @property
     def over(self) -> bool:
         return self.shape.excess_judged and self.share_full > VOLUME_HIGH
+
+    @property
+    def doubled(self) -> bool:
+        """Whether the digs (or the hauls, bar those staged in a pile) count the body twice: at
+        least :data:`VOLUME_DOUBLE` of the largest volume the brief allows (``largest_m3``)
+        plus :data:`VOLUME_DOUBLE_M3` (a 1 m3 anchor hole dug as two 1 m3 parts is rounding,
+        not a second hole), where the brief bounds one; never for a stockpile-like structure,
+        dug or filled: a pile is whatever gets hauled. That is wider than the shortfall's
+        exemption (``excused``, the fill alone), on purpose: a dug stockpile-like shape is a
+        pile whose height Lightning recorded as a depth, loaded out by "excavate stockpile"
+        tasks that dig nothing new, or a pad Lightning typed "stockpile" (run 2), and the
+        typing alone is too weak to reject a plan on; its excess stays the advisory."""
+        return (self.largest_m3 is not None and not stockpile_like(self.structure)
+                and self.excess_m3 >= VOLUME_DOUBLE * self.largest_m3 + VOLUME_DOUBLE_M3)
 
     @property
     def excused(self) -> bool:
@@ -917,9 +1256,27 @@ class VolumeCoverage:
 
     @property
     def listing_m3(self) -> str:
-        """'T7 300 m3, T8 300 m3': the tasks the over-scope test counts."""
+        """'T7 300 m3, T8 300 m3': the tasks the over-scope tests count (no haul staged in a
+        pile)."""
         return ", ".join(f"{t.id} {qty(t.quantity or 0.0)} m3"
-                         for t, r in zip(self.tasks, self.roles, strict=True) if r == "dig")
+                         for t, r in zip(self.tasks, self.roles, strict=True)
+                         if r == "dig" and t.id not in self.staged)
+
+    @property
+    def parts(self) -> int:
+        """How many tasks :attr:`listing_m3` names: the parts a double count's cut splits
+        over."""
+        return sum(r == "dig" and t.id not in self.staged
+                   for t, r in zip(self.tasks, self.roles, strict=True))
+
+    @property
+    def of_largest(self) -> str:
+        """What a double count's share is of, after its percentage: '' for the dimensions as
+        given, ' of the largest size the brief allows', ' of the 200 m3 the brief's entry
+        states' (:func:`_largest_m3`)."""
+        if self.largest_m3 is not None and self.largest_m3 > self.shape.m3:
+            return f" of the {qty(self.largest_m3)} m3 the brief's entry states"
+        return " of the largest size the brief allows" if self.shape.ranged else ""
 
     def _strip_entry(self, strips: list[Task]) -> str:
         named = " + ".join(f"{t.id} {qty(t.quantity or 0.0)} m2" for t in strips)
@@ -1000,11 +1357,13 @@ def is_haul(task: Task) -> bool:
     return task.robot_type == "hauler" and task.unit == "m3" and (task.quantity or 0.0) > 0
 
 
-def volume_coverages(req: Requirements, graph: TaskGraph) -> list[VolumeCoverage]:
+def volume_coverages(req: Requirements, graph: TaskGraph, *,
+                     brief_footprint: bool = True) -> list[VolumeCoverage]:
     """One :class:`VolumeCoverage` per structure and shape (:func:`dims_volumes`, read with
-    the brief and the constraints of ``req``) that has at least one task of the shape's robot
-    type with a quantity, in requirements order. The tasks of a structure are resolved
-    exactly as the coverage check resolves them
+    the brief and the constraints of ``req``: a recorded diameter whose entry states a
+    rectangle is that rectangle unless ``brief_footprint`` is False) that has at least one
+    task of the shape's robot type with a quantity, in requirements order. The tasks of a
+    structure are resolved exactly as the coverage check resolves them
     (:func:`moonwright.pipeline.tags.serving_tasks`: the id in any case, the type, a label
     containing the id, untagged tasks in its zone, and hauls placed in its zone), so a graph
     the validator accepts cannot escape the volume check by its tag spelling; a dig a haul
@@ -1012,7 +1371,8 @@ def volume_coverages(req: Requirements, graph: TaskGraph) -> list[VolumeCoverage
     structure without a volume, or without any task of the shape's type (coverage's
     business), gets nothing; a graph without quantities (the hand-made fixtures) therefore
     gets nothing."""
-    shapes = {s.id: dims_volumes(s, req) for s in req.structures}
+    shapes = {s.id: dims_volumes(s, req, brief_footprint=brief_footprint)
+              for s in req.structures}
     if not any(shapes.values()):
         return []
     served = {s.id: serving_tasks(s, graph, req.structures) for s in req.structures}
@@ -1033,6 +1393,7 @@ def volume_coverages(req: Requirements, graph: TaskGraph) -> list[VolumeCoverage
             area, stripped = 0.0, 0.0
             sources: tuple[str, ...] = ()
             source_m3: float | None = None
+            staged: tuple[str, ...] = ()
             if shape.phase == "excavation":
                 digs = {t.id for t in typed if t.unit == "m3" and not rehandles(t)}
                 roles = tuple(_dug_role(t, digs, before) for t in typed)
@@ -1048,17 +1409,80 @@ def volume_coverages(req: Requirements, graph: TaskGraph) -> list[VolumeCoverage
                 if sources:
                     source_m3 = sum(x.floor_m3 for sid in sources for x in shapes[sid]
                                     if x.phase == "excavation")
+                piled = {t.id for t in hauls if _in_pile(t, req.structures)}
+                staged = tuple(t.id for t in hauls if t.id in piled and any(
+                    t.id in before.get(h.id, set()) for h in hauls if h.id not in piled))
             cubic = sum(t.quantity or 0.0 for t, r in zip(typed, roles, strict=True) if r == "dig")
-            out.append(VolumeCoverage(structure=s, shape=shape, robot=robot, tasks=typed,
-                                      roles=roles, cubic_m3=cubic, stripped_m3=stripped,
-                                      area_m2=area, sources=sources, source_m3=source_m3))
+            out.append(VolumeCoverage(
+                structure=s, shape=shape, robot=robot, tasks=typed, roles=roles,
+                cubic_m3=cubic, stripped_m3=stripped, area_m2=area, sources=sources,
+                source_m3=source_m3, staged=staged,
+                largest_m3=_largest_m3(s, shape, req, body=shape is shapes[s.id][0])))
     return out
+
+
+def _in_pile(haul: Task, structures: Sequence[Structure]) -> bool:
+    """Whether a haul drops its material in a pile, read zone first as the supply check reads
+    its target (:func:`~moonwright.pipeline.tags.haul_target`): a zone no structure claims, or
+    a stockpile-like structure's."""
+    target = haul_target(haul, structures)
+    return target is None or stockpile_like(target)
+
+
+def _stated_m3(structure: Structure, req: Requirements) -> float | None:
+    """The largest volume the brief states on the lines that state every length figure the
+    structure records (:func:`_states_figures`: its entry, whatever its type; "about 280
+    cubic metres of fill", "60 m3"); None when they state none or no brief is known."""
+    lines = [line for line in brief_lines(req.source_brief)
+             if _states_figures(line, structure)] if req.source_brief else []
+    figures = [float(m[1].replace(",", "")) for line in lines
+               for m in _VOLUME_FIGURE_RE.finditer(line)]
+    return max(figures) if figures else None
+
+
+def _largest_m3(structure: Structure, shape: Shape, req: Requirements, *,
+                body: bool) -> float | None:
+    """The largest volume the brief allows for one shape of a structure, a double count's
+    measure (phase 3i): the dimensions' largest (``shape.m3``), or for the main body a larger
+    volume the brief states on the line that states the structure's size (:func:`_stated_m3`:
+    isru_stockpile's "about 200 cubic metres of loose regolith taken from three 20 m by 10 m
+    strips", which Lightning recorded as one 70 m3 "borrow_strip" in runs 2 and 3: a plan that
+    digs all three is no double count). None where the brief bounds none: walls sloped by an
+    unstated ratio (``excess_judged`` False) and a placed body whose base width the brief does
+    not state (:func:`base_width_stated`: its section is a guess, the least it holds, never
+    the largest; propellant_pit_and_berm's berm "30 m arc ... 2.5 m high", recorded 4 m wide
+    from the structure prompt's example)."""
+    if not shape.excess_judged:
+        return None
+    if shape.phase == "haul" and not base_width_stated(structure, req):
+        return None
+    stated = _stated_m3(structure, req) if body and shape.kind != "trench" else None
+    return max(shape.m3, stated or 0.0)
 
 
 def volume_shortfalls(req: Requirements, graph: TaskGraph) -> list[VolumeCoverage]:
     """The coverages below :data:`VOLUME_LOW` of their floor, the fill of stockpile-like
-    structures excused: what ``validate_graph`` reports as ``volume:<structure>``."""
+    structures excused: what ``validate_graph`` reports as ``volume:<structure>``, with the
+    double counts (:func:`volume_double_counts`)."""
     return [c for c in volume_coverages(req, graph) if c.short and not c.excused]
+
+
+def volume_double_counts(req: Requirements, graph: TaskGraph) -> list[VolumeCoverage]:
+    """The coverages whose digs or hauls count the body twice (:attr:`VolumeCoverage.doubled`:
+    :data:`VOLUME_DOUBLE` of the largest volume the brief allows plus :data:`VOLUME_DOUBLE_M3`
+    or more, never a stockpile's): what ``validate_graph`` reports as ``volume:<structure>``
+    besides the shortfalls. Seen live (phase 3i): the landing-pad demo's first graph hauled
+    240 m3, the 40 x 1.5 x 4 m box, into the 120 m3 berm in 3 of 3 tries, and run 2's
+    habitat_berm_tight_horizon ultra #1 verified with 2 x 280 m3 for its 280 m3 berm ("560 m3 /
+    2 = 280 m3": the box of the 70 x 2 x 4 m berm, split in two)."""
+    return [c for c in volume_coverages(req, graph) if c.doubled]
+
+
+def volume_conflicts(req: Requirements, graph: TaskGraph) -> list[VolumeCoverage]:
+    """Every coverage the validator reports as ``volume:<structure>``, in requirements and
+    shape order: a shortfall (:func:`volume_shortfalls`) or a double count
+    (:func:`volume_double_counts`); one coverage is never both."""
+    return [c for c in volume_coverages(req, graph) if (c.short and not c.excused) or c.doubled]
 
 
 def _times(share: float) -> str:
@@ -1072,13 +1496,23 @@ def _times(share: float) -> str:
 
 
 SHORTFALL_MARK = " total only "   # in every shortfall advisory, never in an excess one
+DOUBLE_MARK = ", a double count"  # closes an excess the validator rejects (VOLUME_DOUBLE),
+#                                   and marks the verdict's detail of one
 
 
 def is_shortfall(advisory: str) -> bool:
     """Whether a ``volume:<structure>`` advisory is a shortfall (what the validator's verdict
-    also carries) rather than an excess (which no verdict carries: a berm hauled twice over
-    while its key trench is short shares the id ``volume:S2`` with the trench's conflict)."""
+    also carries) rather than an excess (which no verdict carries below
+    :data:`VOLUME_DOUBLE`: a berm hauled 1.6 times over while its key trench is short shares
+    the id ``volume:S2`` with the trench's conflict)."""
     return advisory.startswith("volume:") and SHORTFALL_MARK in advisory
+
+
+def is_double_count(advisory: str) -> bool:
+    """Whether a ``volume:<structure>`` advisory is an excess the validator's verdict also
+    carries (:attr:`VolumeCoverage.doubled`, its text closing with :data:`DOUBLE_MARK`)
+    rather than one between :data:`VOLUME_HIGH` and :data:`VOLUME_DOUBLE`, a warning alone."""
+    return advisory.startswith("volume:") and advisory.endswith(DOUBLE_MARK)
 
 
 def _shortfall_text(c: VolumeCoverage) -> str:
@@ -1097,14 +1531,19 @@ def volume_advisories(req: Requirements, graph: TaskGraph) -> list[str]:
     (the share rounded down, so a 69.96 % shortfall never prints the 70 % it missed) and is
     also a validation conflict on a whole plan (``validate_graph``); an excess, judged on the
     digs alone (a pad stripped and then dug in full is no excess, and spoil bladed into a
-    windrow is no second dig), reads ``total 600 m3 (200 %): hauled twice over`` / ``dug
-    twice over`` and stays a warning for the trace and the repair prompt (the parts of a
-    split must sum to the total, never repeat it). The fill of a stockpile-like structure
-    (:func:`stockpile_like`) is judged neither way: a pile is whatever gets hauled. Seen live
-    (phase 3c): a 360 m3 borrow strip planned as 600 m2 of stripping to fit one battery, a
-    300 m3 berm hauled twice over, a 20 m pad dug as a 12 m one, a 57.6 m3 key trench
-    "repaired" with two 5 m3 tasks. Meant for a whole plan: on the remaining graph of a
-    replan the finished work is gone, so the task-graph stage does not call it there."""
+    windrow is no second dig), reads ``total 250 m3 (159 %): dug 1.6 times over`` and stays
+    a warning for the trace and the repair prompt (the parts of a split must sum to the
+    total, never repeat it), up to :data:`VOLUME_DOUBLE` of the largest volume the brief
+    allows: from there it is a double count and the validator's conflict too
+    (:attr:`VolumeCoverage.doubled`), and its text closes with :data:`DOUBLE_MARK` (``total
+    600 m3 (200 %): hauled twice over, a double count``) so a repair is not told it twice
+    (:func:`is_double_count`). Hauls staged in a pile count for neither (the leg that brings
+    the pile on to the body is the one that fills it). The fill of a stockpile-like
+    structure (:func:`stockpile_like`) is judged neither way: a pile is whatever gets
+    hauled. Seen live (phase 3c): a 360 m3 borrow strip planned as 600 m2 of stripping to fit
+    one battery, a 300 m3 berm hauled twice over, a 20 m pad dug as a 12 m one, a 57.6 m3 key
+    trench "repaired" with two 5 m3 tasks. Meant for a whole plan: on the remaining graph of
+    a replan the finished work is gone, so the task-graph stage does not call it there."""
     out: list[str] = []
     for c in volume_coverages(req, graph):
         if c.excused:
@@ -1114,22 +1553,25 @@ def volume_advisories(req: Requirements, graph: TaskGraph) -> list[str]:
         elif c.over:
             shape = c.shape
             verb = "dug" if shape.phase == "excavation" else "hauled"
-            which = ("" if all(r == "dig" for r in c.roles)
+            which = (" placed in it" if c.staged
+                     else "" if all(r == "dig" for r in c.roles)
                      else " that dig" if "rehandle" in c.roles else " in m3")
             out.append(f"volume:{c.structure.id}: its dimensions give {shape.m3_text} m3 "
                        f"({shape.how}) but its {shape.phase} tasks{which} ({c.listing_m3}) "
-                       f"total {qty(c.cubic_m3)} m3 ({pct(c.share_full)}): {verb} "
-                       f"{_times(c.share_full)} over")
+                       f"total {qty(c.excess_m3)} m3 ({pct(c.share_full)}): {verb} "
+                       f"{_times(c.share_full)} over" + (DOUBLE_MARK if c.doubled else ""))
     return out
 
 
-def volume_shares(req: Requirements, graph: TaskGraph) -> dict[str, float]:
+def volume_shares(req: Requirements, graph: TaskGraph, *,
+                  brief_footprint: bool = True) -> dict[str, float]:
     """``{structure id: judged share}`` for every structure and shape the advisory judges
     (:attr:`VolumeCoverage.judged_share`, the smallest when a structure has several shapes;
     the fill of a stockpile-like structure is not judged), whether or not it is out of range:
-    what the eval reports as ``min_volume_share``."""
+    what the eval reports as ``min_volume_share`` (``brief_footprint`` as in
+    :func:`volume_coverages`)."""
     out: dict[str, float] = {}
-    for c in volume_coverages(req, graph):
+    for c in volume_coverages(req, graph, brief_footprint=brief_footprint):
         if not c.excused:
             out[c.structure.id] = min(c.judged_share, out.get(c.structure.id, math.inf))
     return out
@@ -1330,18 +1772,22 @@ def base_width_stated(structure: Structure, req: Requirements | None = None) -> 
                if line != entry and _states_size(line, structure))
 
 
-def _work_area(structure: Structure, req: Requirements | None) -> tuple[float, bool, str] | None:
+def _work_area(structure: Structure, req: Requirements | None, *,
+               brief_footprint: bool = True) -> tuple[float, bool, str] | None:
     """``(m2, placed, basis)``: the area compaction and sintering treat on the smallest size
     the brief allows (an ``area_m2`` extra; the floor of a dug bowl or box, the bottom when
     its walls slope; a berm's base when the brief states its width, :func:`base_width_stated`,
     else the least base it can have, as wide as it is high (side slopes of 63 degrees or
     less): length x height, ``basis`` saying so; a flat ``length_m`` x ``width_m`` or
     ``diameter_m`` surface), whether it is a placed body, and how the area was read ('' for
-    a stated size); None when the dimensions give none."""
+    a stated size); None when the dimensions give none. A recorded diameter is read as the
+    rectangle the brief states, as :func:`dims_volumes` reads it (``brief_footprint``)."""
+    if brief_footprint:
+        structure = with_judged_footprint(structure, req)
     d = structure.dims()
     if d.get("area_m2", 0.0) > 0:
         return d["area_m2"], False, ""
-    shapes = dims_volumes(structure, req)
+    shapes = dims_volumes(structure, req, brief_footprint=brief_footprint)
     body = shapes[0] if shapes and shapes[0].kind != "trench" else None
     if body is not None:
         if body.phase == "haul" and not base_width_stated(structure, req):
@@ -1362,12 +1808,14 @@ def _work_area(structure: Structure, req: Requirements | None) -> tuple[float, b
     return None
 
 
-def area_coverages(req: Requirements, graph: TaskGraph) -> list[AreaCoverage]:
+def area_coverages(req: Requirements, graph: TaskGraph, *,
+                   brief_footprint: bool = True) -> list[AreaCoverage]:
     """One :class:`AreaCoverage` per structure and area-work robot type (compactor, printer)
     with at least one task of that type with a quantity: the m2 its tasks plan against the
-    structure's work area (:func:`_work_area`), times its :func:`lifts` for compaction (the
-    count the brief states, read with ``req``). A placed body whose base width the brief does
-    not state is judged on the least base it can have, as wide as it is high
+    structure's work area (:func:`_work_area`, a recorded diameter read as the rectangle the
+    brief states unless ``brief_footprint`` is False), times its :func:`lifts` for compaction
+    (the count the brief states, read with ``req``). A placed body whose base width the brief
+    does not state is judged on the least base it can have, as wide as it is high
     (:func:`_work_area`, :func:`base_width_stated`: access_road's berm "20 m long, 1.5 m high"
     read 33-50 % of a 1:1 base the brief never gave, and is 30 m2 now; a 10 m2 pass over a
     40 m x 2 m berm is still a gap). A placed body's sintering (a berm's crest, whose width no
@@ -1378,7 +1826,7 @@ def area_coverages(req: Requirements, graph: TaskGraph) -> list[AreaCoverage]:
     for s in req.structures:
         if stockpile_like(s):
             continue
-        work = _work_area(s, req)
+        work = _work_area(s, req, brief_footprint=brief_footprint)
         if work is None:
             continue
         area, placed, basis = work
@@ -1398,11 +1846,13 @@ def area_coverages(req: Requirements, graph: TaskGraph) -> list[AreaCoverage]:
     return out
 
 
-def area_shares(req: Requirements, graph: TaskGraph) -> dict[str, float]:
+def area_shares(req: Requirements, graph: TaskGraph, *,
+                brief_footprint: bool = True) -> dict[str, float]:
     """``{structure id: planned m2 / work area}``, the smallest over its compaction and
-    sintering: what the eval reports as ``min_area_share``."""
+    sintering: what the eval reports as ``min_area_share`` (``brief_footprint`` as in
+    :func:`area_coverages`)."""
     out: dict[str, float] = {}
-    for a in area_coverages(req, graph):
+    for a in area_coverages(req, graph, brief_footprint=brief_footprint):
         out[a.structure.id] = min(a.share, out.get(a.structure.id, math.inf))
     return out
 

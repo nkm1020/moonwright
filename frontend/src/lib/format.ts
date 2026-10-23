@@ -184,6 +184,28 @@ export function isResourceFailure(failure: Failure | null | undefined): boolean 
   return failure.conflicts.length > 0 && failure.conflicts.every((c) => RESOURCE_CONFLICT_PREFIXES.has(conflictPrefix(c)));
 }
 
+/** The words that mark a double count (backend rates.DOUBLE_MARK, phase 3i): in the verdict's
+ *  volume detail ("... hauler tasks move 240 m3 (200 %), a double count: T8 120 m3, T9 120 m3
+ *  (240 m3 is the 40 x 1.5 x 4 m box, twice the triangular section)") and at the end of the
+ *  task-graph step's excess advisory ("... hauled twice over, a double count"). */
+export const DOUBLE_MARK = ", a double count";
+
+/** True when a validation verdict's volume conflicts are all double counts (digs or hauls that
+ *  count a body twice; live, a berm hauled as its box) and its other conflicts, if any, are the
+ *  supply conflicts of those hauls: the graph moves too much, so no work is missing. A volume
+ *  conflict's detail (failure.details, aligned with failure.conflicts) says which it is. */
+export function isDoubleCountFailure(failure: Failure | null | undefined): boolean {
+  if (!failure || failure.kind !== "validation") return false;
+  const kinds = failure.conflicts.map((c, i) =>
+    conflictPrefix(c) === "volume"
+      ? (failure.details[i] ?? "").includes(DOUBLE_MARK)
+        ? "double"
+        : "short"
+      : conflictPrefix(c),
+  );
+  return kinds.includes("double") && kinds.every((k) => k === "double" || k === "supply");
+}
+
 /** "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B" -> "Nemotron-3-Super-120B-A12B"; the offline
  *  client reports "fixture:<file>" as its model, which reads as "recorded answer". */
 export function shortModel(model: string): string {

@@ -48,6 +48,7 @@ import {
   fmtSeconds,
   fmtSuggestion,
   fmtWh,
+  isDoubleCountFailure,
   isResourceFailure,
   lastFailedStep,
   planSuggestions,
@@ -723,6 +724,16 @@ function retryGuidance(plan: PlanResult): { note: string; next: string } {
     return {
       note: "Edit the requirements or the brief, then plan again: the core above names the budget that does not fit.",
       next: "edit the requirements or the brief, then plan again.",
+    };
+  }
+  if (isDoubleCountFailure(plan.failure)) {
+    // phase 3i: digs or hauls that count a body twice (live, a berm hauled as its box): the
+    // graph moves too much, so the verdict names no missing work and no edit of the brief helps
+    return {
+      note: `Plan again: the verdict above names digs or hauls that count a body's m³ twice${
+        plan.repairs === 0 ? "; with repair rounds on, Nemotron cuts them to the body itself" : ""
+      }.`,
+      next: "plan again for a graph that moves each body once.",
     };
   }
   const conflicts = plan.failure?.conflicts ?? [];

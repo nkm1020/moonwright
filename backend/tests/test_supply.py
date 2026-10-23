@@ -95,8 +95,17 @@ PILE = {"id": "S5", "type": "spoil_stockpile", "zone": "Z5"}
 
 
 # ----------------------------------------------------------------------------- the live cases
+def halved(graph: TaskGraph) -> TaskGraph:
+    """The live habitat graph with its two berm haul parts splitting the 280 m3 body (140 m3
+    each) instead of the 560 m3 box of the 70 x 2 x 4 m berm ("560 m3 / 2 = 280 m3" each): the
+    double count phase 3i rejects, set aside so a test can look at the hauls' edges alone."""
+    return TaskGraph(tasks=[t.model_copy(update={"quantity": 140.0}) if t.id in ("T7", "T8")
+                            else t for t in graph.tasks])
+
+
 def test_the_live_habitat_plan_hauls_berm_fill_before_any_dig() -> None:
-    req, graph = live()
+    req, saved = live()
+    graph = halved(saved)
     when = entries("habitat_berm")
     digs = [t.id for t in graph.tasks if is_dig(t)]
     assert digs == ["T3", "T4", "T5", "T6"]
@@ -104,15 +113,22 @@ def test_the_live_habitat_plan_hauls_berm_fill_before_any_dig() -> None:
     failure = validate_graph(req, graph, coverage=True)
     assert failure is not None and failure.conflicts == ["supply:T7", "supply:T8"]
     assert failure.details == [
-        ("T7 hauls 280 m3 for S2 (berm) but waits for no excavation, so it could start before "
+        ("T7 hauls 140 m3 for S2 (berm) but waits for no excavation, so it could start before "
          "any material is dug"),
-        ("T8 hauls 280 m3 for S2 (berm) but waits for no excavation, so it could start before "
+        ("T8 hauls 140 m3 for S2 (berm) but waits for no excavation, so it could start before "
          "any material is dug")]
     assert failure.hint == (
         "A haul cannot start before its material is dug: make T7 and T8 wait for the digs that "
         "supply them (S1 foundation pit: T3, T4; S3 borrow strip: T5, T6)" + HINT_TAIL)
-    # nothing else is wrong with the plan: CP-SAT verified it as it is
+    # nothing else is wrong with the hauls' edges: CP-SAT verified the plan as it is
     assert validate_graph(req, graph, coverage=True, supply=False) is None
+    # as saved, the two parts haul the berm's 560 m3 box: the double count (phase 3i)
+    failure = validate_graph(req, saved, coverage=True)
+    assert failure is not None and failure.conflicts == ["volume:S2", "supply:T7", "supply:T8"]
+    assert failure.details[0] == (
+        "S2 (berm): dimensions 70 m long, 2 m high, 4 m wide at the base, triangular section = "
+        "280 m3 of fill; hauler tasks move 560 m3 (200 %), a double count: T7 280 m3, T8 280 m3 "
+        "(560 m3 is the 70 x 2 x 4 m box, twice the triangular section)")
 
 
 def test_the_repair_the_hint_asks_for_passes_with_each_haul_part_on_its_dig_parts() -> None:
@@ -210,21 +226,26 @@ def test_a_berm_haul_that_waits_for_its_own_key_trench_alone_is_short() -> None:
 
 # ----------------------------------------------------------------------------- switches
 def test_supply_judges_whole_plans_only_and_follows_the_volume_switch() -> None:
-    req, graph = live()
+    req, saved = live()
+    graph = halved(saved)                       # the hauls' edges alone, no double count
     assert validate_graph(req, graph) is None                       # a replan's remaining graph
     assert validate_graph(req, graph, coverage=True, volume=False) is None  # the planner's replan
     forced = validate_graph(req, graph, supply=True)
     assert forced is not None and forced.conflicts == ["supply:T7", "supply:T8"]
     assert validate_graph(req, graph, volume=True) == forced        # volume=True brings it along
     assert validate_graph(req, graph, coverage=True, volume=True, supply=False) is None
+    # the double count of the graph as saved follows the volume switch it belongs to
+    assert validate_graph(req, saved, coverage=True, volume=False) is None
+    doubled = validate_graph(req, saved, volume=True)
+    assert doubled is not None and doubled.conflicts == ["volume:S2", "supply:T7", "supply:T8"]
 
 
 def test_supply_runs_after_volume_and_before_energy() -> None:
     r = reqs(PAD, BERM)
     g = TaskGraph(tasks=[
-        task("T1", "excavator", 30, "m3", name="Excavate pad bowl"),           # 24 % of S1
-        task("T2", "hauler", 30, "m3", "S2", "Z2", "Haul fill to berm"),        # no dig before
-        task("T3", "excavator", 400, "m3", name="Excavate pad bowl", after=("T1",)),
+        task("T1", "excavator", 30, "m3", name="Excavate pad bowl"),           # with T3, 90 m3
+        task("T2", "hauler", 30, "m3", "S2", "Z2", "Haul fill to berm"),        # 10 % of S2
+        task("T3", "excavator", 60, "m3", name="Excavate pad bowl", after=("T1",)),
     ]).model_copy(deep=True)
     g.tasks[2] = g.tasks[2].model_copy(update={"energy_wh": 6400.0})            # one battery over
     failure = validate_graph(r, g, volume=True)
@@ -533,9 +554,11 @@ def test_a_balance_note_reaches_the_repair_with_how_to_read_it() -> None:
 
 def test_the_planner_repairs_a_haul_that_waits_for_no_dig() -> None:
     """The live failure replayed end to end: the first graph hauls before any dig, the
-    validator rejects it with supply:<haul> (CP-SAT would have verified it), the repair prompt
-    carries the verdict's hint, and the answer that waits for the digs is scheduled with the
-    haul after them."""
+    validator rejects it with supply:<haul> (CP-SAT would have verified it) and, since phase
+    3i, with the double count of its two 280 m3 parts (the berm's 560 m3 box), the repair
+    prompt carries both hints (the double haul's advisory is left out: the verdict says it,
+    the triangular section included), and the answer that waits for the digs is scheduled with
+    the haul after them."""
     req, graph = live()
     parts = {"T7": ["T2", "T3", "T5"], "T8": ["T7", "T4", "T6"]}
     fixed = TaskGraph(tasks=[
@@ -545,9 +568,13 @@ def test_the_planner_repairs_a_haul_that_waits_for_no_dig() -> None:
     result = Planner(client, explain=False, suggest_budget_s=0).plan_from_requirements(req, key="k")
     assert result.success and result.repairs == 1
     verdict = next(s for s in result.steps if s.stage == "validate" and not s.ok)
-    assert verdict.failure.conflicts == ["supply:T7", "supply:T8"]
+    assert verdict.failure.conflicts == ["volume:S2", "supply:T7", "supply:T8"]
     repair_user = next(u for role, u in client.users if role == "repair")
     assert "supply:T7" in repair_user and "S3 borrow strip: T5, T6" in repair_user
+    assert "cut the S2 hauls to 280 m3 in total (for example 2 x 140 m3)" in repair_user
+    assert "its fill is length x height x base width / 2 (70 x 2 x 4 / 2 = 280 m3)" in repair_user
+    assert "triangular section = 280 m3 of fill" in repair_user
+    assert "hauled twice over" not in repair_user
     entries_ = {e.task: e for e in result.schedule.entries}
     assert entries_["T7"].start_h >= max(entries_[d].end_h for d in ("T3", "T5"))
     assert entries_["T8"].start_h >= max(entries_[d].end_h for d in ("T4", "T6"))

@@ -1,9 +1,11 @@
 """``volume:<structure>`` advisories (phase 3c, stripping semantics and floors in phase 3e):
 the m3 a structure's tasks plan against the volume its dimensions imply. A shortfall is also
 the validator's conflict on a whole plan (``tests/test_volume_conflict.py``); an excess stays
-a warning the trace shows. The shapes below are live findings: a borrow strip planned in m2,
-a berm hauled twice over, a pad dug smaller than the requirements say, a shallow instrument
-pad "stripped" over its whole footprint (a false positive until the m2 credit)."""
+a warning the trace shows up to the double count (175 %, phase 3i, a conflict too:
+``tests/test_double_count.py``), whose advisory says so. The shapes below are live findings: a
+borrow strip planned in m2, a berm hauled twice over, a pad dug smaller than the requirements
+say, a shallow instrument pad "stripped" over its whole footprint (a false positive until the
+m2 credit)."""
 
 from __future__ import annotations
 
@@ -17,6 +19,7 @@ from moonwright.llm.base import FixtureClient, Usage
 from moonwright.pipeline.loop import Planner
 from moonwright.pipeline.rates import (
     STRIP_DEPTH_M,
+    VOLUME_DOUBLE,
     VOLUME_HIGH,
     VOLUME_LOW,
     dims_volume,
@@ -162,16 +165,17 @@ def test_a_berm_hauled_twice_over_is_reported_as_such() -> None:
     assert volume_advisories(r, g) == [
         ("volume:S2: its dimensions give 300 m3 (60 m long, 2.5 m high, 4 m wide at the base, "
         "triangular section) but its haul tasks (T7 300 m3, T8 300 m3) total 600 m3 (200 %): "
-        "hauled twice over")]
-    assert volume_shortfalls(r, g) == []   # an excess is never a conflict
-    assert VOLUME_HIGH == 1.5 and VOLUME_LOW == 0.7
+        "hauled twice over, a double count")]
+    # a shortfall it is not; from 175 % it is the validator's double count (phase 3i)
+    assert volume_shortfalls(r, g) == []
+    assert VOLUME_HIGH == 1.5 and VOLUME_LOW == 0.7 and VOLUME_DOUBLE == 1.75
     pad = req_with({"id": "S1", "type": "landing_pad", "zone": "Z1", "diameter_m": 20, "depth_m": 0.5})
     g = TaskGraph(tasks=[task("T2", "excavator", 250, "m3")])
     assert volume_advisories(pad, g) == [
         ("volume:S1: its dimensions give 157.1 m3 (bowl 20 m across, 0.5 m deep) but its "
          "excavation tasks (T2 250 m3) total 250 m3 (159 %): dug 1.6 times over")]
     g = TaskGraph(tasks=[task("T2", "excavator", 471.24, "m3")])
-    assert volume_advisories(pad, g)[0].endswith("(300 %): dug three times over")
+    assert volume_advisories(pad, g)[0].endswith("(300 %): dug three times over, a double count")
 
 
 def test_an_excess_counts_the_m3_alone() -> None:
@@ -334,7 +338,7 @@ def test_a_haul_placed_in_the_berm_zone_builds_the_berm_whatever_its_tag() -> No
     assert volume_advisories(r, twice) == [
         ("volume:S2: its dimensions give 300 m3 (60 m long, 2.5 m high, 4 m wide at the base, "
          "triangular section) but its haul tasks (T3 300 m3, T4 300 m3) total 600 m3 (200 %): "
-         "hauled twice over")]
+         "hauled twice over, a double count")]
 
 
 def test_a_key_trench_is_a_second_dug_shape_under_a_placed_berm() -> None:
@@ -486,14 +490,15 @@ def test_a_kind_d_trim_that_verifies_is_not_in_scope() -> None:
         "the 95 % a plan in scope covers")
     row = eval_row("solar_array_pad", "loop_on", 1, _verified(solar.requirements, cut), 1.0)
     assert (row.in_scope, row.min_volume_share, row.min_area_share) == (False, 1.0, 0.78)
-    # an excess is no gap: a berm hauled twice is the whole berm (the advisory says the rest)
+    # an excess is no gap: a berm hauled twice is the whole berm (the advisory says the rest;
+    # since phase 3i the validator rejects the double count, so no new run verifies one)
     r = req_with({"id": "S2", "type": "blast_berm", "zone": "Z2", "length_m": 60, "height_m": 2.5,
                   "width_m": 4})
     twice = TaskGraph(tasks=[task("T7", "hauler", 300, "m3", "S2"), task("T8", "hauler", 300, "m3", "S2")])
     row = eval_row("x", "loop_on", 1, _verified(r, twice), 1.0)
     assert (row.in_scope, row.volume_advisories) == (True, 1)
     assert plan_summary(_verified(r, twice), Path("o.json")).splitlines()[2].endswith(
-        "hauled twice over")
+        "hauled twice over, a double count")
 
 
 def test_area_work_is_judged_on_the_floor_of_the_smallest_size() -> None:

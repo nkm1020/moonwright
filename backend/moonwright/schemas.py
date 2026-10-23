@@ -51,8 +51,12 @@ Conventions
                                     the structure's dimensions allow (the smallest one when
                                     the brief allows less: ``min_<dimension>_m``); excavator
                                     m2 tasks count as a surface layer up to 0.2 m, a
-                                    stockpile's fill is never short (``moonwright.pipeline
-                                    .validate``, "Volume")
+                                    stockpile's fill is never short; or (phase 3i) its dig
+                                    or haul parts sum to 175 % (+1 m3) or more of the
+                                    largest volume the brief allows, a double count (live:
+                                    a berm hauled as its length x height x base width box,
+                                    twice its triangular section;
+                                    ``moonwright.pipeline.validate``, "Volume")
     supply:<task_id>                a whole plan's haul (a hauler task in m3) waits for no
                                     source of material (a dig in m3 that is no rehandle; an
                                     m2 strip where its spoil can be what the haul moves), or
