@@ -6,8 +6,11 @@ EX1/EX2) and its feasible repair (``taskgraph_2``); the scripted client decides 
 versus answer re-asks) in both loop conditions, the feedback modes, solver-first runs
 (``start_with_prior``) with escalation, the scope rules of a replan (strict first answer,
 re-scoping repairs, locked tasks), the step payloads (verification receipt, repair diff,
-advisories) and the solver-grounded suggestions a failed run ends with
-(``PlanResult.suggestions`` and the final failed step's ``suggestions`` payload).
+advisories), the solver-grounded suggestions a failed run ends with
+(``PlanResult.suggestions`` and the final failed step's ``suggestions`` payload), the copy
+of a rejected answer's step (the client's own account when it attached one, the
+``schema:json`` / ``schema:shape`` ids otherwise), what a repair round is told about the
+graph it repairs (its advisories) and the whole-plan flags the validator gets.
 """
 
 from __future__ import annotations
@@ -17,12 +20,14 @@ from typing import Any
 
 import pytest
 
+from moonwright.llm import prompts
 from moonwright.llm.base import (
     FIXTURES_DIR,
     FixtureMissing,
     LLMError,
     SchemaMismatch,
     Usage,
+    answer_failure,
     validate_into,
 )
 from moonwright.pipeline import loop as loop_module
@@ -35,7 +40,9 @@ from moonwright.pipeline.loop import (
 )
 from moonwright.pipeline.rates import UNGROUNDED_ADVISORY
 from moonwright.pipeline.schedule import SolveOptions, budget_rows, sequence_travel
+from moonwright.pipeline.taskgraph import generate_task_graph
 from moonwright.schemas import (
+    Failure,
     LoopStep,
     PlanResult,
     Requirements,
@@ -95,8 +102,28 @@ def planner(client: Scripted, max_repairs: int = 3, **options: Any) -> Planner:
 
 
 def failure_block(prompt: str) -> dict[str, Any]:
-    """The FAILURE object of a repair prompt (it is the last block when there is no context)."""
-    return json.loads(prompt.split("FAILURE:\n", 1)[1])
+    """The FAILURE object of a repair prompt: the JSON (indented, never a blank line inside)
+    up to the next block (ADVISORIES, CONTEXT) or the end."""
+    return json.loads(prompt.split("FAILURE:\n", 1)[1].split("\n\n", 1)[0])
+
+
+def attached(kind: str, hint: str, details: list[str], conflicts: list[str] | None = None
+             ) -> LLMError:
+    """A live client's exception with the failure it wrote itself riding on it (the Token
+    Factory client's "Rejected answers" contract)."""
+    exc: LLMError = (SchemaMismatch(hint, "{}", ["tasks.2.after: Input should be a valid list"])
+                     if kind == "schema" else LLMError(hint))
+    exc.failure = Failure(kind=kind, hint=hint, details=details,  # type: ignore[attr-defined]
+                          conflicts=conflicts or [])
+    return exc
+
+
+ULTRA_CUT = ("Nemotron 3 Ultra did not return a valid task graph after 3 asks: the answer was "
+             "cut off at 32,768 tokens, then at 65,536 tokens, then failed the schema")
+ULTRA_LINES = ["ask 1: cut off at 32,768 tokens", "ask 2: cut off at 65,536 tokens",
+               "ask 3 (reasoning off): task T3: 'after' must be a list"]
+TIMED_OUT = ("The Token Factory request to Nemotron 3 Ultra failed: APITimeoutError (Request "
+             "timed out.)")
 
 
 # --------------------------------------------------------------------------- rejected answers
@@ -114,7 +141,8 @@ def test_rejected_repair_answer_is_retried_with_the_same_verdict():
                              ("schedule", 3, True)]
     rejected = result.steps[3]
     assert rejected.failure is not None and rejected.failure.kind == "schema"
-    assert rejected.failure.conflicts == ["schema:tasks.0.duration_h"]
+    assert rejected.failure.conflicts == ["schema:shape"]   # a schema violation, by kind
+    assert rejected.failure.details == ["tasks.0.duration_h: Input should be greater than 0"]
     # round three saw the solver's verdict again, the last valid graph, and why round two died
     third = client.prompts[2]
     assert '"energy:EX1"' in third and "PREVIOUS TASK GRAPH" in third
@@ -742,8 +770,12 @@ def test_on_step_exceptions_propagate():
         Planner(client, explain=False, on_step=boom).plan_from_requirements(REQ, key="k")
 
 
-# --------------------------------------------------------------------------- schema conflict ids
-def test_top_level_schema_errors_get_a_dollar_conflict_id():
+# --------------------------------------------------------------------------- rejected answers
+def test_schema_failures_of_a_plain_client_get_the_json_or_shape_conflict_id():
+    """A client that raises a bare SchemaMismatch (offline, scripted) keeps its hint and
+    details; its conflict ids are the two kinds the UI chips know, ``schema:shape`` for a
+    schema violation (``schema:$`` and ``schema:<field>`` were the old ids) and
+    ``schema:json`` for a detail about the JSON itself."""
     whole_answer_wrong = SchemaMismatch(
         "taskgraph (m): answer failed validation after 2 attempt(s)", "[]",
         [": Input should be a valid dictionary", "tasks: Field required"])
@@ -751,13 +783,232 @@ def test_top_level_schema_errors_get_a_dollar_conflict_id():
     result = planner(client, max_repairs=0, max_answer_retries=0).plan_from_requirements(
         REQ, key="k")
     assert result.failure is not None and result.failure.kind == "schema"
-    assert result.failure.conflicts == ["schema:$", "schema:tasks"]
+    assert result.failure.conflicts == ["schema:shape"]
+    assert result.failure.hint == "taskgraph (m): answer failed validation after 2 attempt(s)"
+    assert result.failure.details == [": Input should be a valid dictionary", "tasks: Field required"]
 
     client = Scripted({("structure", 1): SchemaMismatch(
         "structure (m): answer failed validation", "42", [": Input should be a valid dictionary"])})
     result = planner(client).plan("Build a pad.", brief_id="k")
     assert result.steps[0].failure is not None
-    assert result.steps[0].failure.conflicts == ["schema:$"]
+    assert result.steps[0].failure.conflicts == ["schema:shape"]
+
+    cut = SchemaMismatch("taskgraph (m): answer failed validation after 2 attempt(s)", "",
+                         ["json: the answer was cut off at max_tokens=4096 (empty completion)"])
+    client = Scripted({("taskgraph", 1): cut})
+    result = planner(client, max_answer_retries=0).plan_from_requirements(REQ, key="k")
+    assert result.failure is not None and result.failure.conflicts == ["schema:json"]
+
+    # the stages' mapping on its own (moonwright.llm.base.answer_failure): every kind once, in
+    # order; nothing to go on means a violation; a failed request keeps its words (and an
+    # offline miss its lookup facts); the account a client that knows its asks attached wins
+    mixed = SchemaMismatch("m", "", ["json: no JSON object found in model output",
+                                     "tasks: Field required", ": Input should be a valid dictionary"])
+    assert answer_failure(mixed).conflicts == ["schema:json", "schema:shape"]
+    assert answer_failure(mixed).details == mixed.errors and answer_failure(mixed).hint == "m"
+    assert answer_failure(SchemaMismatch("m", "", [])).conflicts == ["schema:shape"]
+    assert answer_failure(LLMError("repair (m): APITimeoutError: Request timed out.")) == Failure(
+        kind="llm_error", hint="repair (m): APITimeoutError: Request timed out.")
+    assert answer_failure(FixtureMissing("no fixture", ["searched fixtures/k"])) == Failure(
+        kind="llm_error", hint="no fixture", details=["searched fixtures/k"])
+    own = attached("schema", ULTRA_CUT, ULTRA_LINES, ["schema:json", "schema:shape"])
+    assert answer_failure(own) == own.failure
+
+
+def test_a_client_that_accounts_for_its_asks_writes_the_failed_step():
+    """The Token Factory client attaches the failure a person reads to its exception (the
+    model's short name, one line per ask, the two conflict ids); the planner shows it on the
+    rejected step, in the result of a run that never got a graph, in the note the model gets
+    on the re-ask, and on the structure step alike. The failure the run reports after a lost
+    repair round stays the verdict it was answering."""
+    error = attached("schema", ULTRA_CUT, ULTRA_LINES, ["schema:json", "schema:shape"])
+    client = Scripted({("taskgraph", k): error for k in (1, 2, 3)})
+    seen: list[str] = []
+    result = planner(client, on_step=lambda s: seen.append(s.failure.hint if s.failure else "")
+                     ).plan_from_requirements(REQ, key="k")
+    assert not result.success and result.task_graph is None
+    assert result.failure == Failure(kind="schema", conflicts=["schema:json", "schema:shape"],
+                                     hint=ULTRA_CUT, details=ULTRA_LINES)
+    assert [s.failure for s in result.steps] == [result.failure] * 3
+    assert seen == [ULTRA_CUT] * 3   # the account is on the step when on_step sees it
+    assert "cut off at 32,768 tokens" in client.prompts[1] and ULTRA_LINES[2] in client.prompts[1]
+    assert PlanResult.model_validate_json(result.model_dump_json()) == result
+
+    client = Scripted({("taskgraph", 1): INFEASIBLE, ("repair", 2): error})
+    result = planner(client, max_answer_retries=0).plan_from_requirements(REQ, key="k")
+    assert not result.success and result.repairs == 1
+    assert result.steps[3].failure == error.failure
+    assert result.failure is not None and set(result.failure.conflicts) == ENERGY_CORE
+
+    timed_out = attached("llm_error", TIMED_OUT, [
+        "APITimeoutError: Request timed out.",
+        "repair (nvidia/Nemotron-3-Ultra-550b-a55b) on https://api.tokenfactory.nebius.com/v1/"])
+    client = Scripted({("taskgraph", 1): INFEASIBLE, ("repair", 2): timed_out, ("repair", 3): FEASIBLE})
+    result = planner(client).plan_from_requirements(REQ, key="k")
+    assert result.success and result.steps[3].failure == timed_out.failure
+    assert result.steps[3].failure is not None and result.steps[3].failure.kind == "llm_error"
+    assert TIMED_OUT in client.prompts[2]
+
+    structure = attached("schema", "Nemotron 3.5 Lightning did not return valid requirements "
+                         "after 2 asks: the answer failed the schema twice",
+                         ["ask 1: 'robots' is missing",
+                          "ask 2: robot HL1: 'battery_wh' must be a number"], ["schema:shape"])
+    client = Scripted({("structure", 1): structure})
+    result = planner(client).plan("Build a pad.", brief_id="k")
+    assert not result.success and [s.stage for s in result.steps] == ["structure"]
+    assert result.steps[0].failure == structure.failure and result.failure == structure.failure
+
+    # an offline miss is deterministic and keeps its own words
+    client = Scripted({("taskgraph", 1): INFEASIBLE,
+                       ("repair", 2): FixtureMissing("missing fixture taskgraph_2.json")})
+    result = planner(client).plan_from_requirements(REQ, key="k")
+    assert result.failure is not None and result.failure.kind == "llm_error"
+    assert result.failure.hint == "missing fixture taskgraph_2.json"
+
+
+# --------------------------------------------------------------------------- what a repair is told
+VOLUME_NOTE = "volume:S2: 600 m3 planned for the 300 m3 berm (200 %)"
+
+
+def with_note(real):
+    """``generate_task_graph`` with one volume advisory on the step of every graph it returns."""
+    def noisy(*args, **kwargs):
+        graph, step = real(*args, **kwargs)
+        if graph is not None:
+            step.payload = {**(step.payload or {}), "advisories": [VOLUME_NOTE]}
+        return graph, step
+    return noisy
+
+
+def test_repair_rounds_are_told_the_advisories_of_the_graph_they_repair(monkeypatch):
+    """The advisories of the step that produced the graph a repair answers reach the repair
+    prompt as the ADVISORIES block under FAILURE (``generate_task_graph(advisories=...)`` ->
+    ``repair_messages``), on the re-ask after a rejected repair answer too, never on the first
+    graph's prompt; a replan's own context follows them."""
+    monkeypatch.setattr(loop_module, "generate_task_graph", with_note(loop_module.generate_task_graph))
+    block = prompts.ADVISORIES_HEADER + "\n- " + VOLUME_NOTE
+    client = Scripted({("taskgraph", 1): INFEASIBLE, ("repair", 2): schema_error(),
+                       ("repair", 3): FEASIBLE})
+    result = planner(client).plan_from_requirements(REQ, key="k")
+    assert result.success and result.repairs == 1
+    assert VOLUME_NOTE not in client.prompts[0]
+    for prompt in client.prompts[1:]:
+        assert prompt.endswith("\n\n" + block)                   # no context: the last block
+        assert failure_block(prompt)["kind"] == "infeasible"     # the FAILURE block is intact
+    assert "rejected and discarded" in failure_block(client.prompts[2])["hint"]
+    # the validate steps still carry them for the UI
+    assert [s.payload for s in result.steps if s.stage == "validate"] == \
+        [{"advisories": [VOLUME_NOTE]}] * 2
+
+    # a replan: the advisories, then its own context
+    client = Scripted({("taskgraph", 1): without(FEASIBLE, "T7"), ("repair", 2): FEASIBLE})
+    result = planner(client).plan_from_requirements(
+        REQ, key="k", prior_graph=REMAINING, context="HL2 failed", variant="replan",
+        required_tasks=[t["id"] for t in FEASIBLE["tasks"]])
+    assert result.success
+    assert client.prompts[1].endswith("\n\n" + block + "\n\nCONTEXT:\nHL2 failed")
+
+
+def test_the_stage_renders_the_advisories_of_a_repair_only():
+    """``generate_task_graph(advisories=...)`` is real end to end: a repair's prompt carries
+    them as the ADVISORIES block between FAILURE and CONTEXT; a first graph has no previous
+    graph to warn about, so the argument changes nothing there."""
+    client = Scripted({("taskgraph", 1): FEASIBLE, ("repair", 2): FEASIBLE})
+    graph, _ = generate_task_graph(client, REQ, key="k", advisories=[VOLUME_NOTE])
+    assert graph is not None and VOLUME_NOTE not in client.prompts[0]
+    graph, step = generate_task_graph(
+        client, REQ, key="k", attempt=2, prior=PRIOR_INFEASIBLE,
+        feedback=Failure(kind="infeasible", conflicts=["energy:EX1"]), context="HL2 failed",
+        advisories=[VOLUME_NOTE, "estimate:T3: model said 10 h"])
+    assert graph is not None and step.stage == "repair"
+    assert client.prompts[1].endswith(
+        f"\n\n{prompts.ADVISORIES_HEADER}\n- {VOLUME_NOTE}\n- estimate:T3: model said 10 h"
+        "\n\nCONTEXT:\nHL2 failed")
+    assert failure_block(client.prompts[1])["conflicts"] == ["energy:EX1"]
+
+
+def test_the_stage_gets_the_advisories_as_its_argument(monkeypatch):
+    """The planner hands ``generate_task_graph`` the advisories as ``advisories=``: none on a
+    first graph, the producing step's on every ask of a repair round, none in ``verdict``
+    feedback mode, none on a solver-first replan's first repair (no step produced its graph),
+    and never one whose id the verdict already carries as a conflict (a ``volume:<id>``
+    shortfall is an advisory and a conflict at once)."""
+    real = loop_module.generate_task_graph
+    seen: list[Any] = []
+
+    def spy(*args, advisories=None, **kwargs):
+        seen.append(advisories)
+        graph, step = real(*args, advisories=advisories, **kwargs)
+        if graph is not None:
+            step.payload = {**(step.payload or {}), "advisories": [VOLUME_NOTE]}
+        return graph, step
+
+    monkeypatch.setattr(loop_module, "generate_task_graph", spy)
+    client = Scripted({("taskgraph", 1): INFEASIBLE, ("repair", 2): schema_error(),
+                       ("repair", 3): FEASIBLE})
+    result = planner(client).plan_from_requirements(REQ, key="k")
+    assert result.success and seen == [None, [VOLUME_NOTE], [VOLUME_NOTE]]
+
+    seen.clear()
+    client = Scripted({("taskgraph", 1): INFEASIBLE, ("repair", 2): FEASIBLE})
+    planner(client, feedback_mode="verdict").plan_from_requirements(REQ, key="k")
+    assert seen == [None, None] and VOLUME_NOTE not in client.prompts[1]
+
+    seen.clear()
+    client = Scripted({("repair", 2): FEASIBLE})
+    planner(client).plan_from_requirements(
+        REQ, key="k", prior_graph=PRIOR_INFEASIBLE, context="EX3 failed", variant="replan",
+        required_tasks=PRIOR_INFEASIBLE.ids(), start_with_prior=True)
+    assert seen == [None]
+
+    verdict = Failure(kind="validation", conflicts=["volume:S1", "energy:excavator"])
+    notes = ["volume:S1: its dimensions give 125.7 m3 (...) total only 63 m3 (50 %)",
+             "volume:S2: its dimensions give 300 m3 (...) total 600 m3 (200 %): hauled twice over",
+             "estimate:T3: model said 10 h / 1000 Wh, rate model gives 28 h / 3040 Wh (+204%)",
+             UNGROUNDED_ADVISORY]
+    assert planner(Scripted({}))._repair_notes(notes, verdict) == notes[1:]
+    assert planner(Scripted({}))._repair_notes(notes[:1], verdict) is None
+    # review: a berm on a key trench is two shapes under ONE id. The trench is short (the
+    # verdict's volume:S2) while the berm is hauled twice over (an advisory volume:S2): the
+    # excess is no part of the verdict and drives its energy:hauler, so it is kept
+    berm = Failure(kind="validation", conflicts=["volume:S2", "energy:hauler"])
+    pair = ["volume:S2: its dimensions give 300 m3 (...) total 600 m3 (200 %): hauled twice over",
+            "volume:S2: its dimensions give 36 m3 (key trench ...) total only 10 m3 (27 %)"]
+    assert planner(Scripted({}))._repair_notes(pair, berm) == pair[:1]
+
+
+def test_the_validator_is_told_whether_the_volume_check_applies(monkeypatch):
+    """``validate_graph(volume=...)``: True for a fresh plan and its repairs, False for a
+    replan's remaining graph (the m3 already moved are not in it) and its repairs. A replan's
+    robot positions reach the validator too, so its energy checks charge the transit the
+    solver charges."""
+    real = loop_module.validate_graph
+    seen: list[tuple[bool, bool | None, Any]] = []
+
+    def spy(req, graph, previous=None, *, coverage=False, volume=None, robot_positions=None):
+        seen.append((coverage, volume, robot_positions))
+        return real(req, graph, previous, coverage=coverage, volume=volume,
+                    robot_positions=robot_positions)
+
+    monkeypatch.setattr(loop_module, "validate_graph", spy)
+    client = Scripted({("taskgraph", 1): INFEASIBLE, ("repair", 2): FEASIBLE})
+    assert planner(client).plan_from_requirements(REQ, key="k").success
+    assert seen == [(True, True, None), (True, True, None)]
+
+    seen.clear()
+    positions = {"EX1": (20.0, 18.0), "EX2": (8.0, 22.0)}
+    client = Scripted({("repair", 2): FEASIBLE})
+    result = planner(client).plan_from_requirements(
+        REQ, key="k", prior_graph=PRIOR_INFEASIBLE, context="EX3 failed", variant="replan",
+        required_tasks=PRIOR_INFEASIBLE.ids(), start_with_prior=True, robot_positions=positions)
+    assert result.success and seen == [(False, False, positions), (False, False, positions)]
+
+    seen.clear()
+    client = Scripted({("taskgraph", 1): FEASIBLE})
+    result = planner(client).plan_from_requirements(
+        REQ, key="k", prior_graph=REMAINING, context="HL2 failed", variant="replan",
+        required_tasks=REMAINING.ids())
+    assert result.success and seen == [(False, False, None)]
 
 
 # --------------------------------------------------------------------------- suggestions

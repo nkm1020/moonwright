@@ -92,6 +92,41 @@ A replan (``prior_graph`` given) is only offered ``extend_horizon`` and ``add_ro
 spare never takes the id of a robot the replan lost (``reserved_ids``; until the caller
 passes them, the "Failed robots (unavailable): ..." sentence of the replan context is read).
 The advice runs within ``suggest_budget_s`` seconds (0 disables it) and can never fail a run.
+
+Rejected answers
+----------------
+A live answer the client could not turn into a graph (every ask cut off, not JSON or off the
+schema; a request the SDK gave up on) ends its stage with a ``schema`` / ``llm_error`` step
+whose failure is the client's own account (``moonwright.llm.tokenfactory``, "Rejected
+answers"; the stages take it from the exception, :func:`moonwright.llm.base.answer_failure`):
+the hint "Nemotron 3 Ultra did not return a valid task graph after 2 asks: the answer was cut
+off at 32,768 tokens, then failed the schema" or "The Token Factory request to Nemotron 3
+Ultra failed: APITimeoutError (Request timed out.)", one detail line per ask ("ask 1: cut off
+at 32,768 tokens", "ask 2: task T3: 'after' must be a list"; an ask answered without
+reasoning says "(reasoning off)") and the conflict ids ``schema:json`` (cut off, not JSON,
+empty) and ``schema:shape`` (a schema violation), which replace the old ``schema:$`` /
+``schema:<field>``. A client without that account (offline fixtures, scripted tests) keeps its
+own hint and details under the same two ids. The planner's re-ask quotes the failure
+(:func:`_regeneration_context` / the repair note), so the model is told how its last answer
+ended, and the live client starts it on the rung of its token ladder the failed call left
+(a doubled budget, or reasoning off after a cut at the cap). Offline fixture misses (``"offline:"`` steps)
+are deterministic and never re-asked. The ``structure`` step gets the same treatment; the
+explain stage never fails a run (template fallback).
+
+What a repair is told
+---------------------
+Besides the verdict, a repair round sees the advisories of the step that produced the graph
+it repairs (the rate model's ``estimate:<task>`` gaps, ``ungrounded``, the ``volume:<id>``
+excess), passed as ``generate_task_graph(advisories=...)``, which renders them under the
+FAILURE block (``repair_messages(advisories=...)``), so a 200 % double haul is cut in the same
+round as the energy verdict. An advisory whose id is also a conflict of the verdict (a
+``volume:<id>`` shortfall is both) is left out: the verdict already says it; a ``volume:<id>``
+excess is always kept, since the shortfall under the same id can be another shape of the
+structure (a berm hauled twice over on a key trench dug short). ``verdict``
+feedback mode passes none. The validator's volume check judges a whole plan only:
+``validate_graph(volume=False)`` for the remaining graph of a replan and its repairs,
+``True`` otherwise; it also gets the replan's ``robot_positions``, so its energy checks
+charge the transit the solver charges.
 """
 
 from __future__ import annotations
@@ -100,12 +135,13 @@ import hashlib
 import logging
 import re
 import time
-from collections.abc import Callable, Collection, Iterable, Mapping
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import fields
 from typing import Any, Literal
 
 from moonwright.llm.base import LLMClient
 from moonwright.pipeline.explain import explain_schedule
+from moonwright.pipeline.rates import is_shortfall
 from moonwright.pipeline.relax import suggest_relaxations
 from moonwright.pipeline.schedule import (
     SolveOptions,
@@ -270,7 +306,7 @@ class Planner:
                 raise ValueError("start_with_prior needs a prior_graph")
             graph: TaskGraph | None = prior_graph
             rounds = 1
-            advisories: list[Any] | None = None
+            advisories: list[Any] | None = None   # the notes on the current graph's step
         else:
             rounds = 1
             graph, step = generate_task_graph(
@@ -293,12 +329,13 @@ class Planner:
                                   failure=step.failure)
             advisories = _advisories(step)
 
-        # structure coverage judges a whole plan: a replan's remaining graph legitimately lacks
-        # the phases already built, so only a fresh plan (and its repairs) is checked for it
-        coverage = prior_graph is None
+        # structure coverage and the volume check judge a whole plan: a replan's remaining
+        # graph legitimately lacks the phases already built and the m3 already moved, so only
+        # a fresh plan (and its repairs) is checked for them
+        whole = prior_graph is None
         verdict, schedule = self._check(req, graph, opts, locked, required, steps,
                                         attempt=rounds, baseline=prior_graph, scope="strict",
-                                        advisories=advisories, coverage=coverage,
+                                        advisories=advisories, coverage=whole, volume=whole,
                                         final=max_repairs == 0, replan=replan,
                                         reserved=reserved)
         # `reported` is the failure the caller sees: always the full verdict, never the note
@@ -307,13 +344,14 @@ class Planner:
         while verdict is not None and repairs < max_repairs:
             repairs += 1
             feedback = self._feedback(verdict)
+            notes = self._repair_notes(advisories, feedback)
             retries = 0
             while True:
                 rounds += 1
                 new_graph, step = generate_task_graph(
                     self.client, req, key=key, attempt=rounds, prior=graph,
                     feedback=feedback, context=context, variant=variant, baseline=prior_graph,
-                    locked=underway,
+                    locked=underway, advisories=notes,
                 )
                 if new_graph is not None and len(set(new_graph.ids())) == len(new_graph.tasks):
                     _attach(step, "diff", graph_diff(graph, new_graph))
@@ -338,10 +376,11 @@ class Planner:
                     reported = verdict
                 break
             previous, graph = graph, new_graph
+            advisories = _advisories(step)
             verdict, schedule = self._check(req, graph, opts, locked, required, steps,
                                             attempt=rounds, baseline=prior_graph,
-                                            scope="repair", advisories=_advisories(step),
-                                            coverage=coverage, previous=previous,
+                                            scope="repair", advisories=advisories,
+                                            coverage=whole, volume=whole, previous=previous,
                                             final=repairs >= max_repairs, replan=replan,
                                             reserved=reserved)
             reported = verdict
@@ -375,6 +414,19 @@ class Planner:
             return Failure(kind=verdict.kind)
         return verdict
 
+    def _repair_notes(self, advisories: Sequence[Any] | None, feedback: Failure,
+                      ) -> list[str] | None:
+        """The advisories a repair round is told besides the verdict (module docstring, "What a
+        repair is told"): those of the step that produced the graph it repairs, minus any the
+        verdict already says (:func:`_repeats_verdict`: a ``volume:<id>`` shortfall is both,
+        a ``volume:<id>`` excess never is); none in ``verdict`` feedback mode, where the model
+        learns the kind alone."""
+        if not advisories or self.feedback_mode != "core":
+            return None
+        conflicts = set(feedback.conflicts)
+        notes = [str(a) for a in advisories if not _repeats_verdict(str(a), conflicts)]
+        return notes or None
+
     def _solve_options(self, start_offset_h: int, robot_positions: Positions | None) -> SolveOptions:
         kwargs: dict[str, Any] = {"time_limit_s": self.solver_time_limit_s,
                                   "start_offset_h": start_offset_h}
@@ -395,8 +447,9 @@ class Planner:
         attempt: int = 1,
         baseline: TaskGraph | None = None,
         scope: ScopeMode = "strict",
-        advisories: list[Any] | None = None,
+        advisories: Sequence[Any] | None = None,
         coverage: bool = True,
+        volume: bool = True,
         previous: TaskGraph | None = None,
         final: bool = False,
         replan: bool = False,
@@ -410,15 +463,19 @@ class Planner:
         steps; ``baseline`` is the graph the ``required`` tasks must still match, under the
         rules of ``scope`` (module docstring, "Scope of a replan"); ``advisories`` ride on the
         validate step's payload; ``coverage`` enables the validator's structure coverage check
-        (fresh plans only) and ``previous`` is the graph a repair answered, so a structure the
-        repair stopped serving is reported with the tasks it lost. ``final`` says no repair
-        round can follow this verdict, so a failed step gets the solver-grounded advice in its
-        payload before it is reported (:meth:`_advise`); ``replan`` restricts that advice to
-        what a replan can act on and ``reserved`` names robot ids a spare must not take.
+        and ``volume`` its volume check (both for fresh plans only, module docstring "What a
+        repair is told"); the validator's energy checks charge the transit of the robot
+        positions in ``opts``, as the solver does; ``previous`` is the graph a repair
+        answered, so a structure the repair stopped serving is reported with the tasks it
+        lost. ``final`` says no repair round can follow this verdict, so a failed step gets
+        the solver-grounded advice in its payload before it is reported (:meth:`_advise`);
+        ``replan`` restricts that advice to what a replan can act on and ``reserved`` names
+        robot ids a spare must not take.
         """
         t0 = time.perf_counter()
         failure = _merge(scope_check(graph, required, baseline, locked, scope),
-                         validate_graph(req, graph, previous, coverage=coverage))
+                         validate_graph(req, graph, previous, coverage=coverage, volume=volume,
+                                        robot_positions=opts.robot_positions))
         step = LoopStep(stage="validate", attempt=attempt, ok=failure is None,
                         failure=failure, duration_s=time.perf_counter() - t0,
                         message=None if failure else f"{len(graph.tasks)} tasks valid",
@@ -811,6 +868,27 @@ def _budget(req: Requirements, graph: TaskGraph, verdict: Failure, opts: SolveOp
 def _advisories(step: LoopStep) -> list[Any] | None:
     advisories = (step.payload or {}).get("advisories")
     return list(advisories) if advisories else None
+
+
+def _repeats_verdict(advisory: str, conflicts: Collection[str]) -> bool:
+    """Whether an advisory says what a conflict of the verdict already says: its id is one of
+    ``conflicts``, except a ``volume:<id>`` excess, which no verdict carries (a berm hauled
+    twice over shares ``volume:S2`` with the shortfall of its own key trench, seen in review:
+    the double haul went untold in the round that had to cut it)."""
+    aid = _advisory_id(advisory)
+    if aid not in conflicts:
+        return False
+    return not aid.startswith("volume:") or is_shortfall(advisory)
+
+
+def _advisory_id(advisory: str) -> str:
+    """'volume:S2' of 'volume:S2: its dimensions give ...', 'ungrounded' of 'ungrounded: ...':
+    the conflict-shaped id an advisory starts with."""
+    head, sep, rest = advisory.partition(":")
+    if not sep:
+        return advisory
+    second, sep2, _ = rest.partition(":")
+    return f"{head}:{second}" if sep2 and second and " " not in second else head
 
 
 def _suggestions_of(step: LoopStep) -> list[Suggestion]:

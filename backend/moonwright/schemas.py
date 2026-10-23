@@ -47,13 +47,21 @@ Conventions
                                     structure has no task at all, or a repair dropped every
                                     task the structure had (heuristic documented in
                                     ``moonwright.pipeline.validate``)
+    volume:<structure_id>           a whole plan's tasks cover less than 70 % of the volume
+                                    the structure's dimensions allow (the smallest one when
+                                    the brief allows less: ``min_<dimension>_m``); excavator
+                                    m2 tasks count as a surface layer up to 0.2 m, a
+                                    stockpile's fill is never short (``moonwright.pipeline
+                                    .validate``, "Volume")
     reference:<task_id>.after=<id>  `after` points to an unknown task id
     duplicate:<id>                  duplicated task / robot / zone id
     cycle:<a>-><b>->...-><a>        precedence cycle
     energy_task:<task_id>           a single task needs more energy than any capable robot has
     horizon_path:<a>-><b>->...      critical path alone exceeds the horizon
-    schema:<field>                  LLM output failed schema validation (``schema:$`` when the
-                                    whole answer, not a field, was wrong; see
+    schema:json                     a model answer never reached the schema: cut off by
+                                    max_tokens, not JSON, or empty
+    schema:shape                    a model answer was JSON but violated the schema (which
+                                    item and field is in ``Failure.details``; see
                                     :func:`schema_conflict`)
 
   The scope guard of a replan (``moonwright.pipeline.validate.check_scope``) reports:
@@ -121,11 +129,13 @@ def fmt_wh(mwh: int) -> str:
 
 
 def schema_conflict(error: str) -> str:
-    """``schema:<field path>`` for one validation error line formatted as ``"<loc>: <msg>"``
-    (see ``moonwright.llm.base.validate_into``); ``schema:$`` when the location is empty, i.e.
-    the answer as a whole was not what the schema expects."""
-    loc = error.split(":", 1)[0].strip()
-    return f"schema:{loc or '$'}"
+    """The conflict id of one error line of a rejected model answer (``"<loc>: <msg>"``, see
+    ``moonwright.llm.base.validate_into``): ``schema:json`` for a line about the JSON itself
+    (``json: ...``: cut off by max_tokens, not JSON, empty), ``schema:shape`` for a schema
+    violation, wherever it sits (the location stays in the line, which is a ``Failure``
+    detail). Two ids the UI can name, instead of one per field path (``schema:$`` and
+    ``schema:tasks.2.after`` before phase 3e)."""
+    return "schema:json" if error.split(":", 1)[0].strip() == "json" else "schema:shape"
 
 
 class _Model(BaseModel):
@@ -211,7 +221,9 @@ on a structure. Inspection and staking are ``survey``; stripping and levelling a
 class Structure(_Model):
     """A thing to build: type, zone, the operations the brief asks for on it, and its
     dimensions as extra numeric keys in metres (diameter_m, length_m, width_m, depth_m,
-    height_m, thickness_m; trench_width_m and trench_depth_m for a key trench under a berm)."""
+    height_m, thickness_m; trench_width_m and trench_depth_m for a key trench under a berm;
+    min_<dimension>_m for the smallest size a brief allows), plus ``lifts`` (compaction lifts)
+    and ``wall_slope`` (a pit's sloped walls, "1:1") when the brief states them."""
 
     model_config = ConfigDict(extra="allow", allow_inf_nan=False)
 

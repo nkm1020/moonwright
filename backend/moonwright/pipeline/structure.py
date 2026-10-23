@@ -24,10 +24,10 @@ import re
 import time
 from typing import get_args
 
-from moonwright.llm.base import LLMClient, LLMError
+from moonwright.llm.base import LLMClient, LLMError, answer_failure
 from moonwright.llm.prompts import structure_messages
 from moonwright.pipeline.validate import unstaffed_operations, unsupported_operations
-from moonwright.schemas import Failure, LoopStep, Operation, Requirements, schema_conflict
+from moonwright.schemas import LoopStep, Operation, Requirements
 
 OPERATIONS: tuple[str, ...] = get_args(Operation)
 _OPERATION_SET = frozenset(OPERATIONS)
@@ -149,13 +149,11 @@ def structure_brief(client: LLMClient, brief: str, *, key: str) -> tuple[Require
             role="structure", system=system, user=user, schema=Requirements, key=key
         )
     except LLMError as e:
-        errors = list(getattr(e, "errors", []))
+        # the client's own account of the rejected answer when it attached one (module
+        # docstring of moonwright.llm.tokenfactory, "Rejected answers")
         return None, LoopStep(
             stage="structure", ok=False, duration_s=time.perf_counter() - t0,
-            usage=getattr(e, "usage", None),
-            failure=Failure(kind="schema" if hasattr(e, "errors") else "llm_error",
-                            conflicts=[schema_conflict(x) for x in errors],
-                            hint=str(e), details=errors or list(getattr(e, "details", []))),
+            usage=getattr(e, "usage", None), failure=answer_failure(e),
         )
     req.source_brief = brief
     warnings = [*recover_operations(req), *site_warnings(req), *dimension_warnings(req)]

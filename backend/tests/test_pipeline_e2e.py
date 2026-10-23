@@ -372,9 +372,12 @@ def test_quantities_ground_the_graph_before_it_is_scheduled() -> None:
     assert step.payload == {
         "advisories": [("estimate:T3: model said 10 h / 1000 Wh, rate model gives 28 h / "
                         "3040 Wh (+204%)"),
-                       # the bowl is sized for 0.6 m while the structure says 0.4 m deep
+                       # the bowl is sized for 0.6 m while the structure says 0.4 m deep;
+                       # an excess is judged on the m3 alone, so the 300 m2 strip of T2 (its
+                       # top 0.2 m) does not count twice
                        ("volume:S1: its dimensions give 125.7 m3 (bowl 20 m across, 0.4 m deep) "
-                        "but its excavation tasks (T2 300 m2, T3 190 m3) total 190 m3 (151%)")],
+                        "but its excavation tasks in m3 (T3 190 m3) total 190 m3 (151 %): dug "
+                        "1.5 times over")],
         "rate_model": True, "grounded": len(LANDING_PAD_SCOPE),
     }
     # pure-time tasks of an engaged graph (the surveys) are charged at least their base power

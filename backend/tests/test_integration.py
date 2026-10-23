@@ -228,7 +228,8 @@ def test_cli_eval_arms_replay_the_same_fixtures_and_write_markdown(tmp_path, cap
     assert "## Per kind" not in text   # examples/briefs has no kinds.json
     header = out_csv.read_text().splitlines()[0]
     assert header.startswith("brief,condition,repeat,success")
-    assert header.endswith(",cost_usd,volume_advisories,min_volume_share,in_scope,requirements_sha,kind")
+    assert header.endswith(",cost_usd,volume_advisories,min_volume_share,in_scope,requirements_sha,kind,"
+                           "rejected_answers,min_area_share,plan_path")
     captured = capsys.readouterr()
     assert "95% CI" in captured.out and captured.out.rstrip().endswith(str(out_md))
     assert "ultra/loop_on" in captured.err.splitlines()[-3]   # the table is echoed to stderr
@@ -443,3 +444,88 @@ def test_two_robot_failures_are_both_replanned_within_the_default_budget():
     assert sim.finished_at_h <= plan.requirements.horizon_h
     assert set(sim.frames[-1].done_tasks) == set(plan.task_graph.ids())
     _assert_replans_verified(sim)
+
+
+# --------------------------------------------------------------------------- eval save / resume
+def _without_timings(plan: PlanResult) -> dict:
+    """A PlanResult's dump with every wall-clock figure zeroed, so two runs of one fixture
+    brief compare equal."""
+    data = plan.model_dump()
+    if data["schedule"] is not None:
+        data["schedule"]["solve_time_s"] = 0.0
+    for step in data["steps"]:
+        step["duration_s"] = 0.0
+        if step["usage"] is not None:
+            step["usage"]["latency_s"] = 0.0
+        receipt = (step["payload"] or {}).get("verification")
+        if isinstance(receipt, dict):
+            receipt["solve_time_s"] = 0.0
+    return data
+
+
+def test_cli_eval_save_plans_and_resume_over_example_briefs(tmp_path, capsys, api):
+    """``--save-plans`` keeps every run's PlanResult (the JSON ``POST /plan`` returns) and each
+    job's structuring; after a kill, ``--resume`` skips the jobs the CSV already holds, appends
+    the rest under the one header and summarises old and new rows together."""
+    plans = tmp_path / "plans"
+    out_json, out_csv, out_md = tmp_path / "e.json", tmp_path / "e.csv", tmp_path / "e.md"
+    argv = ["eval", "--briefs", str(EXAMPLES_DIR), "--llm", "fixture", "--save-plans", str(plans),
+            "--out", str(out_json), "--csv", str(out_csv), "--markdown", str(out_md)]
+    assert main(argv) == EXIT_OK
+    briefs = ("access_road", "landing_pad", "tight_battery")
+    assert {p.name for p in plans.iterdir()} == (
+        {f"{b}__{c}__1.plan.json" for b in briefs for c in ("loop_off", "loop_on")}
+        | {f"{b}__1.structure.json" for b in briefs})
+    saved = PlanResult.model_validate_json((plans / "landing_pad__loop_on__1.plan.json").read_text())
+    r = api.post("/plan", json={"brief": BRIEF.read_text(), "brief_id": "landing_pad",
+                                "llm": "fixture", "explain": False})
+    assert r.status_code == 200
+    assert _without_timings(saved) == _without_timings(PlanResult.model_validate(r.json()))
+    assert saved.success and saved.steps[0].stage == "structure"
+    assert "warnings" in (saved.steps[0].payload or {})
+    assert saved.steps[-1].payload is not None and "verification" in saved.steps[-1].payload
+    failed = PlanResult.model_validate_json(
+        (plans / "tight_battery__loop_off__1.plan.json").read_text())
+    assert failed.success is False and failed.failure is not None
+    assert failed.failure.conflicts == ["energy:EX1", "energy:EX2"]
+    assert failed.suggestions and "budget" in (failed.steps[-1].payload or {})
+    record = json.loads((plans / "tight_battery__1.structure.json").read_text())
+    assert record["ok"] is True and isinstance(record["payload"]["warnings"], list)
+    assert record["requirements"]["robots"] and record["usage"]["model"] == "fixture:structure.json"
+    assert record["failure"] is None and record["latency_s"] >= 0.0
+    lines = out_csv.read_text().splitlines()
+    assert len(lines) == 1 + 6 and lines[0].endswith(",kind,rejected_answers,min_area_share,plan_path")
+    with out_csv.open(encoding="utf-8") as fh:
+        rows = {(r["brief"], r["condition"]): r for r in csv.DictReader(fh)}
+    assert rows["tight_battery", "loop_on"]["plan_path"] == "plans/tight_battery__loop_on__1.plan.json"
+    assert rows["tight_battery", "loop_on"]["requirements_sha"] == record["requirements_sha"]
+    assert all(r["rejected_answers"] == "0" for r in rows.values())
+    assert "| rejected answers | p50 cost |" in out_md.read_text()
+    # the run is killed after two jobs: the CSV ends at landing_pad, tight_battery's files are gone
+    out_csv.write_text("\n".join(lines[:5]) + "\n", encoding="utf-8")
+    for name in ("tight_battery__loop_off__1.plan.json", "tight_battery__loop_on__1.plan.json",
+                 "tight_battery__1.structure.json"):
+        (plans / name).unlink()
+    capsys.readouterr()
+    assert main([*argv, "--resume"]) == EXIT_OK
+    err = capsys.readouterr().err
+    assert "resume: 4 rows from a previous run" in err
+    assert "2 of 3 job(s) already complete, skipped" in err
+    assert err.count("tight_battery") == 2 and "landing_pad" not in err   # only that job ran
+    lines = out_csv.read_text().splitlines()
+    assert len(lines) == 1 + 6 and sum(line.startswith("brief,") for line in lines) == 1
+    assert [line.split(",")[0] for line in lines[5:]] == ["tight_battery", "tight_battery"]
+    assert (plans / "tight_battery__loop_on__1.plan.json").is_file()
+    assert (plans / "tight_battery__1.structure.json").is_file()
+    report = json.loads(out_json.read_text())
+    summary = {s["condition"]: s for s in report["summary"]}
+    assert report["resumed_rows"] == 4 and len(report["rows"]) == 6
+    assert report["plans_dir"] == str(plans)
+    assert [(r["brief"], r["condition"]) for r in report["rows"]] == [
+        (b, c) for b in briefs for c in ("loop_off", "loop_on")]
+    assert (summary["loop_off"]["feasible"], summary["loop_on"]["feasible"]) == (2, 3)
+    assert summary["loop_on"]["mean_repairs"] == pytest.approx(1 / 3)
+    assert (summary["loop_on"]["rejected_runs"], summary["loop_on"]["cost_p50_usd"]) == (0, 0.0)
+    text = out_md.read_text()
+    assert "\nresumed: 4 rows from a previous run\n" in text and "6 run(s)" in text
+    assert "| 0/3 | $0.0000 |" in text and f"kept under `{plans}`" in text

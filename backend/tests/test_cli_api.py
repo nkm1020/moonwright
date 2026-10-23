@@ -47,6 +47,7 @@ from moonwright.cli import (
     GraphCapture,
     build_parser,
     condition_name,
+    csv_row,
     eval_markdown,
     eval_row,
     format_gantt,
@@ -58,10 +59,13 @@ from moonwright.cli import (
     matrix_cell,
     parse_arms,
     parse_failure,
+    plan_file_name,
     plan_stem,
     planner_options,
     positive_float,
+    read_csv,
     run_cost_usd,
+    structure_file_name,
     summarise,
     thinking_overrides,
     wilson_interval,
@@ -104,6 +108,7 @@ from moonwright.schemas import (
     SimFrame,
     SimResult,
     Site,
+    Suggestion,
     Task,
     TaskGraph,
     Zone,
@@ -213,7 +218,7 @@ class TestTokenFactoryClient:
         # taskgraph reasons: vendor sampling, bigger budget, no thinking switch
         assert taskgraph["model"] == "env/taskgraph-model"
         assert taskgraph["temperature"] == 1.0 and taskgraph["top_p"] == 0.95
-        assert taskgraph["max_tokens"] == 16384
+        assert taskgraph["max_tokens"] == 32768   # THINKING_MAX_TOKENS (phase 3e token policy)
         assert "chat_template_kwargs" not in taskgraph
         assert explain["model"] == MODEL_DEFAULTS["explain"]
         assert explain["temperature"] == 0.2
@@ -1400,6 +1405,10 @@ class TestCliParsing:
         assert args.loop == "on" and args.repeat == 1 and args.out == Path("eval.json")
         assert (args.workers, args.feedback, args.max_answer_retries) == (1, "core", None)
         assert (args.models, args.thinking, args.markdown) == (None, None, None)
+        assert (args.save_plans, args.resume) == (None, False)
+        args = build_parser().parse_args(
+            ["eval", "--briefs", "b", "--save-plans", "out/live", "--resume"])
+        assert (args.save_plans, args.resume) == (Path("out/live"), True)
         args = build_parser().parse_args(
             ["eval", "--briefs", "b", "--models", "ultra,super", "--thinking", "off",
              "--markdown", "out/eval.md"])
@@ -1957,10 +1966,11 @@ class TestEvalArms:
         unpriced = PlanResult(requirements=REQ, steps=[
             priced_step("taskgraph", "nvidia/Nemotron-3.5-Super-VL", 100, 10)])
         assert run_cost_usd(unpriced) is None
-        # the CSV keeps its prefix and takes the new columns last
+        # the CSV keeps its prefix and takes the new columns last (plan_path stays last)
         assert cli_module.CSV_FIELDS[:4] == ("brief", "condition", "repeat", "success")
-        assert cli_module.CSV_FIELDS[-6:] == ("cost_usd", "volume_advisories", "min_volume_share",
-                                              "in_scope", "requirements_sha", "kind")
+        assert cli_module.CSV_FIELDS[-9:] == ("cost_usd", "volume_advisories", "min_volume_share",
+                                              "in_scope", "requirements_sha", "kind",
+                                              "rejected_answers", "min_area_share", "plan_path")
 
     def test_summarise_percentiles_and_costs(self):
         def row(condition: str, latency: float, cost: float | None, **kw: Any) -> EvalRow:
@@ -2048,6 +2058,8 @@ class TestEvalArms:
         assert "| `D` | `ultra/loop_on` | 1 | 1/1 | 0/1 | 0/1 | 1.00 | `berm` |" in text
         assert "structured once per repeat" in text and "`requirements_sha`" in text
         assert "`feasible in scope` the share that is feasible AND" in text
+        assert "at 95 % or more of the smallest size the brief allows" in text
+        assert "`min_area_share`" in text and "not against the scope" in text
         without_kinds = report.model_copy(update={"rows": [r.model_copy(update={"kind": ""})
                                                            for r in rows]})
         assert "## Per kind" not in eval_markdown(without_kinds)
@@ -2087,7 +2099,8 @@ class TestEvalArmsCommand:
         with out_csv.open(encoding="utf-8") as fh:
             csv_rows = list(csv.DictReader(fh))
         assert {r["condition"] for r in csv_rows} == set(report["conditions"])
-        assert list(csv_rows[0])[-1] == "kind" and csv_rows[0]["cost_usd"] == "0.0"
+        assert list(csv_rows[0])[-1] == "plan_path" and csv_rows[0]["cost_usd"] == "0.0"
+        assert all(r["plan_path"] == "" for r in csv_rows)   # no --save-plans
         captured = capsys.readouterr()
         assert f"arms=ultra={ULTRA_ID},super={SUPER_ID}" in captured.err
         assert "thinking=off" in captured.err and "4 condition(s)" in captured.err
@@ -2615,3 +2628,444 @@ class TestEvalPairing:
         assert cli_module.load_kinds(None, tmp_path / "nowhere") == {}
         with pytest.raises(ValueError, match="--kinds"):
             cli_module.load_kinds(tmp_path / "missing.json", tmp_path)
+
+
+# --------------------------------------------------------------------------- eval save / resume
+def scripted_result(req: Requirements, *, loop_on: bool, rejected: int) -> PlanResult:
+    """A deterministic run: loop off ends on an energy verdict with a verified suggestion,
+    loop on is verified after one repair. ``rejected`` answers are cut off before the valid
+    one (loop off: schema misses of the first graph, loop on: transport errors of the repair)."""
+    verdict = Failure(kind="infeasible", conflicts=["energy:EX1"],
+                      hint="EX1 needs 9,000 Wh but has 5,000 Wh.")
+    cut = Failure(kind="llm_error" if loop_on else "schema",
+                  conflicts=[] if loop_on else ["schema:json"], hint="cut off at max_tokens")
+    first = [usage_step("taskgraph", ULTRA_ID, attempt=i + 1, ok=False, failure=cut)
+             for i in range(0 if loop_on else rejected)]
+    first.append(usage_step("taskgraph", ULTRA_ID, attempt=len(first) + 1))
+    steps = [*first, LoopStep(stage="validate", ok=True),
+             LoopStep(stage="schedule", ok=False, failure=verdict,
+                      payload={"budget": [{"kind": "robot", "subject": "EX1"}]})]
+    if not loop_on:
+        return PlanResult(
+            requirements=req, task_graph=FIRST_GRAPH, success=False, failure=verdict, steps=steps,
+            suggestions=[Suggestion(kind="raise_battery", robot_id="EX1", battery_wh=9000,
+                                    makespan_h=20, verified=True,
+                                    detail="EX1 needs 9,000 Wh (has 5,000 Wh): feasible at 20 h.")])
+    repairs = [usage_step("repair", ULTRA_ID, attempt=2, ok=False, failure=cut)
+               for _ in range(rejected)]
+    repairs.append(usage_step("repair", ULTRA_ID, attempt=2))
+    steps += [*repairs, LoopStep(stage="validate", attempt=2, ok=True),
+              LoopStep(stage="schedule", attempt=2, ok=True, message="makespan 18h (optimal)")]
+    return PlanResult(requirements=req, task_graph=FINAL_GRAPH, schedule=SCHEDULE, success=True,
+                      repairs=1, steps=steps)
+
+
+class ScriptedPlanner(RecordingPlanner):
+    """A Planner whose ``structure`` answers with REQ (a warning in the step's payload) and
+    whose ``plan_from_requirements`` is :func:`scripted_result` for the loop setting it was
+    built with; the first brief's answers are rejected before they are valid (once with the
+    loop off, twice with it on), the others never."""
+
+    def __init__(self, client, **kwargs):
+        super().__init__(client, **kwargs)
+        self.max_repairs = kwargs.get("max_repairs", 3)
+
+    def structure(self, brief, *, brief_id=None):
+        type(self).calls += 1
+        req = REQ.model_copy(update={"source_brief": brief})
+        return req, LoopStep(
+            stage="structure", ok=True, message="scripted",
+            payload={"warnings": ["scripted warning"]},
+            usage=Usage(model=ARM_MODELS["lightning"], input_tokens=10, output_tokens=5,
+                        latency_s=0.5))
+
+    def plan_from_requirements(self, req, *, key, **kwargs):
+        loop_on = self.max_repairs > 0
+        rejected = (2 if loop_on else 1) if key == "zz_brief_0" else 0
+        return scripted_result(req, loop_on=loop_on, rejected=rejected)
+
+
+class TestEvalSaveResume:
+    def test_file_names_are_safe(self):
+        assert plan_file_name("landing_pad", "ultra/loop_on", 2) == "landing_pad__ultra__loop_on__2.plan.json"
+        assert plan_file_name("pad", "loop_off", 1) == "pad__loop_off__1.plan.json"
+        assert plan_file_name("my brief/v2", "x=y/loop_on", 3) == "my_brief__v2__x_y__loop_on__3.plan.json"
+        assert structure_file_name("landing_pad", 2) == "landing_pad__2.structure.json"
+        assert cli_module.file_safe("a/b c:d") == "a__b_c_d"
+
+    def test_eval_row_counts_rejected_answers_and_keeps_the_plan_path(self):
+        cut = Failure(kind="schema", conflicts=["schema:json"], hint="cut off at max_tokens")
+        down = Failure(kind="llm_error", hint="503")
+        verdict = Failure(kind="infeasible", conflicts=["energy:EX1"])
+        steps = [
+            usage_step("structure", "nvidia/lightning"),
+            usage_step("taskgraph", ULTRA_ID, ok=False, failure=cut),
+            usage_step("taskgraph", ULTRA_ID, attempt=2),
+            LoopStep(stage="validate", attempt=2, ok=False,          # a verdict, not a rejection
+                     failure=Failure(kind="validation", conflicts=["scope:pad"])),
+            usage_step("repair", ULTRA_ID, attempt=3, ok=False, failure=down),
+            usage_step("repair", ULTRA_ID, attempt=3, ok=False, failure=cut),
+            usage_step("repair", ULTRA_ID, attempt=3),
+            LoopStep(stage="validate", attempt=3, ok=True),
+            LoopStep(stage="schedule", attempt=3, ok=False, failure=verdict),
+        ]
+        result = PlanResult(requirements=REQ, task_graph=FIRST_GRAPH, success=False,
+                            failure=verdict, repairs=1, steps=steps)
+        row = eval_row("demo", "ultra/loop_on", 1, result, 3.0, first_graph=FIRST_GRAPH,
+                       plan_path="demo__ultra__loop_on__1.plan.json")
+        assert row.rejected_answers == 3 and row.answer_valid is False
+        assert row.plan_path == "demo__ultra__loop_on__1.plan.json"
+        plain = eval_row("demo", "loop_off", 1, FAILED_RESULT, 0.5)   # a failed structuring
+        assert plain.rejected_answers == 0 and plain.plan_path == ""
+        record = cli_module.csv_record(row)
+        assert list(record)[-3:] == ["rejected_answers", "min_area_share", "plan_path"]
+
+    def test_summary_rejected_runs_p50_cost_and_the_markdown_columns(self):
+        def row(condition: str, cost: float | None, rejected: int) -> EvalRow:
+            return EvalRow(brief="b", condition=condition, repeat=1, success=True, repairs=0,
+                           makespan_h=10, latency_s=1.0, llm_latency_s=0.5, input_tokens=1,
+                           output_tokens=1, cost_usd=cost, rejected_answers=rejected)
+
+        rows = [row("ultra/loop_on", 0.01, 0), row("ultra/loop_on", 0.02, 1),
+                row("ultra/loop_on", 0.09, 3), row("super/loop_on", 0.05, 1),
+                row("super/loop_on", None, 1)]
+        ultra, sup = summarise(rows)
+        assert (ultra.rejected_runs, ultra.rejected_answers) == (2, 4)
+        assert (ultra.mean_cost_usd, ultra.cost_p50_usd) == (0.04, 0.02)   # the median, not the mean
+        assert (sup.rejected_runs, sup.rejected_answers, sup.cost_p50_usd) == (2, 2, 0.05)
+        assert summarise([row("c", None, 0)])[0].cost_p50_usd is None
+        table = cli_module.condition_table([ultra, sup])
+        assert table.splitlines()[0].endswith(
+            "| cost / run | cost total | rejected answers | p50 cost |")
+        assert "| $0.0400 | $0.12 | 2/3 (4 answers) | $0.0200 |" in table   # re-asks exceed the runs
+        assert "| $0.0500 | $0.05 | 2/2 | $0.0500 |" in table
+        report = EvalReport(
+            generated_at="2026-10-25T00:00:00+00:00", llm="nebius", briefs_dir="examples/eval",
+            conditions=["ultra/loop_on", "super/loop_on"], repeat=1, summary=[ultra, sup],
+            rows=rows, plans_dir="out/live", resumed_rows=2)
+        text = eval_markdown(report)
+        assert "\nresumed: 2 rows from a previous run\n" in text
+        assert "`rejected answers` is the share of runs" in text
+        assert "`p50 cost` the median cost of a priced run" in text
+        assert "kept under `out/live`" in text and "`plan_path` in the rows" in text
+        assert "2 rows come from an earlier run's CSV" in text
+        plain = eval_markdown(report.model_copy(update={"plans_dir": None, "resumed_rows": 0}))
+        assert "resumed:" not in plain and "kept under" not in plain and "earlier run" not in plain
+        # the text table on stdout / stderr keeps its columns
+        assert format_summary([ultra]).splitlines()[0].split()[-1] == "cost/run"
+
+    def test_csv_rows_round_trip(self, tmp_path):
+        rich = EvalRow(
+            brief="pad", condition="ultra/loop_on", repeat=3, success=True, repairs=1,
+            makespan_h=76, latency_s=40.25, llm_latency_s=38.0, input_tokens=5300,
+            output_tokens=11000, models="a,b", answer_valid=True, first_try_feasible=False,
+            first_duration_h=20, first_energy_wh=8000.0, final_duration_h=16,
+            final_energy_wh=6100.5, scope_drift_pct=-23.75, thinking="on", cost_usd=0.036,
+            volume_advisories=1, min_volume_share=0.36, in_scope=False,
+            requirements_sha="74e00e4b2a", kind="E", rejected_answers=2,
+            plan_path="pad__ultra__loop_on__3.plan.json")
+        failed = EvalRow(brief="pad", condition="loop_off", repeat=1, success=False, repairs=0,
+                         latency_s=1.0, llm_latency_s=0.5, input_tokens=1, output_tokens=0,
+                         failure_kind="llm_error", conflicts=["schema:json", "energy:EX1"],
+                         cost_usd=None, in_scope=None)
+        for row in (rich, failed):
+            assert csv_row(cli_module.csv_record(row)) == row
+        cli_module.write_csv(tmp_path / "r.csv", [rich, failed])
+        header, rows = read_csv(tmp_path / "r.csv")
+        assert tuple(header) == cli_module.CSV_FIELDS and rows == [rich, failed]
+        # a record from before a column existed, with a column this build does not know
+        minimal = {"brief": "b", "condition": "c", "repeat": "1", "success": "True",
+                   "repairs": "0", "latency_s": "1", "llm_latency_s": "0", "input_tokens": "0",
+                   "output_tokens": "0", "novel": "x"}
+        assert csv_row(minimal) == EvalRow(brief="b", condition="c", repeat=1, success=True,
+                                           repairs=0, latency_s=1, llm_latency_s=0,
+                                           input_tokens=0, output_tokens=0)
+        with pytest.raises(ValueError, match="repeat"):
+            csv_row({**minimal, "repeat": "x"})
+        bad = tmp_path / "bad.csv"
+        bad.write_text(",".join(minimal) + "\nb,c,x,True,0,1,0,0,0,x\n", encoding="utf-8")
+        with pytest.raises(ValueError, match="bad.csv line 2"):
+            read_csv(bad)
+        # an older run's CSV: the header is upgraded and the rows re-serialised
+        with bad.open("w", newline="", encoding="utf-8") as fh:
+            writer = csv.DictWriter(fh, fieldnames=list(minimal)[:-1])
+            writer.writeheader()
+            writer.writerow({k: v for k, v in minimal.items() if k != "novel"})
+            writer.writerow({**{k: v for k, v in minimal.items() if k != "novel"}, "repairs": "2"})
+        rows = cli_module.resume_csv(bad)
+        assert [r.repairs for r in rows] == [2]                # the last row of a key wins
+        assert bad.read_text().splitlines()[0] == ",".join(cli_module.CSV_FIELDS)
+        assert read_csv(bad)[1] == rows
+
+    def test_save_plans_keeps_every_plan_and_structure(self, tmp_path, capsys, planner_stub):
+        planner_stub(ScriptedPlanner)
+        plans = tmp_path / "plans"
+        out_json, out_csv, out_md = tmp_path / "e.json", tmp_path / "e.csv", tmp_path / "e.md"
+        briefs = briefs_dir(tmp_path, 2)
+        code = main(["eval", "--briefs", str(briefs), "--llm", "fixture", "--models",
+                     "ultra,super", "--loop", "both", "--repeat", "2", "--save-plans", str(plans),
+                     "--out", str(out_json), "--csv", str(out_csv), "--markdown", str(out_md)])
+        assert code == EXIT_OK
+        ids = ("zz_brief_0", "zz_brief_1")
+        conditions = ("ultra/loop_off", "ultra/loop_on", "super/loop_off", "super/loop_on")
+        plan_files = {plan_file_name(b, c, k) for b in ids for c in conditions for k in (1, 2)}
+        structure_files = {structure_file_name(b, k) for b in ids for k in (1, 2)}
+        assert {p.name for p in plans.iterdir()} == plan_files | structure_files
+        assert "zz_brief_0__ultra__loop_on__2.plan.json" in plan_files   # "/" became "__"
+        # a plan file is the PlanResult the run produced, steps with payloads and suggestions
+        # included (what POST /plan returns): the stub's own result with the structure step first
+        off = PlanResult.model_validate_json(
+            (plans / "zz_brief_0__ultra__loop_off__1.plan.json").read_text())
+        assert off.success is False and off.failure is not None
+        assert off.failure.conflicts == ["energy:EX1"] and off.repairs == 0
+        assert off.steps[0].stage == "structure"
+        assert off.steps[0].payload == {"warnings": ["scripted warning"]}
+        assert off.steps[-1].payload == {"budget": [{"kind": "robot", "subject": "EX1"}]}
+        assert [s.kind for s in off.suggestions] == ["raise_battery"] and off.suggestions[0].verified
+        assert [s.stage for s in off.steps] == ["structure", "taskgraph", "taskgraph", "validate",
+                                                 "schedule"]
+        on = PlanResult.model_validate_json(
+            (plans / "zz_brief_1__super__loop_on__2.plan.json").read_text())
+        planner = ScriptedPlanner(None, max_repairs=3)
+        req, step = planner.structure((briefs / "zz_brief_1.md").read_text(), brief_id="zz_brief_1")
+        expected = planner.plan_from_requirements(req, key="zz_brief_1")
+        expected.steps.insert(0, step)
+        assert on.model_dump() == expected.model_dump()
+        assert on.success and on.repairs == 1 and on.task_graph == FINAL_GRAPH
+        # the structuring of a (brief, repeat) job: requirements, the step's warnings, usage, time
+        record = json.loads((plans / "zz_brief_0__2.structure.json").read_text())
+        assert (record["brief"], record["repeat"], record["ok"]) == ("zz_brief_0", 2, True)
+        assert record["payload"] == {"warnings": ["scripted warning"]}
+        assert record["usage"] == {"model": ARM_MODELS["lightning"], "input_tokens": 10,
+                                   "output_tokens": 5, "latency_s": 0.5}
+        assert record["requirements"]["horizon_h"] == 100
+        assert record["requirements"]["source_brief"].startswith("# Brief 0")
+        assert record["failure"] is None and record["latency_s"] >= 0.0
+        report = json.loads(out_json.read_text())
+        assert {r["requirements_sha"] for r in report["rows"]} == {record["requirements_sha"]}
+        # every row names its plan file, relative to the CSV's directory, in the last column
+        assert report["plans_dir"] == str(plans)
+        assert all(r["plan_path"] == "plans/" + plan_file_name(r["brief"], r["condition"], r["repeat"])
+                   and (out_csv.parent / r["plan_path"]).is_file() for r in report["rows"])
+        with out_csv.open(encoding="utf-8") as fh:
+            csv_rows = list(csv.DictReader(fh))
+        assert list(csv_rows[0])[-2:] == ["min_area_share", "plan_path"]
+        assert {r["plan_path"] for r in csv_rows} == {f"plans/{name}" for name in plan_files}
+        # rejected answers: the first brief's loop-off graph was cut once, its repair twice
+        rows = {(r["brief"], r["condition"], r["repeat"]): r for r in report["rows"]}
+        assert rows["zz_brief_0", "ultra/loop_off", 1]["rejected_answers"] == 1
+        assert rows["zz_brief_0", "super/loop_on", 2]["rejected_answers"] == 2
+        assert rows["zz_brief_1", "ultra/loop_on", 1]["rejected_answers"] == 0
+        summary = {s["condition"]: s for s in report["summary"]}
+        assert (summary["ultra/loop_off"]["rejected_runs"],
+                summary["ultra/loop_off"]["rejected_answers"]) == (2, 2)
+        assert (summary["ultra/loop_on"]["rejected_runs"],
+                summary["ultra/loop_on"]["rejected_answers"]) == (2, 4)
+        assert summary["ultra/loop_on"]["cost_p50_usd"] > 0.0
+        text = out_md.read_text()
+        assert "| rejected answers | p50 cost |" in text
+        assert "| 2/4 | " + format_usd(summary["ultra/loop_off"]["cost_p50_usd"]) + " |" in text
+        assert "| 2/4 (4 answers) | " + format_usd(summary["ultra/loop_on"]["cost_p50_usd"]) + " |" in text
+        assert f"kept under `{plans}`" in text and "resumed:" not in text
+        err = capsys.readouterr().err
+        assert f"save_plans={plans}" in err
+        assert "1 rejected answer," not in err and err.count(", 1 rejected answer") == 4
+        assert err.count(", 2 rejected answers") == 4
+
+    def test_resume_skips_complete_jobs_appends_rows_and_summarises_all(
+            self, tmp_path, capsys, planner_stub):
+        stub = planner_stub(ScriptedPlanner)
+        briefs = briefs_dir(tmp_path, 2)
+        out_json, out_csv, out_md = tmp_path / "e.json", tmp_path / "e.csv", tmp_path / "e.md"
+        argv = ["eval", "--briefs", str(briefs), "--llm", "fixture", "--loop", "both",
+                "--out", str(out_json), "--csv", str(out_csv), "--markdown", str(out_md)]
+        assert main(argv) == EXIT_OK
+        first = out_csv.read_text().splitlines()
+        assert stub.calls == 2 and len(first) == 1 + 4
+        assert "resume" not in capsys.readouterr().err
+        # a third brief arrives: --resume structures and plans only it
+        (briefs / "zz_brief_2.md").write_text("# Brief 2\n**Site.** Build pad 2.")
+        stub.calls, stub.created = 0, []
+        assert main([*argv, "--resume"]) == EXIT_OK
+        err = capsys.readouterr().err
+        assert "resume: 4 rows from a previous run" in err
+        assert "2 of 3 job(s) already complete, skipped" in err
+        assert stub.calls == 1 and len(stub.created) == 2
+        lines = out_csv.read_text().splitlines()
+        assert len(lines) == 1 + 6 and lines[:5] == first          # old rows kept verbatim
+        assert sum(line.startswith("brief,condition,") for line in lines) == 1   # one header
+        assert [line.split(",")[0] for line in lines[5:]] == ["zz_brief_2", "zz_brief_2"]
+        report = json.loads(out_json.read_text())
+        assert report["resumed_rows"] == 4 and len(report["rows"]) == 6
+        assert [(r["brief"], r["condition"]) for r in report["rows"]] == [
+            (b, c) for b in ("zz_brief_0", "zz_brief_1", "zz_brief_2")
+            for c in ("loop_off", "loop_on")]
+        assert [s["runs"] for s in report["summary"]] == [3, 3]
+        assert [s["rejected_runs"] for s in report["summary"]] == [1, 1]
+        text = out_md.read_text()
+        assert "\nresumed: 4 rows from a previous run\n" in text and "6 run(s)" in text
+        assert "4 rows come from an earlier run's CSV" in text
+        # --resume again with nothing to do: no job runs, the report covers the six rows
+        stub.calls = 0
+        assert main([*argv, "--resume"]) == EXIT_OK
+        assert "3 of 3 job(s) already complete" in capsys.readouterr().err
+        assert stub.calls == 0 and len(out_csv.read_text().splitlines()) == 1 + 6
+        report = json.loads(out_json.read_text())
+        assert report["resumed_rows"] == 6 and len(report["rows"]) == 6
+        # without --resume the CSV is overwritten, as before
+        stub.calls = 0
+        assert main(argv) == EXIT_OK
+        assert stub.calls == 3 and len(out_csv.read_text().splitlines()) == 1 + 6
+        assert json.loads(out_json.read_text())["resumed_rows"] == 0
+        assert "resumed:" not in out_md.read_text()
+
+    def test_resume_runs_only_the_missing_conditions_of_a_partial_job(
+            self, tmp_path, capsys, planner_stub):
+        stub = planner_stub(ScriptedPlanner)
+        out_json, out_csv = tmp_path / "e.json", tmp_path / "e.csv"
+        common = ["eval", "--briefs", str(briefs_dir(tmp_path, 2)), "--llm", "fixture",
+                  "--out", str(out_json), "--csv", str(out_csv)]
+        assert main([*common, "--loop", "off"]) == EXIT_OK
+        stub.calls, stub.created = 0, []
+        assert main([*common, "--loop", "both", "--resume"]) == EXIT_OK
+        err = capsys.readouterr().err
+        assert "2 rows from a previous run" in err and "0 of 2 job(s) already complete" in err
+        assert "2 partial jobs: only the missing conditions run" in err
+        assert stub.calls == 2 and [c["max_repairs"] for c in stub.created] == [3, 3]
+        lines = out_csv.read_text().splitlines()
+        assert len(lines) == 1 + 4
+        assert [line.split(",")[1] for line in lines[1:]] == ["loop_off"] * 2 + ["loop_on"] * 2
+        report = json.loads(out_json.read_text())
+        assert report["resumed_rows"] == 2 and [s["runs"] for s in report["summary"]] == [2, 2]
+        assert [(r["brief"], r["condition"]) for r in report["rows"]] == [
+            (b, c) for b in ("zz_brief_0", "zz_brief_1") for c in ("loop_off", "loop_on")]
+
+    def test_resume_upgrades_the_header_of_an_older_csv(self, tmp_path, capsys, planner_stub):
+        stub = planner_stub(ScriptedPlanner)
+        out_json, out_csv = tmp_path / "e.json", tmp_path / "e.csv"
+        old_fields = [f for f in cli_module.CSV_FIELDS
+                      if f not in ("rejected_answers", "plan_path")]
+        old = EvalRow(brief="zz_brief_0", condition="loop_off", repeat=1, success=False,
+                      repairs=0, latency_s=1.5, llm_latency_s=1.0, input_tokens=10,
+                      output_tokens=2, failure_kind="infeasible",
+                      conflicts=["energy:EX1", "horizon"], thinking="off", cost_usd=0.01,
+                      in_scope=False, requirements_sha="abc", kind="D")
+        with out_csv.open("w", newline="", encoding="utf-8") as fh:
+            writer = csv.DictWriter(fh, fieldnames=old_fields, extrasaction="ignore")
+            writer.writeheader()
+            writer.writerow(cli_module.csv_record(old))
+        code = main(["eval", "--briefs", str(briefs_dir(tmp_path, 2)), "--llm", "fixture",
+                     "--loop", "off", "--resume", "--out", str(out_json), "--csv", str(out_csv)])
+        assert code == EXIT_OK and stub.calls == 1
+        err = capsys.readouterr().err
+        assert "resume: 1 row from a previous run" in err and "1 of 2 job(s) already complete" in err
+        lines = out_csv.read_text().splitlines()
+        assert lines[0] == ",".join(cli_module.CSV_FIELDS) and len(lines) == 3
+        with out_csv.open(encoding="utf-8") as fh:
+            rows = list(csv.DictReader(fh))
+        assert [r["brief"] for r in rows] == ["zz_brief_0", "zz_brief_1"]
+        assert (rows[0]["rejected_answers"], rows[0]["plan_path"]) == ("0", "")
+        assert rows[0]["conflicts"] == "energy:EX1;horizon" and rows[0]["latency_s"] == "1.5"
+        report = json.loads(out_json.read_text())
+        assert report["rows"][0]["conflicts"] == ["energy:EX1", "horizon"]
+        assert (report["rows"][0]["kind"], report["rows"][0]["thinking"]) == ("D", "off")
+        assert report["resumed_rows"] == 1
+
+    def test_resume_with_a_broken_csv_is_an_input_error(self, tmp_path, capsys, planner_stub):
+        stub = planner_stub(ScriptedPlanner)
+        out_json, out_csv = tmp_path / "e.json", tmp_path / "e.csv"
+        out_csv.write_text("brief,condition,repeat,success,repairs,latency_s,llm_latency_s,"
+                           "input_tokens,output_tokens\nzz_brief_0,loop_off,one,True,0,1,0,0,0\n")
+        argv = ["eval", "--briefs", str(briefs_dir(tmp_path, 1)), "--llm", "fixture", "--resume",
+                "--out", str(out_json), "--csv", str(out_csv)]
+        assert main(argv) == EXIT_ERROR and stub.calls == 0
+        assert "e.csv line 2" in capsys.readouterr().err
+        assert not out_json.exists()
+        # --resume without a CSV to resume from is a plain run
+        out_csv.unlink()
+        assert main(argv) == EXIT_OK
+        assert "resume: no earlier rows" in capsys.readouterr().err
+        assert len(out_csv.read_text().splitlines()) == 1 + 2 and stub.calls == 1
+
+    def test_resume_drops_a_row_cut_off_while_it_was_appended(self, tmp_path, capsys, planner_stub):
+        """Review: a run killed mid-append leaves a last line without its newline. It parsed
+        as a finished run (missing columns at their defaults: success True, in_scope None),
+        its job was skipped and the line stayed in the CSV for good, moving the summary. It
+        is left out now, cut from the file, and its job runs again."""
+        stub = planner_stub(ScriptedPlanner)
+        out_json, out_csv = tmp_path / "e.json", tmp_path / "e.csv"
+        argv = ["eval", "--briefs", str(briefs_dir(tmp_path, 2)), "--llm", "fixture", "--loop",
+                "both", "--out", str(out_json), "--csv", str(out_csv)]
+        assert main(argv) == EXIT_OK
+        full = out_csv.read_text(encoding="utf-8")
+        summary = json.loads(out_json.read_text())["summary"]
+        lines = full.splitlines()
+        # killed while writing the last row: ten of its columns made it to the file
+        out_csv.write_text("\n".join(lines[:4]) + "\n" + ",".join(lines[4].split(",")[:10]),
+                           encoding="utf-8")
+        assert [r.brief for r in read_csv(out_csv)[1]] == ["zz_brief_0"] * 2 + ["zz_brief_1"]
+        stub.calls = 0
+        assert main([*argv, "--resume"]) == EXIT_OK
+        err = capsys.readouterr().err
+        assert "resume: 3 rows from a previous run" in err and "1 partial job" in err
+        assert stub.calls == 1
+        rows = read_csv(out_csv)[1]
+        assert len(rows) == 4 and len(out_csv.read_text().splitlines()) == 1 + 4
+        def counts(rows: list[dict[str, Any]]) -> list[tuple[Any, ...]]:
+            return [(s["condition"], s["runs"], s["feasible"], s["in_scope"],
+                     s["first_try_feasible"], s["mean_repairs"]) for s in rows]
+
+        assert counts(json.loads(out_json.read_text())["summary"]) == counts(summary)
+        # a cut-off header-only file is no row at all
+        out_csv.write_text("brief,condition,rep", encoding="utf-8")
+        assert read_csv(out_csv) == (["brief", "condition", "rep"], [])
+
+    def test_resumed_rows_keep_naming_their_own_plan_files(self, tmp_path, capsys, planner_stub):
+        """Review: after ``--resume --save-plans DIR2`` the old rows' plan_path only existed
+        under the first DIR, while the report named DIR2; and resuming a partial job into the
+        same DIR rewrote its structure record, losing the requirements the earlier conditions
+        planned from. plan_path is relative to the CSV now, and the second structuring of a
+        job gets its own file."""
+        planner_stub(ScriptedPlanner)
+        out_json, out_csv = tmp_path / "e.json", tmp_path / "e.csv"
+        common = ["eval", "--briefs", str(briefs_dir(tmp_path, 1)), "--llm", "fixture",
+                  "--out", str(out_json), "--csv", str(out_csv)]
+        assert main([*common, "--loop", "off", "--save-plans", str(tmp_path / "a")]) == EXIT_OK
+        assert main([*common, "--loop", "both", "--resume", "--save-plans", str(tmp_path / "a")]) == EXIT_OK
+        assert sorted(p.name for p in (tmp_path / "a").glob("*.structure.json")) == [
+            "zz_brief_0__1.2.structure.json", "zz_brief_0__1.structure.json"]
+        assert main([*common, "--loop", "both", "--repeat", "2", "--resume",
+                     "--save-plans", str(tmp_path / "b")]) == EXIT_OK
+        report = json.loads(out_json.read_text())
+        paths = {(r["condition"], r["repeat"]): r["plan_path"] for r in report["rows"]}
+        assert paths == {("loop_off", 1): "a/zz_brief_0__loop_off__1.plan.json",
+                         ("loop_on", 1): "a/zz_brief_0__loop_on__1.plan.json",
+                         ("loop_off", 2): "b/zz_brief_0__loop_off__2.plan.json",
+                         ("loop_on", 2): "b/zz_brief_0__loop_on__2.plan.json"}
+        assert all((out_csv.parent / p).is_file() for p in paths.values())
+        assert report["plans_dir"] == str(tmp_path / "b")
+        text = eval_markdown(EvalReport.model_validate(report))
+        assert "relative to the CSV's directory" in text
+
+
+def test_a_verified_row_out_of_scope_says_how_far_off(capsys):
+    """The progress line of a verified run that is not in scope names its smallest shares
+    (under the 95 % the eval's in-scope rate needs), not an advisory count that an in-range
+    trim would not even have."""
+    row = EvalRow(brief="small_fleet_long_berm", condition="loop_on", repeat=1, success=True,
+                  repairs=1, makespan_h=64, latency_s=1.0, llm_latency_s=0.5, input_tokens=1,
+                  output_tokens=1, min_volume_share=0.85, min_area_share=0.999, in_scope=False)
+    cli_module.report_row(row)
+    assert "makespan 64h (not in scope: volume 85 %), 1 repair(s)" in capsys.readouterr().err
+
+
+def test_the_eval_banner_names_the_live_clients_token_budgets():
+    """Review: an old backend/.env pins 16,384 tokens and nothing showed the budget a run
+    actually used. The eval prints the live client's budgets, found through its wrappers."""
+    from types import SimpleNamespace
+
+    live = SimpleNamespace(name="nebius", budgets="reasoning 16,384 tokens (x2 when cut, up to "
+                           "65,536), direct 4,096")
+    wrapped = cli_module.NarratedClient(cli_module.GraphCapture(live))
+    assert cli_module.token_budgets(wrapped) == live.budgets
+    assert cli_module.token_budgets(FixtureClient()) is None

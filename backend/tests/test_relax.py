@@ -247,14 +247,17 @@ def test_every_candidate_failing_yields_one_reduce_scope_naming_the_work():
         task("T3", "excavator", 2, 300, "Z1", structure="S1", quantity=10, unit="m2"),
     ])
     failure = verdict(req, graph)
-    assert failure.conflicts == ["energy_task:T1", "energy_task:T2", "energy:excavator",
-                                 "energy:hauler"]
+    # the hauler pool is short only because of T2 (one cause, one verdict); the excavator
+    # pool is short beyond T1 (T3 on top), so it keeps its own
+    assert failure.conflicts == ["energy_task:T1", "energy_task:T2", "energy:excavator"]
     found = suggest_relaxations(req, graph, failure)
     assert [s.kind for s in found] == ["reduce_scope"]
     (s,) = found
     assert not s.verified and s.makespan_h is None
     assert s.detail.startswith("None of the changes tried (")
-    assert "a bigger battery on EX1" in s.detail and "one more hauler" in s.detail
+    assert "a bigger battery on EX1" in s.detail and "a bigger battery on HL1" in s.detail
+    # a cloned hauler cannot carry a task larger than every hauler battery: not worth a solve
+    assert "one more excavator" in s.detail and "one more hauler" not in s.detail
     assert "T1 for S1 (126 m3, 18 h, 2,016 Wh)" in s.detail
     assert "T2 for S2 (188 m3, 16 h, 1,316 Wh)" in s.detail
     assert s.detail.endswith("so cut or defer scope there.")

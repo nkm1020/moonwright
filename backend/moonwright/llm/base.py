@@ -38,7 +38,7 @@ from typing import Any, Protocol, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
-from moonwright.schemas import Role, Usage
+from moonwright.schemas import Failure, Role, Usage, schema_conflict
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -76,6 +76,30 @@ class SchemaMismatch(LLMError):
         super().__init__(message)
         self.raw = raw
         self.errors = errors
+
+
+def answer_failure(error: LLMError) -> Failure:
+    """The :class:`~moonwright.schemas.Failure` of a stage whose model call raised ``error``.
+
+    A client that knows what each of its asks did attaches the failure a person reads to the
+    exception (``error.failure``; the Token Factory client's "Rejected answers": the model's
+    short name, one detail line per ask, ``schema:json`` / ``schema:shape``) and that account
+    is the stage's failure. Any other client (offline fixtures, a scripted test client) gets
+    one built from the exception: ``schema`` for an answer that came back
+    (:class:`SchemaMismatch`, or any exception with error lines), its hint the message, its
+    details the error lines and its conflict ids those lines' two kinds
+    (:func:`~moonwright.schemas.schema_conflict`; ``schema:shape`` when no line says more);
+    ``llm_error`` for a request that failed, with the exception's ``details`` when it has
+    them (:class:`FixtureMissing`)."""
+    attached = getattr(error, "failure", None)
+    if isinstance(attached, Failure):
+        return attached
+    errors = [str(e) for e in getattr(error, "errors", None) or []]
+    if errors or isinstance(error, SchemaMismatch):
+        conflicts = list(dict.fromkeys(schema_conflict(e) for e in errors)) or ["schema:shape"]
+        return Failure(kind="schema", conflicts=conflicts, hint=str(error), details=errors)
+    return Failure(kind="llm_error", hint=str(error),
+                   details=[str(d) for d in getattr(error, "details", None) or []])
 
 
 class LLMClient(Protocol):

@@ -24,12 +24,25 @@ date -u +%Y-%m-%dT%H:%M:%S+00:00 | tee out/eval_start.txt
   2.2 s p50, $0.0013. Total $0.60 for the nine runs; 4 of 9 runs needed a repair round (2 x
   `scope:<structure>` from the brief's operations, 1 x `energy:PR1`, 1 x three rounds ending in
   `horizon, zone:Z1` with the advice `finishing needs 86 h, 26 h past the 60 h deadline`).
+* First live evaluation, Oct 23 (22 briefs x Ultra / Super x 3, 132 runs, $9.9): verified 85 %
+  and 91 % of the runs, but in scope only 45 % and 38 % (the models shrank the work to satisfy
+  the solver), and Ultra with reasoning hit `max_tokens=16384` on 78 of 190 calls. Phase 3e
+  answers both: an under-scoped whole plan is now a `volume:<structure>` conflict the repair
+  must fix (the README, "Volume"; "in scope" now needs 95 % of every volume and compaction /
+  sintering area, so a trimmed kind-D plan no longer counts), and reasoning calls start at
+  32,768 tokens with a cut ask repeated at 65,536 and only a cut at 65,536 asked again without
+  reasoning, the ladder continuing into the planner's re-ask (`.env.example`, "Token
+  budgets"). Expect more output tokens per Ultra call (the budget doubled) and fewer re-asks;
+  the call log records each ask's `max_tokens` and `thinking`.
 
 ## 1. Account and key (smoke)
 
 ```bash
 cd backend
 cp .env.example .env            # put the key in NEBIUS_API_KEY=...
+# an .env made before phase 3e pins MOONWRIGHT_THINKING_MAX_TOKENS=16384, the budget that was cut
+# on 78 of 190 Ultra calls: delete that line (empty = the 32,768 default) or raise it
+grep -n MOONWRIGHT_THINKING_MAX_TOKENS .env
 uv run python - <<'PY'
 import os, openai
 from dotenv import load_dotenv; load_dotenv()
@@ -70,8 +83,12 @@ first-try feasibility, which the repair loop should absorb).
 
 ```bash
 uv run moonwright eval --briefs examples/eval --repeat 3 --loop both --models ultra,super \
-  --thinking auto --llm nebius --workers 3 --max-answer-retries 2 \
+  --thinking auto --llm nebius --workers 3 --max-answer-retries 2 --save-plans out/eval_live_plans \
   --out out/eval_live.json --csv out/eval_live.csv --markdown out/eval_live.md 2>&1 | tee out/eval_live.log
+# interrupted (Ctrl-C, a 429 storm, a dead laptop)? the same command plus --resume:
+uv run moonwright eval --briefs examples/eval --repeat 3 --loop both --models ultra,super \
+  --thinking auto --llm nebius --workers 3 --max-answer-retries 2 --save-plans out/eval_live_plans \
+  --out out/eval_live.json --csv out/eval_live.csv --markdown out/eval_live.md --resume 2>&1 | tee -a out/eval_live.log
 ```
 
 264 planning runs (22 briefs x `ultra/loop_off`, `ultra/loop_on`, `super/loop_off`,
@@ -80,8 +97,11 @@ Lightning, explanations are off in the eval); `--thinking auto` means Ultra / Su
 those two roles and Lightning answers directly. Each brief is structured once per repeat and all
 four conditions plan from that same requirements object (`requirements_sha` in the rows), so the
 arms and the loop settings are a paired comparison and only 66 Lightning calls are made. Rows
-flush to the CSV as they finish and the stderr progress line shows each run's cost (and `scope
-differs from dimensions` when a verified plan carries a volume advisory); the markdown has the
+flush to the CSV as they finish and the stderr progress line shows each run's cost (and `not in
+scope: volume 85 %` when a verified plan covers less than 95 % of a structure's volume or area);
+the eval's first lines print the effective token budgets (`tokens: reasoning 32,768 tokens (x2
+when cut, up to 65,536), direct 4,096`): stop and fix `backend/.env` if they say 16,384. The
+markdown has the
 per-condition table (feasible rate with Wilson CI, feasible *in scope*, first try, repairs,
 makespan, p50 / p95 latency, tokens, cost per run and in total), the per-kind table
 (`examples/eval/kinds.json` is picked up automatically) and the per-brief matrix (`ok 76 h /
@@ -92,24 +112,46 @@ Cost at list prices with the measured per-call figures: Ultra arm 132 runs x ($0
 $0.0003 structure) = $4.7, plus about $0.033 per repair round on the 66 `loop_on` runs ($2.2 per
 mean repair round r); Super arm 132 x about $0.011 = $1.5 plus $0.011 x 66 x r. About $9-12 for
 r around 1, a hard upper bound of about $22 if every `loop_on` run spends all 3 repairs; schema
-re-asks add a few percent. Wall time: Ultra with thinking p50 53 s / p95 132 s per task graph, so
+re-asks add a few percent. Since phase 3e a reasoning ask that used to be cut at 16,384 tokens
+runs on to 32,768 (about three times a typical call's output), so expect the Ultra arm to cost
+somewhat more per call and to need fewer re-asks; a volume conflict can also add repair rounds
+on briefs whose first graph shrank the work. Wall time: Ultra with thinking p50 53 s / p95 132 s per task graph, so
 a `loop_off` run takes about 60 s and a `loop_on` run about 60 s + 35-70 s per repair; Super is
 roughly half. About 80 minutes of work on 3 workers; plan 2 hours with 429 backoff (the SDK
-retries 429 / 5xx with exponential backoff and honours `Retry-After`). There is no resume: a
-killed run keeps its finished CSV rows but a rerun starts over, so when partial progress must
-survive run the arms separately (`--models ultra` to `out/eval_ultra.*`, then `--models super` to
-`out/eval_super.*`).
+retries 429 / 5xx with exponential backoff and honours `Retry-After`).
+
+`--resume` keeps the rows an earlier run left in `--csv` (the last row per brief x condition x
+repeat wins; a CSV with an older header is upgraded, and a last row cut off mid-append is dropped
+so its job runs again), skips every brief x repeat job it already
+holds completely, runs only the missing conditions of a partial job (structured anew, so its new
+rows carry their own `requirements_sha`), appends under one header and builds `--out` and
+`--markdown` from all rows (the markdown says `resumed: N rows from a previous run`). Rows of a
+job that was still running when the run died were never flushed, so they run again. Without
+`--resume` the CSV is overwritten. `--save-plans DIR` writes every run's PlanResult the moment
+it exists as `DIR/<brief>__<arm>__<loop>__<repeat>.plan.json` (exactly what `POST /plan`
+returns; `plan_path` in the rows, relative to the CSV's directory, so a resume into another DIR
+keeps every row's file reachable) and each job's structuring as
+`DIR/<brief>__<repeat>.structure.json` (`.2.structure.json` for the second structuring of a job a
+resume completed); the per-condition table gains a `rejected answers` column
+(runs with a task-graph / repair answer cut off or off the schema, `k/n`) and the median cost.
 
 Ablation (optional, same shape, $4-6): `--loop on --feedback verdict` tells the repair round only
 that the plan was infeasible, which isolates what the minimal infeasibility core is worth.
 
-## 4. Replanning evaluation (needs live plan files first; the eval writes no plans)
+## 4. Replanning evaluation (needs live plan files first)
+
+The eval's `--save-plans` directory already holds a live plan per brief x condition x repeat
+(`replan_eval.py` skips the unverified ones), so no extra planning is needed after section 3:
 
 ```bash
 mkdir -p out/live
 for b in landing_pad tight_battery access_road low_battery_pad habitat_berm_tight_horizon; do
+  cp out/eval_live_plans/${b}__ultra__loop_on__1.plan.json out/live/$b.plan.json
+done
+# or, without an eval run, plan them afresh (5 x about $0.04, about 5 min):
+for b in landing_pad tight_battery access_road low_battery_pad habitat_berm_tight_horizon; do
   uv run moonwright plan examples/eval/$b.md --llm nebius --no-explain -q --out out/live/$b.plan.json
-done                                                                      # 5 x about $0.04, about 5 min
+done
 uv run python scripts/replan_eval.py out/live/*.plan.json --llm nebius --all-tasks --sole-of-type solver \
   --max-escalations 10 --out out/replan_eval_live.json --markdown out/replan_eval_live.md 2>&1 | tee out/replan_eval_live.log
 ```

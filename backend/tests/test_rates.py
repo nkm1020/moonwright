@@ -24,6 +24,7 @@ from moonwright.pipeline.rates import (
     RATE_TABLE_TEXT,
     RATED_TYPES,
     RATES,
+    STRIP_DEPTH_M,
     UNGROUNDED_ADVISORY,
     Rate,
     apply_rates,
@@ -99,6 +100,19 @@ def test_table_shape_and_text() -> None:
                  "assumptions, not measurements"):
         assert line in RATE_TABLE_TEXT
     assert "\n\n" not in RATE_TABLE_TEXT  # compact: one row per line
+
+
+def test_the_m2_row_means_a_surface_layer_up_to_the_strip_depth() -> None:
+    """Phase 3e: the excavator's m2 row is stripping or grading of a surface layer up to
+    ``STRIP_DEPTH_M``; the volume check credits an m2 task on a dug shape with its area x
+    min(depth, STRIP_DEPTH_M), so the table says so where the model reads it."""
+    assert STRIP_DEPTH_M == 0.2
+    row = rate_for("excavator", "m2")
+    assert row is not None
+    assert row.work == "strip or grade a surface layer up to 0.2 m; deeper cuts are excavation in m3"
+    assert ("excavator   m2    25 m2/h   4.8 Wh/m2  strip or grade a surface layer up to 0.2 m; "
+            "deeper cuts are excavation in m3") in RATE_TABLE_TEXT
+    assert f"up to {STRIP_DEPTH_M} m" in RATE_TABLE_TEXT
 
 
 def test_duration_rounding_and_bounds() -> None:
