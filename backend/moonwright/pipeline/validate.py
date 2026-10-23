@@ -12,8 +12,8 @@ Checks, in this order, collecting *all* conflicts of the kinds below before retu
   robot_type with no robot in requirements ................ capability:<task_id>
   physical task without a priced quantity (see below) ..... quantity:<task_id>
   structure coverage (coverage=True only, see below) ...... scope:<structure_id>
-  planned volume short of the dimensions (whole plans
-    only, see below) ...................................... volume:<structure_id>
+  planned volume short of the dimensions, or a double
+    count (whole plans only, see below) ................... volume:<structure_id>
   a haul that waits for no dig, or for too little while
     another dig could supply it (whole plans only, below) . supply:<task_id>
   task energy + transit > max battery of its type ......... energy_task:<task_id>
@@ -67,9 +67,35 @@ whatever gets hauled. The detail quotes the arithmetic (``S2 (borrow_strip): dim
 6 x 0.6 m = 360 m3 of excavation; excavator tasks cover 120 m3 (33 %): T3 600 m2 counts 120 m3
 at 0.2 m``, the share rounded down) and the hint says what to add (``plan the remaining 240
 m3 of S2 as excavator tasks in m3 (split above 60 m3) instead of shrinking the work; keep the
-m2 stripping only for the top 0.2 m``; for a berm, where its fill comes from). Over-scope (a
-berm hauled twice over) stays an advisory of the task-graph stage. Like coverage, the check
-judges a *whole* plan: the remaining graph of a replan has its finished work gone, so
+m2 stripping only for the top 0.2 m``; for a berm, where its fill comes from). Over-scope
+above :data:`~moonwright.pipeline.rates.VOLUME_HIGH` (150 % of the largest volume the brief
+allows, the digs or hauls alone) stays an advisory of the task-graph stage, up to a *double
+count*: dig parts or haul parts that sum to :data:`~moonwright.pipeline.rates.VOLUME_DOUBLE`
+(175 %) of it plus 1 m3 or more count the body twice
+(:func:`~moonwright.pipeline.rates.volume_double_counts`). Seen live (phase 3i): the
+landing-pad demo's first graph hauled 2 x 120 m3 into the 120 m3 berm in 3 of 3 tries, the
+berm's 40 x 1.5 x 4 m box rather than its triangular section; the advisory did not stop it,
+and 2 of the 3 repairs answered the notes with a 114 m3 borrow pit the brief never mentions
+(240 m3 less the 125.7 m3 of pad spoil). The verified plans of runs 2 and 3 that hauled a berm
+at 200 % sized it as the box too, 12 of 14 ("560 m3 / 2 = 280 m3"). The largest volume the
+brief allows is the dimensions' largest, or a larger volume the brief states on the
+structure's line (isru_stockpile's "about 200 cubic metres" over the one 70 m3 strip Lightning
+recorded); nothing is judged where the brief bounds no largest volume: a placed body whose
+base width it does not state (its section is a guess), walls sloped by an unstated ratio, a
+stockpile-like structure (dug or filled; a dug one keeps the advisory). A haul that drops its
+material in a pile (a zone no structure claims, a stockpile) for a later haul of the body to
+bring on is staging, never part of the body's double count. It is the
+same ``volume:<structure>`` (a structure's shortfall and double count share one id and one
+detail line), with the arithmetic in the detail (``S2 (blast_berm): dimensions 40 m long, 1.5
+m high, 4 m wide at the base, triangular section = 120 m3 of fill; hauler tasks move 240 m3
+(200 %), a double count: T8 120 m3, T9 120 m3 (240 m3 is the 40 x 1.5 x 4 m box, twice the
+triangular section)``; parts that each repeat the body close ``(parts split a body's m3, they
+do not each repeat it)``) and the cut in the hint (``its fill is length x height x base width / 2
+(40 x 1.5 x 4 / 2 = 120 m3), not the box; cut the S2 hauls to 120 m3 in total (for example 2 x
+60 m3), each part still waiting for the dig part that feeds it; never add a dig the brief does
+not ask for``); a body whose hauls are a double count gets no supply balance note (the note's
+"more than the digs before them remove" is what the invented pit answered). Like coverage, the
+check judges a *whole* plan: the remaining graph of a replan has its finished work gone, so
 ``volume=None`` (the default) runs it exactly when ``coverage`` is on, ``volume=False``
 switches it off even then (the advisory alone) and ``volume=True`` forces it without
 coverage. Graphs without quantities (the hand-made fixtures) and structures without a
@@ -124,8 +150,9 @@ than those make available (landing_pad's 300 m3 berm prism "built from pad spoil
 125.7 m3 of bowl: the brief's own arithmetic), the plan stands and
 :func:`supply_advisories` notes it per structure (``supply:S2: its hauls (T5 150 m3, T6 150
 m3) move 300 m3, more than the 125.7 m3 the digs before them remove (S1 landing pad: T3,
-T4)``), summed per target so chained and parallel parts read the same; never for a pile, nor
-for a structure one of whose hauls is in conflict.
+T4)``), summed per target so chained and parallel parts read the same; never for a pile, for
+a structure one of whose hauls is in conflict, nor for a body whose hauls are a double count
+(the ``volume:<structure>`` verdict says why they move too much).
 
 Quantities (``quantity:<task_id>``)
 -----------------------------------
@@ -233,6 +260,7 @@ Implementation notes
 
 from __future__ import annotations
 
+import math
 import re
 from collections import Counter, deque
 from collections.abc import Collection, Mapping, Sequence
@@ -240,6 +268,7 @@ from dataclasses import dataclass
 
 from moonwright.geometry import distance, start_positions, travel_wh, zone_positions
 from moonwright.pipeline.rates import (
+    DOUBLE_MARK,
     RATED_TYPES,
     SPLIT_ABOVE_M3,
     STRIP_DEPTH_M,
@@ -254,10 +283,12 @@ from moonwright.pipeline.rates import (
     scoped,
     stockpile_like,
     supply_m3,
-    volume_shortfalls,
+    volume_conflicts,
+    volume_double_counts,
 )
 from moonwright.pipeline.tags import (
     brief_lines,
+    haul_target,
     hauls_into,
     name_score,
     structure_tasks,
@@ -854,16 +885,72 @@ def _volume_sentence(c: VolumeCoverage) -> str:
             f"(split above {qty(SPLIT_ABOVE_M3)} m3){tail}.")
 
 
+def _boxed(c: VolumeCoverage) -> bool:
+    """Whether a double count's hauls move the box of a triangular prism (its length x height
+    x base width, twice the section the check measures), within 2 %: how the live plans sized
+    their berms (module docstring, "Volume")."""
+    return bool(c.shape.box) and math.isclose(c.excess_m3, 2 * c.shape.m3, rel_tol=0.02)
+
+
+def _double_detail(c: VolumeCoverage) -> str:
+    """The arithmetic of a double count, as :func:`_volume_detail` gives a shortfall's:
+    'dimensions 40 m long, 1.5 m high, 4 m wide at the base, triangular section = 120 m3 of
+    fill; hauler tasks move 240 m3 (200 %), a double count: T8 120 m3, T9 120 m3 (240 m3 is
+    the 40 x 1.5 x 4 m box, twice the triangular section)' when the hauls move that box (the
+    live landing-pad graphs), else '... (parts split a body's m3, they do not each repeat
+    it)' ('a body's m3 is dug once' for one task; a key trench opens 'its key trench is 60 x
+    1.2 x 0.8 m = 57.6 m3 of excavation'). The share is of the largest volume the brief allows
+    (:attr:`~moonwright.pipeline.rates.VolumeCoverage.of_largest`)."""
+    shape = c.shape
+    verb = "move" if shape.phase == "haul" else "remove"
+    if _boxed(c):
+        why = f"{qty(c.excess_m3)} m3 is the {shape.box} m box, twice the triangular section"
+    elif c.parts > 1:
+        why = "parts split a body's m3, they do not each repeat it"
+    else:
+        why = f"a body's m3 is {'hauled' if shape.phase == 'haul' else 'dug'} once"
+    return (f"{shape.head} = {shape.m3_text} m3 of {shape.material}; {c.robot} tasks {verb} "
+            f"{qty(c.excess_m3)} m3 ({pct(c.share_largest)}{c.of_largest}){DOUBLE_MARK}: "
+            f"{c.listing_m3} ({why})")
+
+
+def _double_sentence(c: VolumeCoverage) -> str:
+    """'S2 (blast_berm) plans 240 m3 of hauls for its 120 m3 blast berm: its fill is length x
+    height x base width / 2 (40 x 1.5 x 4 / 2 = 120 m3), not the box; cut the S2 hauls to 120
+    m3 in total (for example 2 x 60 m3), each part still waiting for the dig part that feeds
+    it; never add a dig the brief does not ask for.' (the box clause only when the hauls move
+    that box; the live repairs answered the double haul with an invented 114 m3 borrow pit).
+    A dug shape keeps the hauls of its spoil after the dig parts that remove it; one task
+    alone gets no example split."""
+    shape = c.shape
+    noun = "haul" if shape.phase == "haul" else "dig"
+    body = "key trench" if shape.kind == "trench" else _type_words(c.structure)
+    largest = c.largest_m3 or shape.m3
+    target = f"{qty(largest)} m3"
+    whose = f"{c.structure.id} key trench" if shape.kind == "trench" else c.structure.id
+    why = (f" its fill is length x height x base width / 2 ({shape.box} / 2 = "
+           f"{qty(shape.m3)} m3), not the box;" if _boxed(c) else "")
+    split = (f" (for example {c.parts} x {qty(largest / c.parts)} m3)"
+             if c.parts > 1 else "")
+    tail = ("each part still waiting for the dig part that feeds it; never add a dig the brief "
+            "does not ask for" if noun == "haul"
+            else "the hauls of its spoil still after the dig parts that remove it")
+    return (f"{c.label} plans {qty(c.excess_m3)} m3 of {noun}s for its {target} {body}:{why} "
+            f"cut the {whose} {noun}s to {target} in total{split}, {tail}.")
+
+
 def _check_volume(req: Requirements, graph: TaskGraph) -> _Group | None:
     by_structure: dict[str, list[VolumeCoverage]] = {}
-    for c in volume_shortfalls(req, graph):
+    for c in volume_conflicts(req, graph):        # shortfalls and double counts, shape order
         by_structure.setdefault(c.structure.id, []).append(c)
     if not by_structure:
         return None
     ids = sorted(by_structure)
     details = [f"{by_structure[sid][0].label}: "
-               + " and ".join(_volume_detail(c) for c in by_structure[sid]) for sid in ids]
-    sentences = [_volume_sentence(c) for sid in ids for c in by_structure[sid]]
+               + " and ".join(_double_detail(c) if c.doubled else _volume_detail(c)
+                              for c in by_structure[sid]) for sid in ids]
+    sentences = [_double_sentence(c) if c.doubled else _volume_sentence(c)
+                 for sid in ids for c in by_structure[sid]]
     return _Group(ids=[f"volume:{sid}" for sid in ids], details=details,
                   hint=" ".join(sentences))
 
@@ -885,10 +972,11 @@ class Supply:
     order").
 
     ``haul`` is the hauler task. ``target`` names where it places its material
-    (:func:`_haul_target`: 'S2 (plume berm)', 'zone Z3' for a zone no structure claims) and
-    ``key`` is that structure's id or that zone, the group of the balance advisory; ``pile``
-    is True for a stockpile-like structure or an unclaimed zone, whose fill is never judged
-    for balance (as the volume check never judges it). ``digs`` are the sources among its
+    (:func:`~moonwright.pipeline.tags.haul_target`: 'S2 (plume berm)', 'zone Z3' for a zone no
+    structure claims) and ``key`` is that structure's id or that zone, the group of the
+    balance advisory; ``pile`` is True for a stockpile-like structure or an unclaimed zone,
+    whose fill is never judged for balance (as the volume check never judges it, nor counts a
+    haul placed there in another body's excess). ``digs`` are the sources among its
     transitive predecessors (graph order): every dig in m3, and an m2 strip when it can feed
     this haul (:func:`_feeds`); ``hauls`` the hauls into the same target among them.
     ``dug_by`` groups ``digs`` by structure and ``feeders`` the sources that neither come
@@ -956,20 +1044,6 @@ def _owner(req: Requirements, task: Task) -> Structure | None:
             if tag_names(task.structure, s):
                 return s
     return next((s for s in req.structures if s.zone is not None and s.zone == task.zone), None)
-
-
-def _haul_target(req: Requirements, haul: Task) -> Structure | None:
-    """The structure a haul places its material in, read from its zone first as the coverage
-    contract states it ("a haul task's zone is the zone where the material is PLACED";
-    :func:`moonwright.pipeline.tags.hauls_into`): the structure whose zone it is in, the one
-    its tag names when several share that zone; None when no structure claims the zone (a
-    stockpile or dump the requirements do not list: "Haul strip spoil to stockpile")."""
-    here = [s for s in req.structures if s.zone is not None and s.zone == haul.zone]
-    if haul.structure:
-        named = [s for s in here if tag_names(haul.structure, s)]
-        if named:
-            return named[0]
-    return here[0] if here else None
 
 
 def _type_words(structure: Structure) -> str:
@@ -1064,7 +1138,7 @@ def supply_report(req: Requirements, graph: TaskGraph) -> list[Supply]:
     before = ancestors(graph)
     owners = {t.id: _owner(req, t) for t in pool}
     hauls = list({t.id: t for t in graph.tasks if is_haul(t)}.values())
-    targets = {h.id: _haul_target(req, h) for h in hauls}
+    targets = {h.id: haul_target(h, req.structures) for h in hauls}
     keys = {h.id: (targets[h.id].id if targets[h.id] is not None else h.zone) for h in hauls}
     out: list[Supply] = []
     for h in hauls:
@@ -1100,20 +1174,24 @@ def supply_advisories(req: Requirements, graph: TaskGraph) -> list[str]:
     more than the pad yields: landing_pad's 300 m3 after 125.7 m3 of bowl), so a note for the
     trace and the repair prompt, whose header says to keep the body's m3 and only wait for
     more of the digs that feed it; never a conflict. Not for a pile (a stockpile-like
-    structure or an unclaimed zone: whatever is hauled there) nor for a structure one of
-    whose hauls is a ``supply:<haul>`` conflict (the verdict says it). Meant for a whole
-    plan, like the conflict: the task-graph stage does not call it on a replan's remaining
-    graph."""
+    structure or an unclaimed zone: whatever is hauled there), for a structure one of
+    whose hauls is a ``supply:<haul>`` conflict (the verdict says it), nor for a body whose
+    hauls are a double count (``volume:<structure>``, phase 3i: they move more than the
+    digs remove because they count the body twice, live the berm's box, and 2 of 3 repairs
+    answered this note by inventing a 114 m3 borrow pit instead of halving the hauls). Meant
+    for a whole plan, like the conflict: the task-graph stage does not call it on a replan's
+    remaining graph."""
     report = supply_report(req, graph)
     if not report:
         return []
     groups: dict[str, list[Supply]] = {}
     for s in report:
         groups.setdefault(s.key, []).append(s)
+    doubled = {c.structure.id for c in volume_double_counts(req, graph) if c.shape.phase == "haul"}
     order = {t.id: i for i, t in reversed(list(enumerate(graph.tasks)))}
     out: list[str] = []
     for key, group in groups.items():
-        if group[0].pile or any(s.unsupplied for s in group):
+        if group[0].pile or any(s.unsupplied for s in group) or key in doubled:
             continue
         digs = sorted({d.id: d for s in group for d in s.digs}.values(), key=lambda d: order[d.id])
         owners = {d.id: _owner(req, d) for d in digs}
@@ -1121,7 +1199,7 @@ def supply_advisories(req: Requirements, graph: TaskGraph) -> list[str]:
         dug = sum(supply_m3(d) for d in digs)
         if hauled <= dug * SUPPLY_SLACK + SUPPLY_SLACK_M3:
             continue
-        target = _haul_target(req, group[0].haul)
+        target = haul_target(group[0].haul, req.structures)
         listing = _ids_text([f"{s.haul.id} {qty(s.haul.quantity or 0.0)} m3" for s in group])
         sources = _sources_text(_dig_groups(req, digs, owners, target, _placed_body(target)), digs)
         out.append(f"supply:{key}: its hauls ({listing}) move {qty(hauled)} m3, more than the "

@@ -258,7 +258,8 @@ cut at 16,384 tokens, and the validator's energy check ignored the transit CP-SA
   structure's spoil supplies it), ...`). An excess above `VOLUME_HIGH` (150 %), judged on the
   digs alone (a pad stripped and then dug in full is no excess, nor is spoil bladed into a
   windrow), stays an advisory: `... total 600 m3 (200 %): hauled twice over` / `dug 1.5 times
-  over`; the fill of a stockpile-like structure is judged neither way.
+  over` (since phase 3i only below 175 %: a double count is the conflict too, see below); the
+  fill of a stockpile-like structure is judged neither way.
   `validate_graph(..., volume=None)` runs the check exactly when `coverage` is on (a whole
   plan), `False` switches it off, `True` forces it; the planner passes `False` for a replan's
   remaining graph and its repairs. Graphs without quantities and structures without a positive
@@ -425,6 +426,94 @@ edges it is given), and an in-scope metric that read the structuring model's sli
   The in-scope gains are crater_ramp (lifts), access_road's berm (30 m2), one_surveyor's and
   two_pads' width-less berms compacted over at least length x height; no `min_volume_share`
   moved.
+
+## Pipeline notes (phase 3i)
+
+Two more slips reached verified plans: Lightning records a square footprint as a diameter, and
+Ultra sizes a berm as its box, twice the triangular section the volume check measures.
+
+* **A square footprint is never a circle** (`rates.footprint`, `stated_footprint`,
+  `with_judged_footprint`, `structure.correct_footprints`). In the saved structurings of runs 2
+  and 3, the "12 m by 12 m" pit of habitat_foundation and habitat_berm_tight_horizon (3 of 3 in
+  run 3, typed `foundation_pit`, `excavate` or `excavation_pit`), instrument_pad's "10 m by 10
+  m" pad and four_mast_pads' "each 8 m by 8 m" pads came back as `diameter_m` (beside a
+  `length_m`, once with an invented `min_diameter_m`). A 12 m pit read as a bowl holds 113.1 m3,
+  not 144 (78.5 %, above the 70 % conflict), so the planner under-dug and the eval judged the
+  plan in scope. The reader takes the first pair of length figures joined by "by", "x" or "×"
+  in the structure's own entry (`tags.entry_line`, read whole: "12 m by 12 m", "10 x 10 m",
+  "30 m x 18 m", cm converted, the first two of "12 x 12 x 1 m"; never a size and a depth, "20 m
+  by 0.4 m deep", a count, "2 x 60 m3" or "2 x 60 m long", nor the parts of the work or a
+  section, "3 x 50 m segments", "a 1.2 m by 0.8 m trench section"), only when the entry does not
+  call the structure round (diameter, circular, round, radius, ring, bowl) and the recorded
+  diameter is one of the pair's figures and stands nowhere else in the entry, so a pair about
+  something else ("a 20 m pad ... centred in a 20 m by 30 m apron") is no footprint. A type
+  whose words name no entry (`excavate`) is matched by the lines that state every length figure
+  it records, when each of them states the same rectangle and no round line states its
+  diameter ("Landing pad: 12 m across" beside "Store: 12 m by 12 m" keeps the pad round). The
+  structure stage drops `diameter_m` and `min_diameter_m`, writes `length_m` x `width_m` (a
+  recorded pair that agrees stays) and `min_length_m` x `min_width_m` only where a recorded
+  minimum and the entry state a smaller rectangle ("may shrink to 12 m by 12 m"), and says so in
+  an amber note: `structure S1: diameter_m 12 -> 12 m x 12 m: the brief's entry for S1 states a
+  12 m by 12 m footprint`. Every volume and area judgment (`dims_volumes`, `_work_area`, so the
+  volume conflict, `scope_gaps`, the eval row and `rescore_eval.py`) reads the same rectangle
+  whenever `req.source_brief` is known, so a saved plan is judged against the brief's square;
+  `brief_footprint=False` judges the recorded one. Of the 216 distinct structures Lightning
+  recorded for the 22 eval briefs in runs 2 and 3, the 30 with such a diameter change and no
+  other does (`tests/data/recorded_structures.json`). four_mast_pads' recorded `depth_m: 1` is
+  its anchor hole's, so its pads are judged as 64 m3 boxes (they were 50.3 m3 bowls): that
+  depth is the structuring's slip, left for later.
+* **A double count is a conflict** (`rates.VOLUME_DOUBLE` = 1.75, `volume_double_counts`;
+  `validate.py`, "Volume"). In 3 of 3 live tries of the landing-pad demo, Ultra's first graph
+  hauled 2 x 120 m3 into the 120 m3 berm: 240 m3 is the berm's 40 x 1.5 x 4 m box, twice its
+  triangular section. The excess advisory did not stop it, and in 2 the repair answered the
+  excess and supply notes with a 114.34 m3 borrow pit the brief never mentions (240 m3 less the
+  pad's 125.66 m3: the box again; both verified). The 14 verified plans of runs 2 and 3 that
+  hauled a berm at 200 % say the same in their basis fields ("560 m3 / 2 = 280 m3" for
+  habitat_berm_tight_horizon's 70 x 2 x 4 m berm, which its brief puts at about 280 cubic
+  metres): 12 sized the berm as the box and split it evenly, 2 are ambiguous. So the task-graph
+  prompts now give a berm's fill, and dig parts or haul parts that sum to 175 % of the
+  largest volume the brief allows plus 1 m3 are now the shortfall's `volume:<structure>`, under
+  the same switches (whole plans only), in the same group and detail line. The largest volume
+  is the dimensions', or a larger one the brief states on the structure's line (isru_stockpile's
+  "about 200 cubic metres ... from three 20 m by 10 m strips", recorded as one 70 m3 strip);
+  none is judged for a placed body whose base width the brief does not state (propellant's
+  berm, recorded 4 m wide from the structure prompt's example), for walls sloped by an unstated
+  ratio or for a stockpile-like structure, and a haul that drops its material in a pile for a
+  later haul of the body to bring on is staging, not a second haul. The detail leads with the
+  arithmetic, as a shortfall's does: `S2 (blast_berm): dimensions 40 m long, 1.5 m high, 4 m
+  wide at the base, triangular section = 120 m3 of fill; hauler tasks move 240 m3 (200 %), a
+  double count: T8 120 m3, T9 120 m3 (240 m3 is the 40 x 1.5 x 4 m box, twice the triangular
+  section)` (parts that each repeat a body: `(parts split a body's m3, they do not each repeat
+  it)`); hint `its fill is length x height x base width / 2 (40 x 1.5 x 4 / 2 = 120 m3), not the
+  box; cut the S2 hauls to 120 m3 in total (for example 2 x 60 m3), each part still waiting for
+  the dig part that feeds it; never add a dig the brief does not ask for` (a dig: `the hauls of
+  its spoil still after the dig parts that remove it`). From 150 % to 175 % it stays the
+  advisory; a double count's advisory ends `, a double count`, so the repair is not told it
+  twice, and the body gets no `supply:<structure>` balance note (the note the invented pits
+  answered). Every canonical graph of `brief_budget.py` and every recorded fixture plan still
+  validates.
+* **Prompts** (`llm/prompts.py`). `COVERAGE_RULES`: `Haul each volume once (fill = the placed
+  body's m3, a berm's length x height x base width / 2; spoil = the dug m3)`, in place of its
+  `never a berm twice`, and `from 175 % rejected` beside the 70 % and the 150 %. Repair:
+  `volume:<structure> (planned m3 off the dimensions) -> add or cut m3 as the hint says, never
+  shrink the body` (shorter than the shortfall-only gloss; 5,481 of 5,500 characters).
+* **Rescoring run 2** (`scripts/rescore_eval.py`, now with the verified plans the double-count
+  check rejects and the plans whose footprint judgment changed, recorded footprint vs the
+  brief's):
+
+  | condition | verified | verified in scope, before -> after | of those, no supply or double-count conflict | verified, rejected by supply | verified, rejected by double count | footprint judgment changed |
+  | --- | --- | --- | --- | --- | --- | --- |
+  | `ultra/loop_on` | 56 of 66 | 49 -> 45 | 32 | 17 of 56 | 3 of 56 | 9 |
+  | `super/loop_on` | 51 of 66 | 38 -> 38 | 26 | 14 of 51 | 3 of 51 | 9 |
+
+  Against phase 3g's rescore (52 and 45 in scope) both arms lose 7: the six habitat_foundation
+  and habitat_berm_tight_horizon plans per arm dug the recorded 12 m bowl (113 of 144 m3, 78 %),
+  and one four_mast_pads plan per arm compacted each 8 m square pad over its inscribed circle
+  (50.3 of 64 m2). The double counts are habitat_berm_tight_horizon's 560 m3 box for its 280 m3
+  berm (five plans) and large_fleet_pad_berm_road super #3's 1,125 m3 box for 562.5 m3, the
+  only one the supply check did not already reject; propellant_pit_and_berm's 2 x 150 m3 (two
+  plans, already rejected by supply) is no double count, its base width being no number the
+  brief states, and depleted_excavators ultra #2 (159 %) keeps its advisory.
 
 ## Evaluation flags
 

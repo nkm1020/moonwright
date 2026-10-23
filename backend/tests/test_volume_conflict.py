@@ -6,8 +6,9 @@ borrow strip planned as 600 m2 of stripping, a 300 m3 berm hauled twice over), t
 advisory never reached the repair prompt and no repair ever fixed one. The validator now
 rejects a whole plan whose tasks cover less than 70 % of the smallest volume a structure's
 dimensions allow, with a detail that shows the arithmetic and a hint that says what to add;
-over-scope stays an advisory, the fill of a stockpile is never short, a replan (the remaining
-graph after an event) is never judged, and the hand-made fixtures (no quantities) are untouched.
+over-scope stays an advisory up to a double count (phase 3i, ``tests/test_double_count.py``),
+the fill of a stockpile is never short, a replan (the remaining graph after an event) is never
+judged, and the hand-made fixtures (no quantities) are untouched.
 """
 
 from __future__ import annotations
@@ -168,12 +169,20 @@ def test_a_key_trench_and_a_berm_are_judged_separately_under_one_id() -> None:
         "tasks in m3 (split above 60 m3) instead of shrinking the work.")
 
 
-def test_over_scope_stays_an_advisory_and_a_stockpiles_fill_is_never_short() -> None:
+def test_over_scope_is_an_advisory_up_to_a_double_count_and_a_stockpiles_fill_is_never_short(
+        ) -> None:
     berm = {"id": "S2", "type": "blast_berm", "zone": "Z2", "length_m": 60, "height_m": 2.5, "width_m": 4}
+    more = TaskGraph(tasks=[task("T7", "hauler", 240, "m3", "S2", "Z2"),
+                            task("T8", "hauler", 240, "m3", "S2", "Z2")])
+    assert validate_graph(reqs(berm), more, coverage=True) is None
+    assert volume_advisories(reqs(berm), more)[0].endswith("(160 %): hauled 1.6 times over")
+    # the 600 m3 box of the 60 x 2.5 x 4 m berm is the double count of phase 3i
+    # (tests/test_double_count.py)
     twice = TaskGraph(tasks=[task("T7", "hauler", 300, "m3", "S2", "Z2"),
                              task("T8", "hauler", 300, "m3", "S2", "Z2")])
-    assert validate_graph(reqs(berm), twice, coverage=True) is None
-    assert volume_advisories(reqs(berm), twice)[0].endswith("(200 %): hauled twice over")
+    assert must_fail(reqs(berm), twice).conflicts == ["volume:S2"]
+    assert volume_advisories(reqs(berm), twice)[0].endswith(
+        "(200 %): hauled twice over, a double count")
     # a stockpile is whatever gets hauled: 10 of 48 m3 is no shortfall ...
     pile = {"id": "S2", "type": "spoil_stockpile", "zone": "Z2", "length_m": 12, "height_m": 2}
     g = TaskGraph(tasks=[task("T3", "hauler", 10, "m3", "S2", "Z2", "Haul spoil to stockpile")])
@@ -463,7 +472,7 @@ def test_spoil_moved_is_no_dig() -> None:
     # a name that says it digs is a dig, whatever else it does
     both = task("T5", "excavator", bowl, "m3", name="Excavate and blade the S1 bowl")
     assert volume_advisories(reqs(pad), TaskGraph(tasks=[both, g.tasks[0]]))[0].endswith(
-        "dug twice over")
+        "dug twice over, a double count")
 
 
 def test_a_berm_built_from_another_structures_spoil_is_judged_against_that_spoil() -> None:

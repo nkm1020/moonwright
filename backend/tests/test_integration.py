@@ -203,7 +203,7 @@ def test_cli_eval_over_example_briefs(tmp_path, capsys):
     assert rows["tight_battery", "loop_off"]["conflicts"] == ["energy:EX1", "energy:EX2"]
     assert rows["tight_battery", "loop_on"]["repairs"] == 1
     assert rows["tight_battery", "loop_on"]["makespan_h"] > 0
-    assert rows["landing_pad", "loop_off"]["conflicts"] == ["energy:printer"]
+    assert rows["landing_pad", "loop_off"]["conflicts"] == ["volume:S2", "energy:printer"]
     assert rows["landing_pad", "loop_on"]["repairs"] == 1
     assert rows["landing_pad", "loop_on"]["makespan_h"] == 89
     assert rows["front_loaded", "loop_off"]["conflicts"] == ["horizon_path:T1->T2->T3->T6->T7->T8"]

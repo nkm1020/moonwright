@@ -412,10 +412,12 @@ def test_quantities_ground_the_graph_before_it_is_scheduled() -> None:
 # --------------------------------------------------------------------------- live recordings
 def test_landing_pad_replays_its_live_run() -> None:
     """Oct 23: Nemotron 3 Ultra's first graph needs 4,112 Wh of the printer's 4,000 and hauls
-    the 120 m3 berm twice over; the validator refuses it on the printer alone (the double haul
-    and the supply balance are advisories, which reach the repair). The one repair trims the
-    crest sintering from 160 to 146 m2, halves the hauls to 2 x 60 m3, each after the dig part
-    that feeds it, and CP-SAT proves 89 h: in scope, never a supply conflict."""
+    the 120 m3 berm twice over. Recorded live, the validator refused it on the printer alone
+    (the double haul was an advisory then); since phase 3i a 200 % haul is the conflict
+    volume:S2 too, so the replay refuses it on both (and the supply balance note gives way to
+    the double count). The one repair trims the crest sintering from 160 to 146 m2, halves the
+    hauls to 2 x 60 m3, each after the dig part that feeds it, and CP-SAT proves 89 h: in
+    scope, never a supply conflict."""
     plan = _plan("landing_pad")
 
     assert [(s.stage, s.ok) for s in plan.steps] == [
@@ -428,12 +430,10 @@ def test_landing_pad_replays_its_live_run() -> None:
     assert (plan.steps[1].payload or {})["advisories"] == [
         ("volume:S2: its dimensions give 120 m3 (40 m long, 1.5 m high, 4 m wide at the base, "
          "triangular section) but its haul tasks (T13 120 m3, T14 120 m3) total 240 m3 (200 %): "
-         "hauled twice over"),
-        ("supply:S2: its hauls (T13 120 m3, T14 120 m3) move 240 m3, more than the 125.7 m3 the "
-         "digs before them remove (S1 landing pad: T5, T6)")]
+         "hauled twice over, a double count")]
     refused = plan.steps[2].failure
     assert refused is not None and refused.kind == "validation"
-    assert refused.conflicts == ["energy:printer"]
+    assert refused.conflicts == ["volume:S2", "energy:printer"]
     assert ("printer tasks need 4,112 Wh, 4,078 Wh of work and about 34 Wh of travel, but its "
             "1 robot carries only 4,000 Wh combined") in refused.hint
 
@@ -498,7 +498,16 @@ def _verdicts(plan: PlanResult) -> list[tuple[str, int, str, list[str]]]:
             for s in plan.steps if s.failure is not None]
 
 
-@pytest.mark.parametrize("path", sorted(SAMPLES_DIR.glob("*.plan.json")), ids=lambda p: p.name)
+# landing_pad's take predates phase 3i: its first verdict says energy:printer alone, the replay
+# also says volume:S2 (the 200 % haul). The samples are re-recorded on the final code.
+_STALE_SAMPLES = {"landing_pad.plan.json"}
+
+
+@pytest.mark.parametrize("path", [
+    pytest.param(p, marks=pytest.mark.xfail(
+        strict=True, reason="take predates phase 3i's double-count conflict; re-record"))
+    if p.name in _STALE_SAMPLES else p
+    for p in sorted(SAMPLES_DIR.glob("*.plan.json"))], ids=lambda p: p.name)
 def test_ui_samples_are_the_live_runs_their_fixtures_replay(path: Path) -> None:
     """A sample is a take's own PlanResult, never a replay of it: every model step names a
     Token Factory model (a replay's steps say ``fixture:<file>``, and the page would lose its

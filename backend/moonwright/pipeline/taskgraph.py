@@ -18,10 +18,12 @@ numbers the model edited is grounded from its quantity again.
 
 A repair is told, besides the verdict, the ``advisories`` of the step that produced the graph
 it repairs (:func:`~moonwright.llm.prompts.repair_messages` renders them under the FAILURE
-block), so a 200 % double haul is cut in the same round as an energy verdict. A rejected
-answer (every ask cut off, not JSON or off the schema; a request that failed) ends the step
-with the client's own account of it when the client attached one, else one built from the
-exception (:func:`~moonwright.llm.base.answer_failure`: ``schema:json`` / ``schema:shape``).
+block), so a 160 % haul is cut in the same round as an energy verdict (a double count, from
+175 % of the largest volume the brief allows, is the validator's ``volume:<structure>`` verdict
+since phase 3i). A rejected answer (every ask cut off, not JSON or off the schema; a request
+that failed) ends the step with the client's own account of it when the client attached one,
+else one built from the exception (:func:`~moonwright.llm.base.answer_failure`:
+``schema:json`` / ``schema:shape``).
 """
 
 from __future__ import annotations

@@ -18,7 +18,10 @@
  * `min_<dimension>_m` structure extras (the smallest size a brief allows). Phase 3g: the
  * `supply:<task>` validation conflict (a haul that waits for no dig, or for too little while
  * another dig could supply it), the `supply:<structure>` balance advisory, and the structure
- * step's lift-count correction.
+ * step's lift-count correction. Phase 3i: `volume:<structure>` also for a double count (dig or
+ * haul parts summing to 175 % or more of the largest volume the brief allows; live, a berm
+ * hauled as its length x height x base width box, twice its triangular section), and the
+ * structure step's footprint correction (a "12 m by 12 m" pit recorded as a 12 m diameter).
  */
 
 // ------------------------------------------------------------------ F1 requirements
@@ -198,8 +201,10 @@ export const CONFLICT_PREFIXES: Record<string, string> = {
   scope: "structure lacks a required phase or lost every task",
   locked: "task underway at the event redefined by the repair",
   quantity: "physical task without a priced quantity",
-  /** phase 3e: the plan's m³ fall below 70 % of the smallest volume the dimensions allow */
-  volume: "planned volume below the structure's dimensions",
+  /** phase 3e: the plan's m³ fall below 70 % of the smallest volume the dimensions allow;
+   *  phase 3i: or its dig / haul parts sum to 175 % of the largest, counting the body twice
+   *  (the detail then carries ", a double count": format.ts isDoubleCountFailure) */
+  volume: "planned volume off the structure's dimensions (short, or counted twice)",
   /** phase 3g: a haul waits (transitively) for no dig, or for less than it moves while another
    *  dig could supply it, so it could start before its material exists */
   supply: "haul planned before its material is dug",
@@ -252,7 +257,7 @@ export interface StructurePayload {
   depot: [number, number] | null;
   /**
    * Never a failure. In this order: recovered notes, site warnings, lift corrections,
-   * dimension warnings.
+   * footprint corrections, dimension warnings.
    * (a) "structure S1: operations [excavate, compact, sinter] recovered from malformed keys
    *     ("operations': [", 'grade', 'compact', 'sinter'); check them against the brief": the
    *     structuring model's scrambled answer was salvaged (amber: ask the user to check);
@@ -269,6 +274,13 @@ export interface StructurePayload {
    *     structuring stage already wrote the corrected count into the requirements, so the
    *     planner compacts what the eval judges (amber: check it against the brief; filed under
    *     its structure);
+   * (e) phase 3i, after the lift corrections: "structure S1: diameter_m 12 -> 12 m x 12 m: the
+   *     brief's entry for S1 states a 12 m by 12 m footprint" (or "diameter_m 12,
+   *     min_diameter_m 12 -> ...", or "diameter_m 20, min_diameter_m 12 -> 20 m x 20 m, at
+   *     least 12 m x 12 m: ... footprint, at least 12 m by 12 m" when the entry states a smaller
+   *     size too): a square or rectangle the structuring model recorded as a diameter, already
+   *     written into the requirements as length_m x width_m (and min_length_m x min_width_m)
+   *     (amber: check it against the brief; filed under its structure);
    * plus the older zone-overlap / undeclared-zone / no-zone / no-depot warnings (muted).
    */
   warnings: string[];
@@ -281,11 +293,14 @@ export interface TaskGraphPayload {
    *  all (the hand-made fixtures), or "volume:<structure>: its dimensions give 360 m3
    *  (100 x 6 x 0.6 m) but its excavation tasks (T3 600 m2) total only 0 m3 (0%)" when the
    *  planned m3 clearly differ from what the dimensions imply (two lines may exist for one
-   *  structure: a berm body and its key trench; never on a replan's steps), or (phase 3g)
+   *  structure: a berm body and its key trench; never on a replan's steps; since phase 3i an
+   *  excess of 175 % or more of the largest volume the brief allows ends ", a double count":
+   *  the validator rejects it as volume:<structure> too), or (phase 3g)
    *  "supply:<structure>: its hauls (T5 150 m3, T6 150 m3) move 300 m3, more than the 125.7 m3
    *  the digs before them remove (S1 landing pad: T3, T4)" when a body's hauls together move
    *  more than the digs before them remove (often the brief's own arithmetic; never on a
-   *  replan's steps); warnings, never conflicts. format.ts parseAdvisory reads them. */
+   *  replan's steps, nor for a body whose hauls are a double count); warnings, never
+   *  conflicts. format.ts parseAdvisory reads them. */
   advisories: string[];
   rate_model: boolean;
   /** tasks whose duration / energy came from the rate table (they carried a quantity) */

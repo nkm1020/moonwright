@@ -9,7 +9,9 @@ coverage and got no ``volume:S1`` advisory). This module is import-free of both 
 :func:`name_score` says how well a line names a structure (the coverage hints quote the
 structure's own entry with it) and :func:`entry_line` picks that entry (the volume check reads
 a pit's sloped walls from it, the eval's area check a stated lift count and a berm's base width).
-Both read the brief by :func:`brief_lines`, so an entry hard-wrapped over several lines (as
+:func:`haul_target` reads where a haul places its material, zone first, for the supply check and
+for the volume check's hauls staged in a pile. Both brief readers read the brief by
+:func:`brief_lines`, so an entry hard-wrapped over several lines (as
 editors and users write markdown) is read whole: phase 3g read only its first line and told
 the user a brief that states "placed and compacted in two\n   lifts" states no lift count.
 """
@@ -85,6 +87,21 @@ def hauls_into(structure: Structure, graph: TaskGraph) -> list[Task]:
     if structure.zone is None:
         return []
     return [t for t in graph.tasks if t.robot_type == "hauler" and t.zone == structure.zone]
+
+
+def haul_target(haul: Task, structures: Sequence[Structure]) -> Structure | None:
+    """The structure a haul places its material in, read from its zone first as the coverage
+    contract states it ("a haul task's zone is the zone where the material is PLACED";
+    :func:`hauls_into`): the structure whose zone it is in, the one its tag names when several
+    share that zone; None when no structure claims the zone (a stockpile or dump the
+    requirements do not list: "Haul strip spoil to stockpile"). The supply check's target of a
+    haul, and the volume check's test of a haul staged in a pile (phase 3i)."""
+    here = [s for s in structures if s.zone is not None and s.zone == haul.zone]
+    if haul.structure:
+        named = [s for s in here if tag_names(haul.structure, s)]
+        if named:
+            return named[0]
+    return here[0] if here else None
 
 
 def serving_tasks(structure: Structure, graph: TaskGraph,
