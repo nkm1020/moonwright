@@ -181,10 +181,10 @@ export interface SampleSpec {
   example?: boolean;
 }
 
-/** The recorded live runs under public/samples (Nemotron on Nebius Token Factory, Oct 23
- *  2026), in display order: the landing pad, repaired once and then stressed (simulation,
- *  Monte Carlo, spare what-if), and an impossible 60 h brief that ends with solver-proven
- *  advice. A new sample is one line here plus its files. */
+/** The recorded live runs under public/samples (Nemotron on Nebius Token Factory, Oct 24
+ *  2026, the final pipeline), in display order: the landing pad, repaired twice and then
+ *  stressed (simulation, Monte Carlo, spare what-if), and an impossible 60 h brief that ends
+ *  with solver-proven advice. A new sample is one line here plus its files. */
 export const SAMPLES = [
   { id: "landing_pad", title: "Landing pad", files: ["sim", "mc", "whatif"], example: true },
   { id: "front_loaded", title: "Impossible deadline", files: [], example: true },
@@ -194,7 +194,7 @@ export type SampleId = (typeof SAMPLES)[number]["id"];
 export const SAMPLE_IDS: readonly SampleId[] = SAMPLES.map((s) => s.id);
 
 /** The day the samples were recorded live, as the static demo names it. */
-export const RECORDED_ON = "Oct 23 2026";
+export const RECORDED_ON = "Oct 24 2026";
 
 export function sampleSpec(id: SampleId): SampleSpec {
   return (SAMPLES as readonly SampleSpec[]).find((s) => s.id === id) ?? { id, title: id, files: [] };
