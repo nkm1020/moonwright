@@ -256,11 +256,19 @@ export interface StructurePayload {
   grid: [number, number];
   depot: [number, number] | null;
   /**
-   * Never a failure. In this order: recovered notes, dropped operations, site warnings, lift
-   * corrections, footprint corrections, size corrections, dimension warnings.
+   * Never a failure. In this order: recovered notes, restored operations, dropped operations,
+   * site warnings, lift corrections, footprint corrections, size corrections, dimension
+   * warnings.
    * (a) "structure S1: operations [excavate, compact, sinter] recovered from malformed keys
    *     ("operations': [", 'grade', 'compact', 'sinter'); check them against the brief": the
    *     structuring model's scrambled answer was salvaged (amber: ask the user to check);
+   * (a2) phase 3l: "structure S1: operations compact restored: its entry states "subgrade
+   *     compacted and inspected"" (or "operations haul and survey restored: its entry states
+   *     "..." and "...""): an operation the structure's own entry in the brief states that the
+   *     structuring model omitted (never grade, never a negated or deferred one, never one
+   *     said of another structure, never one the fleet cannot staff), already appended to the
+   *     structure's operations so the planner plans it and the coverage check requires it
+   *     (amber: check it against the brief; filed under its structure);
    * (b) phase 3j: "structure S2: operations sinter dropped: the fleet has no printer, so no
    *     sinter task will be required of it (add a printer and the operation again to plan
    *     it)": an operation no robot type of the fleet can perform, already dropped from the

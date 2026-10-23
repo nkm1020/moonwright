@@ -771,6 +771,144 @@ zone, even between two tasks in one zone, and charged that allowance's energy fo
   is the assumption solve); 40 Monte Carlo runs of the run-3 four_mast_pads plan take 3.9 s
   (0.8 s at base, on its 60 h plan), and the landing pad's 200 runs about 2 s, as before.
 
+## Pipeline notes (phase 3l)
+
+Run 3's Super #1 "verified" front_loaded_excavation, a brief designed impossible (kind D), at
+60 h, and the eval counted it in scope. Lightning had typed the pad S1 `excavator` with
+operations [excavate, survey], dropping the compaction its own entry states ("1. Heavy-lander
+pad: circular, 30 m diameter, excavated 0.4 m to firm regolith across the full footprint
+(about 283 cubic metres), subgrade compacted and inspected. Sintering is deferred to a later
+sortie; no printer is on site."). A type of no kind gets no phase rules, so the listed
+operations were the pad's whole contract: the 28 h of pad compaction were never required, and
+the one-robot-per-zone deadline no longer bit. All three run-3 structurings of the brief lack
+the compaction (the other two type the pad `pad`, whose kind asks for one, but not as a listed
+operation), and so does the live front_loaded fixture.
+
+* **An operation the entry states is restored** (`tags.entry_operations`,
+  `validate.restored_operations`, `structure.restore_operations`). The structure stage reads
+  each structure's own entry, a line `tags.entry_owners` gives it alone (a shared entry, "1.
+  Cargo pad A, 2. cargo pad B, 3. cargo pad C: each ...", is no one's), after its name, clause
+  by clause: cut at a full stop, a semicolon, a comma and a bracket, and within a clause where
+  it turns to another action or subject ("and", "after", "once", "so", ...; never "or", since
+  "no sintering or compaction" denies both). It restores compact (compacted, compaction,
+  "compact the ..."), survey (inspected, inspection, surveyed, staked, checked), excavate
+  (excavated, dug, "dig ...", "excavate ..."), haul (hauled, "built from") and sinter (sintered,
+  sintering, "sinter ..."); never grade ("a 15 percent grade" is a slope, "compacted level" a
+  property: 33 of the 42 omissions a crude regex probe of the 132 saved structurings of runs 2
+  and 3 found), never a bare verb used as an adjective ("a compact pile"). A part with a
+  negation or a deferral (no, not, cannot, never, without, already, deferred, postponed,
+  excluded, later, the next sortie, out of scope, instead of, rather than, none, nothing,
+  unless) states nothing: "Sintering is deferred to a later sortie", "Sintering is a later job",
+  "(not sintered)", "No sintering this sortie", "the bowl cannot be excavated as parallel
+  sectors". A negation that heads what it denies reaches the items listed or coordinated with it
+  ("No sintering, compaction or inspection this sortie", "must not be excavated and compacted
+  before the lander survey", "already graded and compacted"), and a deferral that trails a list
+  of operations named as nouns covers the list ("Sintering and compaction are deferred"); one
+  that names something else reaches no further ("excavated without blasting and compacted" keeps
+  its compact). Nor does a word said of another structure state anything for this one: named
+  next to it ("excavated from the pit", "the pad is compacted"), before it in its part ("placing
+  starts once the pad subgrade is compacted"), in the part an "and ..." item is coordinated with
+  ("the access road beside it is graded and compacted"), or as the noun a relative clause
+  follows ("from the depot to the pad, which is compacted first"), outside a "from ..." phrase,
+  which names the material ("built from the pit spoil and compacted" is the berm's compaction);
+  in a clause of time a structure word that is none of this one's names is another's ("hauled
+  only after the bowl is excavated and compacted" in a berm's entry, the pad typed
+  `landing_pad`). The names are the other structures' type words and the names their entries
+  give them; a constraint whose head is a sentence ("- The pad is one work zone: ... so the bowl
+  cannot be excavated as parallel sectors") is no entry and names nothing (read as the pit's
+  names, "one", "work" and "zone" cost a berm's "compacted in one lift" its compact). A dig word
+  on material states nothing either ("the excavated material placed on the plant's stockpile
+  pad", "built from spoil excavated nearby": dug elsewhere). A haul is always the entry's own:
+  "built from the pit spoil" in the berm's entry is the berm's haul and never an ask to excavate
+  it, while a trench "backfilled with compacted spoil" is compacted. An operation the fleet
+  cannot staff is never restored, so the phase 3j drop (`correct_operations`, which runs after
+  it, after `recover_operations`) never meets one, and 3j's softening rule
+  (`unsupported_operations`) counts the entry's own words as evidence, so it never makes a
+  restored operation optional again: before, a pad listing [grade, compact] whose entry says
+  "dug 0.3 m to firm regolith" got the dig restored and, at once, "lists excavate but the brief
+  line about it asks for grade", since no evidence stem prefixes "dug" (nor "built from" for a
+  berm's haul). The note quotes the clause: `structure S1: operations compact restored: its
+  entry states "subgrade compacted and inspected"` (amber, "Check the restored operations
+  against the brief"). The type stays as recorded: retyping is not this stage's to do, and the
+  operations a garbled type's entry states, now listed, are what the coverage check requires of
+  it.
+* **Judge time** (`validate.restored_gaps`, `validate.in_scope_gaps`). Whenever the brief is
+  known, a saved plan is judged against the restored operations: a verified plan whose final
+  graph has no task that performs one, by the rule the coverage check applies to a listed
+  operation (`missing_operations`: a task of the operation's robot type doing that phase; a haul
+  also by a hauler placed in the zone, and for a structure dug for its material by the hauls
+  that wait for its digs), is out of scope with a line that names it: `scope:S1: its entry
+  states compact ("subgrade compacted and inspected"), which the structuring omitted, and no
+  task compacts it`. `in_scope_gaps` (the volume and area gaps of `rates.scope_gaps`, then
+  these) decides the eval row's `in_scope` and the CLI's closing lines (headed `scope differs
+  from the brief:` when one of them is a `scope:` line, `from the dimensions` as before for a
+  volume or an area alone; the eval's progress line reads `not in scope: scope differs from the
+  brief` for a row whose shares are all in scope); the eval report's "How to read" and
+  `docs/design.md` define in scope the same way. Checked against the restored requirements
+  (`with_restored_operations`), the validator rejects Super #1 with `scope:S1` (`S1 (excavator)
+  lacks compact task (its operations list compact)`). `rescore_eval.py` writes
+  `operations_restored` (`S1 compact`) and adds two columns to its table (plans with a restored
+  operation; verified plans that leave one undone) and a list of the plans.
+* **Every saved structuring** (`tests/data/saved_structurings.json`: the 198 of runs 2, 3 and 4
+  with the fleets they recorded). Exactly eighteen restorations, pinned. Nine in runs 2 and 3:
+  run 2 large_fleet_pad_berm_road #2 S3 compact (the access road "graded and compacted from the
+  depot to the pad", typed `stockpile` with operations [haul]), run 2 solar_array_pad #3 S2
+  compact (the anchor trench "backfilled and compacted"), run 3 front_loaded_excavation #1, #2
+  and #3 S1 compact, run 3 habitat_berm_tight_horizon #2 S2 survey ("compacted in one lift and
+  inspected"), run 3 habitat_foundation #2 F2 excavate (the drainage trench Lightning typed
+  `berm`, "dug after the pit walls are stable and backfilled with compacted spoil") and run 3
+  small_fleet_long_berm #1 and #2 BERM haul ("built from a borrow strip along its north side",
+  listed as [grade, compact, survey]); these are the probe's nine non-grade hits. Nine in run 4
+  (`docs/eval/2026-10-24-live-eval-run4`, planned on 3466621, before this phase):
+  front_loaded_excavation #1-#3 S1 compact (`excavator` once), habitat_berm_tight_horizon #1 and
+  #3 S2 survey, small_fleet_long_berm #3 B1 haul, compact and survey (listed as [grade] alone)
+  and cable_trench #2 S1 compact (the trench's "compacted 10 cm bedding layer", typed `excavate`
+  with [survey, excavate]). No grade, no sinter, and none from a negated clause or another
+  structure's words; the probes of the phase review (negations, lists, other structures,
+  constraint lines) are pinned as negatives. The registry of `scripts/brief_budget.py`, which
+  lists by hand the operations each of the 22 eval briefs asks for, restores nothing: the reader
+  states no operation it does not list. The demo recordings (`out/demo`) show the same slips:
+  all three front_loaded takes omit the pad's compaction (S1 `pad` twice, `excavator` once) and
+  habitat_berm try 1 the berm's inspection ("compacted in one lift and inspected").
+* **Rescore** (`scripts/rescore_eval.py`; before: phase 3k's code on the same plans):
+
+  | run, condition | verified | verified in scope, phase 3k -> 3l | of those, no supply or double-count conflict | operations restored | verified, restored operation not done |
+  | --- | --- | --- | --- | --- | --- |
+  | run 2 `ultra/loop_on` | 56 of 66 | 46 -> 45 | 33 -> 32 | 2 | 2 of 56 |
+  | run 2 `super/loop_on` | 51 of 66 | 38 -> 37 | 26 -> 26 | 2 | 1 of 51 |
+  | run 3 `ultra/loop_on` | 59 of 66 | 51 -> 51 | 49 -> 49 | 7 | 0 of 59 |
+  | run 3 `super/loop_on` | 56 of 66 | 42 -> 40 | 41 -> 39 | 7 | 2 of 56 |
+  | run 4 `ultra/loop_on` | 57 of 66 | 54 -> 53 | 54 -> 53 | 7 | 1 of 57 |
+  | run 4 `super/loop_on` | 54 of 66 | 51 -> 50 | 51 -> 50 | 7 | 1 of 54 |
+
+  Four verdicts move, each a plan that never did work its brief states: run 3
+  front_loaded_excavation super #1 (no compactor task on the pad), run 3 habitat_foundation
+  super #2 (the trench is never dug: 13.4 m3 of "berm fill" hauled into it), and run 2
+  large_fleet_pad_berm_road ultra and super #2 (the road, typed `stockpile`, is never graded or
+  compacted: 100 m3 hauled onto it). Run 2 solar_array_pad ultra #3, verified and already out
+  of scope (`area:S1`, two compaction lifts trimmed to 73 %), gains the anchor trench's
+  compaction as a second gap; the other plans with a
+  restoration either do the work (run 3 habitat_foundation ultra #2 digs its trench,
+  habitat_berm_tight_horizon #2 inspects its berm in both conditions) or never verified. In
+  live run 4 two verdicts move: cable_trench #2 in both conditions, whose plans dig the trench
+  and never compact its bedding; habitat_berm_tight_horizon #1 and #3 inspect their berm in
+  both conditions, and the other plans with a restoration never verified.
+* **Fixtures.** The live landing_pad and the hand-made landing_pad_v1, access_road and
+  tight_battery list every operation their entries state and replay unchanged. The live
+  front_loaded fixture is run 3's slip (S1 `pad` with [excavate, survey]): its structure step
+  now carries the restore note and S1 lists compact; the replay's stages, verdicts, repairs and
+  advice are unchanged, while repair 2's `scope:S1` detail reads `S1 (pad) lacks compact task
+  (its operations list compact)` and its hint, now that the pad lists the compaction, quotes the
+  entry: `S1 (pad) lists compact (the brief asks for "subgrade compacted and inspected") but no
+  task compacts it; add a compactor task tagged S1; ...` (both pinned). The UI's sample
+  `frontend/public/samples/front_loaded.plan.json` is the live take recorded before this phase
+  and stays as recorded: its structure step has no restore note and S1 lists [excavate, survey];
+  a sample is the take's own PlanResult, never a replay, so it shows the note only once a take
+  is recorded again.
+* **Frontend.** The requirements card and the progress trace label the note "operation
+  restored" (amber, with the lead above), and a restored operation's chip reads "restored" with
+  the note as its tooltip; `StructurePayload.warnings` documents it.
+
 ## Evaluation flags
 
     uv run moonwright eval --briefs examples/eval --repeat 3 --loop both --models ultra,super --thinking auto \

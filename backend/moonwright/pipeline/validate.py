@@ -248,6 +248,19 @@ structure stage, and never a reason to invent work (seen live: ``excavate`` list
 the brief says is "built from a borrow strip ... placed and compacted", and the repair added
 a 35 m3 "foundation" dig to satisfy it). Requirements that list no operation anywhere are
 judged exactly as before.
+The opposite slip, an operation the structure's own entry states that the structuring did
+not list, is restored (:func:`restored_operations`, phase 3l: the entry read clause by clause
+by :func:`moonwright.pipeline.tags.entry_operations`, grade never, a negated or deferred
+clause never, a word said of another structure never, only what a robot of the fleet can
+perform; the softening above counts the entry's own words as evidence, so it never makes a
+restored operation optional again). The structure stage writes it into
+the requirements with a note (``moonwright.pipeline.structure.restore_operations``), so the
+coverage check requires it like any listed operation, and the eval judges a saved plan against
+it whenever its brief is known (:func:`restored_gaps`, part of :func:`in_scope_gaps`): seen in
+run 3, Lightning typed front_loaded_excavation's pad ``excavator`` with operations [excavate,
+survey], dropping the compaction its entry states ("subgrade compacted and inspected"), so the
+28 h of pad compaction were never required and Super #1 "verified" a designed-impossible
+brief at 60 h, in scope; against the restored requirements this check answers ``scope:S1``.
 
     check_scope(graph, required, baseline=None) -> Failure | None
 
@@ -306,6 +319,7 @@ from moonwright.pipeline.rates import (
     is_strip,
     rate_for,
     rated_units,
+    scope_gaps,
     scoped,
     stockpile_like,
     supply_m3,
@@ -314,6 +328,7 @@ from moonwright.pipeline.rates import (
 )
 from moonwright.pipeline.tags import (
     brief_lines,
+    entry_operations,
     entry_owners,
     haul_target,
     hauls_into,
@@ -341,10 +356,11 @@ from moonwright.text import whole_wh as _whole_wh
 
 __all__ = [   # tag_names / structure_tasks live in ``tags`` and stay importable from here
     "SUPPLY_SLACK", "SUPPLY_SLACK_M3", "Supply", "brief_evidence", "check_scope",
-    "covered_phases", "hauls_into", "missing_operations", "missing_phases", "needs_quantity",
-    "performs", "required_phases", "source_hauls", "structure_kind", "structure_tasks",
-    "supply_advisories", "supply_report", "tag_names", "task_changes", "task_phases",
-    "travel_floor", "unstaffed_operations", "unsupported_operations", "validate_graph",
+    "covered_phases", "hauls_into", "in_scope_gaps", "missing_operations", "missing_phases",
+    "needs_quantity", "performs", "required_phases", "restored_gaps", "restored_operations",
+    "source_hauls", "structure_kind", "structure_tasks", "supply_advisories", "supply_report",
+    "tag_names", "task_changes", "task_phases", "travel_floor", "unstaffed_operations",
+    "unsupported_operations", "validate_graph", "with_restored_operations",
 ]
 
 Positions = Mapping[str, tuple[float, float]]
@@ -1467,19 +1483,27 @@ def unsupported_operations(req: Requirements, structure: Structure) -> list[tupl
     requiring the latter made a live repair invent a 35 m3 "foundation" dig. Nothing is
     softened without a brief to read, on a structure of unknown kind (its listed operations
     are the only contract it has), or for an operation the brief does ask for ("on a key
-    trench cut into firm material" keeps a berm's ``excavate``)."""
+    trench cut into firm material" keeps a berm's ``excavate``), its own entry's words
+    included (:func:`moonwright.pipeline.tags.entry_operations`, phase 3l: "dug 0.3 m to firm
+    regolith" asks a pad to excavate and "built from a borrow strip" a berm to haul, though no
+    evidence stem prefixes "dug" or "built from"; an operation the structure stage restored
+    from them is never softened right after, which left two notes that contradict each other
+    and the restored operation required nowhere)."""
     brief = req.source_brief
     kind = structure_kind(structure.type)
     if not brief or kind is None:
         return []
     listed = list(dict.fromkeys(structure.operations))
     out: list[tuple[str, str]] = []
+    stated: set[str] | None = None
     for group in _REQUIRED_PHASES[kind]:
         members = [op for op in listed if op in group]
         if len(members) < 2:
             continue
-        supported = [op for op in members
-                     if brief_evidence(brief, op, structure, req.structures) is not None]
+        if stated is None:
+            stated = {op for op, _ in entry_operations(brief, structure, req.structures)}
+        supported = [op for op in members if op in stated
+                     or brief_evidence(brief, op, structure, req.structures) is not None]
         if supported:
             out += [(op, supported[0]) for op in members if op not in supported]
     return out
@@ -1542,6 +1566,75 @@ def unstaffed_operations(req: Requirements, structure: Structure) -> list[tuple[
     fleet = {r.type for r in req.robots}
     return [(op, _CANONICAL_TYPE[op]) for op in structure.operations
             if _CANONICAL_TYPE[op] not in fleet]
+
+
+def restored_operations(req: Requirements, structure: Structure) -> list[tuple[str, str]]:
+    """``(operation, quote)`` for every operation ``structure``'s own entry in the brief states
+    (:func:`moonwright.pipeline.tags.entry_operations`, the clause that states it quoted) that
+    ``structure`` does not list and a robot of the fleet can perform, in the order the entry
+    states them (phase 3l, module docstring "Structure coverage"). [] without a brief. A
+    structure whose type is garbled keeps it (Lightning typed run 3's heavy-lander pad
+    ``excavator``): its entry is still its own by the figures it records
+    (:func:`moonwright.pipeline.tags.entry_owners`), and the kind rules, which read the type,
+    give it no phase, so the operations its entry states, restored, are its whole contract;
+    retyping it is not this reader's to do."""
+    fleet = {r.type for r in req.robots}
+    listed = set(structure.operations)
+    return [(op, quote) for op, quote in entry_operations(req.source_brief, structure,
+                                                          req.structures)
+            if op not in listed and _CANONICAL_TYPE[op] in fleet]
+
+
+def with_restored_operations(req: Requirements) -> Requirements:
+    """A copy of ``req`` whose structures list the operations their own entries state
+    (:func:`restored_operations`, appended in the order the entry states them); ``req`` itself
+    when none is missing."""
+    restored = [[op for op, _ in restored_operations(req, s)] for s in req.structures]
+    if not any(restored):
+        return req
+    return req.model_copy(update={"structures": [
+        s.model_copy(update={"operations": [*s.operations, *ops]}) if ops else s
+        for s, ops in zip(req.structures, restored, strict=True)]})
+
+
+def restored_gaps(req: Requirements, graph: TaskGraph) -> list[str]:
+    """Why a plan is not in scope for an operation its requirements omit: one line per
+    operation a structure's own entry states, restored (:func:`restored_operations`), that no
+    task of ``graph`` performs as the coverage check requires a listed operation
+    (:func:`missing_operations`, with the hauls placed in its zone and, for a structure dug for
+    its material, the hauls that wait for its digs, :func:`source_hauls`): 'scope:S1: its entry
+    states compact ("subgrade compacted and inspected"), which the structuring omitted, and no
+    task compacts it'. Empty when nothing is restored or every restored operation is done; a
+    plan planned from requirements the structure stage restored (phase 3l) has none, the
+    coverage check having required them. The eval's scope test (:func:`in_scope_gaps`), never a
+    conflict of the plan the validator was given."""
+    judged = with_restored_operations(req)
+    if judged is req:
+        return []
+    out: list[str] = []
+    before_all = ancestors(graph)
+    for s, was in zip(judged.structures, req.structures, strict=True):
+        restored = dict(restored_operations(req, was))
+        if not restored:
+            continue
+        tasks, hauls = _coverage_tasks(judged, s, graph, before_all)
+        source = _source(s)
+        for op in missing_operations(judged, s, tasks, hauls):
+            if op not in restored:
+                continue
+            done = (f"no hauler task is tagged {s.id} or waits for a dig of it"
+                    if source and op == "haul" else f"no task {_PHASE_VERB[op]} it")
+            out.append(f'scope:{s.id}: its entry states {op} ("{restored[op]}"), which the '
+                       f"structuring omitted, and {done}")
+    return out
+
+
+def in_scope_gaps(req: Requirements, graph: TaskGraph) -> list[str]:
+    """Why a verified plan is not "in scope" (empty when it is): the volumes and the areas of
+    work its brief asks for (:func:`moonwright.pipeline.rates.scope_gaps`), then the operations
+    its structures' own entries state that the structuring omitted (:func:`restored_gaps`,
+    phase 3l). The eval's ``in_scope`` is a verified run without any."""
+    return [*scope_gaps(req, graph), *restored_gaps(req, graph)]
 
 
 def _names(low: str, words: Collection[str], structure: Structure) -> tuple[int, int] | None:
@@ -1736,6 +1829,21 @@ def source_hauls(structure: Structure, graph: TaskGraph,
             if t.robot_type == "hauler" and before.get(t.id, set()) & digs]
 
 
+def _coverage_tasks(req: Requirements, structure: Structure, graph: TaskGraph,
+                    before: Mapping[str, set[str]]) -> tuple[list[Task], list[Task]]:
+    """``(tasks, hauls)`` the coverage check judges ``structure`` by: the tasks that serve it
+    (:func:`structure_tasks`), then the hauler tasks placed in its zone whatever their tag
+    (:func:`hauls_into`) and, for a structure dug for its material, the hauls that wait for its
+    digs (:func:`source_hauls`, ``before`` the graph's :func:`ancestors`), each once."""
+    tasks = structure_tasks(structure, graph, req.structures)
+    served = {t.id for t in tasks}
+    hauls = [t for t in hauls_into(structure, graph) if t.id not in served]
+    placed = served | {t.id for t in hauls}
+    hauls += [t for t in source_hauls(structure, graph, req.structures, before)
+              if t.id not in placed]
+    return tasks, hauls
+
+
 def _check_coverage(req: Requirements, graph: TaskGraph,
                     previous: TaskGraph | None) -> _Group | None:
     items: dict[str, str] = {}
@@ -1744,12 +1852,7 @@ def _check_coverage(req: Requirements, graph: TaskGraph,
     listed = False
     before_all = ancestors(graph)
     for s in req.structures:
-        tasks = structure_tasks(s, graph, req.structures)
-        served = {t.id for t in tasks}
-        hauls = [t for t in hauls_into(s, graph) if t.id not in served]
-        placed = served | {t.id for t in hauls}
-        hauls += [t for t in source_hauls(s, graph, req.structures, before_all)
-                  if t.id not in placed]
+        tasks, hauls = _coverage_tasks(req, s, graph, before_all)
         missing = missing_phases(req, s, tasks, hauls)
         if not missing:
             continue

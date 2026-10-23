@@ -469,8 +469,16 @@ def test_front_loaded_replays_its_live_run() -> None:
     validates and CP-SAT proves ``horizon, zone:Z1``; repair 2 drops the pad compaction (scope
     drift -26 %) and the validator refuses it (``scope:S1``); repair 3 restores it and CP-SAT
     proves the same core. No plan after three repairs; the advice is CP-SAT-verified. The last
-    graph's notes claim a relaxed zone rule: the solver does not read notes."""
+    graph's notes claim a relaxed zone rule: the solver does not read notes. Lightning listed
+    only [excavate, survey] on the pad, as in all three run-3 structurings of the eval brief;
+    since phase 3l the structure stage restores the compaction its entry states ("subgrade
+    compacted and inspected"), so the verdicts are the same and repair 2's ``scope:S1`` detail
+    and hint say the operation is listed and quote the entry that asks for it."""
     plan = _plan("front_loaded")
+    assert plan.steps[0].payload is not None
+    assert ('structure S1: operations compact restored: its entry states "subgrade compacted '
+            'and inspected"') in plan.steps[0].payload["warnings"]
+    assert plan.requirements.structures[0].operations == ["excavate", "survey", "compact"]
 
     assert [s.stage for s in plan.steps] == [
         "structure", "taskgraph", "validate", "repair", "validate", "schedule", "repair",
@@ -483,7 +491,11 @@ def test_front_loaded_replays_its_live_run() -> None:
         ("validate", 3, "validation", ["scope:S1", "horizon_path:T1->T2->T3->T6->T7->T9"]),
         ("schedule", 4, "infeasible", ["horizon", "zone:Z1"])]
     assert plan.steps[7].failure is not None
-    assert plan.steps[7].failure.details[0] == "S1 (pad) lacks compact task"
+    assert plan.steps[7].failure.details[0] == ("S1 (pad) lacks compact task (its operations "
+                                                "list compact)")
+    assert plan.steps[7].failure.hint.startswith(
+        'Structure coverage is incomplete: S1 (pad) lists compact (the brief asks for "subgrade '
+        'compacted and inspected") but no task compacts it; add a compactor task tagged S1; ')
     assert [(s.payload or {})["diff"]["scope_drift_pct"] for s in plan.steps
             if s.stage == "repair"] == [0.0, -26.0, 35.4]
 

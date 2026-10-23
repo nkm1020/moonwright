@@ -172,7 +172,9 @@ Metrics: feasible-plan rate (Wilson 95 % CI) and the share that is also *in scop
 structure's planned volume and its compaction / sintering area at 95 % or more of the smallest
 size the brief allows: the validator rejects a volume under 70 %, and a plan that verified after
 trimming the work 15-25 % is a re-scope, not a success; an excess such as a berm hauled twice is
-reported, not counted against it), first-try
+reported, not counted against it; and, since phase 3l, every operation a structure's own entry in
+the brief states, so a plan that never compacts a pad its entry says is compacted is not in scope
+even when the structuring omitted the compaction), first-try
 feasibility, rejected answers (task-graph / repair answers cut off or off the schema), repairs
 to feasibility, makespan, p50/p95 latency, tokens and cost per run, per condition and per brief kind
 (`backend/examples/eval/kinds.json`). Each brief is structured once per repeat and every
@@ -250,7 +252,8 @@ latency, request id, the ask's `max_tokens` and thinking flag, never prompt or a
   alone and the vertical walls of a pit whose slope the brief does not state are model
   assumptions, task names decide what a levelling pass or a rehandle is, a replan's remaining
   work is not judged, and an excess (hauled twice over) is only an advisory: it verifies, and
-  the CLI's verdict line (`scope differs from the dimensions`) reports it. Between 70 % and
+  the CLI's verdict line (`scope differs from the dimensions`; `from the brief` when a
+  structure's entry states an operation no task performs, phase 3l) reports it. Between 70 % and
   95 % a plan verifies but is not counted in scope. The advice on a failed run explores single
   changes only (one battery, one spare, one deadline): a battery figure is the smallest one, to
   50 Wh, under which CP-SAT still finds a schedule for that one change, in the planning model's
