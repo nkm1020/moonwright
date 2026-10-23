@@ -1,0 +1,556 @@
+{
+ "requirements": {
+  "site": {
+   "name": "LS-1",
+   "grid": [
+    40,
+    40
+   ],
+   "zones": [
+    {
+     "id": "Z1",
+     "center": [
+      20,
+      38
+     ],
+     "radius": 3
+    },
+    {
+     "id": "Z2",
+     "center": [
+      20,
+      2
+     ],
+     "radius": 3
+    },
+    {
+     "id": "Z3",
+     "center": [
+      38,
+      20
+     ],
+     "radius": 3
+    }
+   ],
+   "depot": [
+    20,
+    2
+   ]
+  },
+  "structures": [
+   {
+    "id": "S1",
+    "type": "access_road",
+    "zone": "Z1",
+    "operations": [
+     "grade",
+     "compact"
+    ],
+    "length_m": 120,
+    "width_m": 4,
+    "lifts": 0.2
+   },
+   {
+    "id": "S2",
+    "type": "habitat_foundation",
+    "zone": "Z2",
+    "operations": [
+     "excavate",
+     "compact"
+    ],
+    "length_m": 8,
+    "width_m": 8,
+    "depth_m": 0.5
+   },
+   {
+    "id": "S3",
+    "type": "protective_berm",
+    "zone": "Z3",
+    "operations": [
+     "haul",
+     "compact"
+    ],
+    "length_m": 20,
+    "height_m": 1.5
+   }
+  ],
+  "robots": [
+   {
+    "id": "EX1",
+    "type": "excavator",
+    "battery_wh": 5000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "HL1",
+    "type": "hauler",
+    "battery_wh": 3000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "CP1",
+    "type": "compactor",
+    "battery_wh": 3500.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "CP2",
+    "type": "compactor",
+    "battery_wh": 3500.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "SV1",
+    "type": "surveyor",
+    "battery_wh": 1500.0,
+    "speed_cells_per_h": 12.0
+   }
+  ],
+  "horizon_h": 240,
+  "constraints": [
+   "Grade the road from the pad end towards the habitat so haulers always have a finished surface behind them.",
+   "Only one robot may work inside a zone at a time.",
+   "The surveyor inspects the road before the foundation is signed off."
+  ],
+  "source_brief": "# LS-1 Access Road and Habitat Foundation\n\n**Site.** LS-1 plateau, the same site as the landing pad. The route runs 120 m west from the pad apron across level regolith to the habitat site and climbs less than 2 m. The surface is fine regolith over a firm layer at 30 cm, with no boulders larger than 0.5 m along the surveyed corridor. The depot is at the pad end of the route.\n\n**Structures.**\n\n1. Access road: 120 m long, 4 m wide, graded and compacted regolith with a 20 cm compacted lift, crowned to shed dust, built as two 60 m segments.\n2. Habitat foundation: 8 m by 8 m, excavated 0.5 m to firm regolith and compacted level for the habitat module.\n3. Protective berm: 20 m long, 1.5 m high, along the north edge of the foundation, built from foundation spoil.\n\n**Fleet.** EX1 (excavator, 5000 Wh), HL1 (hauler, 3000 Wh), CP1 and CP2 (compactors, 3500 Wh each) and SV1 (surveyor, 1500 Wh). No printer is available for this sortie, so nothing is sintered. No recharging.\n\n**Deadline.** 10 days from mobilisation.\n\n**Operational constraints.**\n\n- Grade the road from the pad end towards the habitat so haulers always have a finished surface behind them.\n- Only one robot may work inside a zone at a time.\n- The surveyor inspects the road before the foundation is signed off.\n"
+ },
+ "task_graph": {
+  "tasks": [
+   {
+    "id": "T1",
+    "name": "survey access_road S1",
+    "robot_type": "surveyor",
+    "duration_h": 4,
+    "energy_wh": 240.0,
+    "zone": "Z1",
+    "after": [],
+    "structure": "S1",
+    "quantity": 480.0,
+    "unit": "m2",
+    "basis": "120 m * 4 m = 480 m2",
+    "estimated_duration_h": 4.0,
+    "estimated_energy_wh": 240.0
+   },
+   {
+    "id": "T2",
+    "name": "survey habitat_foundation S2",
+    "robot_type": "surveyor",
+    "duration_h": 1,
+    "energy_wh": 32.0,
+    "zone": "Z2",
+    "after": [],
+    "structure": "S2",
+    "quantity": 64.0,
+    "unit": "m2",
+    "basis": "8 m * 8 m = 64 m2",
+    "estimated_duration_h": 1.0,
+    "estimated_energy_wh": 32.0
+   },
+   {
+    "id": "T3",
+    "name": "survey protective_berm S3",
+    "robot_type": "surveyor",
+    "duration_h": 1,
+    "energy_wh": 30.0,
+    "zone": "Z3",
+    "after": [],
+    "structure": "S3",
+    "quantity": 60.0,
+    "unit": "m2",
+    "basis": "20 m * 3 m = 60 m2 (triangular berm footprint, base width 2*1.5 m)",
+    "estimated_duration_h": 1.0,
+    "estimated_energy_wh": 30.0
+   },
+   {
+    "id": "T4",
+    "name": "grade access_road S1",
+    "robot_type": "excavator",
+    "duration_h": 20,
+    "energy_wh": 2304.0,
+    "zone": "Z1",
+    "after": [
+     "T1"
+    ],
+    "structure": "S1",
+    "quantity": 480.0,
+    "unit": "m2",
+    "basis": "120 m * 4 m = 480 m2",
+    "estimated_duration_h": 20.0,
+    "estimated_energy_wh": 2304.0
+   },
+   {
+    "id": "T5",
+    "name": "excavate habitat_foundation S2",
+    "robot_type": "excavator",
+    "duration_h": 5,
+    "energy_wh": 512.0,
+    "zone": "Z2",
+    "after": [
+     "T2",
+     "T4"
+    ],
+    "structure": "S2",
+    "quantity": 32.0,
+    "unit": "m3",
+    "basis": "8 m * 8 m * 0.5 m = 32 m3",
+    "estimated_duration_h": 5.0,
+    "estimated_energy_wh": 512.0
+   },
+   {
+    "id": "T6",
+    "name": "compact access_road S1 part 1",
+    "robot_type": "compactor",
+    "duration_h": 10,
+    "energy_wh": 960.0,
+    "zone": "Z1",
+    "after": [
+     "T4"
+    ],
+    "structure": "S1",
+    "quantity": 240.0,
+    "unit": "m2",
+    "basis": "480 m2 / 2 = 240 m2",
+    "estimated_duration_h": 10.0,
+    "estimated_energy_wh": 960.0
+   },
+   {
+    "id": "T7",
+    "name": "compact access_road S1 part 2",
+    "robot_type": "compactor",
+    "duration_h": 10,
+    "energy_wh": 960.0,
+    "zone": "Z1",
+    "after": [
+     "T6"
+    ],
+    "structure": "S1",
+    "quantity": 240.0,
+    "unit": "m2",
+    "basis": "480 m2 / 2 = 240 m2",
+    "estimated_duration_h": 10.0,
+    "estimated_energy_wh": 960.0
+   },
+   {
+    "id": "T8",
+    "name": "compact habitat_foundation S2",
+    "robot_type": "compactor",
+    "duration_h": 3,
+    "energy_wh": 256.0,
+    "zone": "Z2",
+    "after": [
+     "T5"
+    ],
+    "structure": "S2",
+    "quantity": 64.0,
+    "unit": "m2",
+    "basis": "8 m * 8 m = 64 m2",
+    "estimated_duration_h": 3.0,
+    "estimated_energy_wh": 256.0
+   },
+   {
+    "id": "T9",
+    "name": "haul protective_berm S3",
+    "robot_type": "hauler",
+    "duration_h": 4,
+    "energy_wh": 315.0,
+    "zone": "Z3",
+    "after": [
+     "T3"
+    ],
+    "structure": "S3",
+    "quantity": 45.0,
+    "unit": "m3",
+    "basis": "20 m * (0.5 * 3 m * 1.5 m) = 45 m3 (triangular cross-section)",
+    "estimated_duration_h": 4.0,
+    "estimated_energy_wh": 315.0
+   },
+   {
+    "id": "T10",
+    "name": "compact protective_berm S3",
+    "robot_type": "compactor",
+    "duration_h": 3,
+    "energy_wh": 240.0,
+    "zone": "Z3",
+    "after": [
+     "T9"
+    ],
+    "structure": "S3",
+    "quantity": 60.0,
+    "unit": "m2",
+    "basis": "20 m * 3 m = 60 m2 (footprint)",
+    "estimated_duration_h": 3.0,
+    "estimated_energy_wh": 240.0
+   },
+   {
+    "id": "T11",
+    "name": "inspect access_road S1",
+    "robot_type": "surveyor",
+    "duration_h": 4,
+    "energy_wh": 240.0,
+    "zone": "Z1",
+    "after": [
+     "T7"
+    ],
+    "structure": "S1",
+    "quantity": 480.0,
+    "unit": "m2",
+    "basis": "120 m * 4 m = 480 m2",
+    "estimated_duration_h": 4.0,
+    "estimated_energy_wh": 240.0
+   },
+   {
+    "id": "T12",
+    "name": "inspect habitat_foundation S2",
+    "robot_type": "surveyor",
+    "duration_h": 1,
+    "energy_wh": 32.0,
+    "zone": "Z2",
+    "after": [
+     "T8",
+     "T11"
+    ],
+    "structure": "S2",
+    "quantity": 64.0,
+    "unit": "m2",
+    "basis": "8 m * 8 m = 64 m2",
+    "estimated_duration_h": 1.0,
+    "estimated_energy_wh": 32.0
+   },
+   {
+    "id": "T13",
+    "name": "inspect protective_berm S3",
+    "robot_type": "surveyor",
+    "duration_h": 1,
+    "energy_wh": 30.0,
+    "zone": "Z3",
+    "after": [
+     "T10"
+    ],
+    "structure": "S3",
+    "quantity": 60.0,
+    "unit": "m2",
+    "basis": "20 m * 3 m = 60 m2",
+    "estimated_duration_h": 1.0,
+    "estimated_energy_wh": 30.0
+   }
+  ],
+  "notes": "Berm geometry assumed triangular cross-section with 1:1 slopes (base width = 2*height = 3 m) giving volume 45 m3 and footprint 60 m2. Road grading is a single task (480 m2) but noted to be executed from pad end toward habitat. Only one robot per zone at a time is respected by sequential tasks within each zone. Surveyor inspections ordered: road before foundation per constraint. All tasks fit within robot batteries and 240 h horizon."
+ },
+ "schedule": {
+  "entries": [
+   {
+    "task": "T1",
+    "robot": "SV1",
+    "start_h": 3,
+    "end_h": 7
+   },
+   {
+    "task": "T2",
+    "robot": "SV1",
+    "start_h": 14,
+    "end_h": 15
+   },
+   {
+    "task": "T3",
+    "robot": "SV1",
+    "start_h": 10,
+    "end_h": 11
+   },
+   {
+    "task": "T4",
+    "robot": "EX1",
+    "start_h": 7,
+    "end_h": 27
+   },
+   {
+    "task": "T5",
+    "robot": "EX1",
+    "start_h": 31,
+    "end_h": 36
+   },
+   {
+    "task": "T6",
+    "robot": "CP1",
+    "start_h": 27,
+    "end_h": 37
+   },
+   {
+    "task": "T7",
+    "robot": "CP2",
+    "start_h": 37,
+    "end_h": 47
+   },
+   {
+    "task": "T8",
+    "robot": "CP2",
+    "start_h": 50,
+    "end_h": 53
+   },
+   {
+    "task": "T9",
+    "robot": "HL1",
+    "start_h": 11,
+    "end_h": 15
+   },
+   {
+    "task": "T10",
+    "robot": "CP2",
+    "start_h": 15,
+    "end_h": 18
+   },
+   {
+    "task": "T11",
+    "robot": "SV1",
+    "start_h": 47,
+    "end_h": 51
+   },
+   {
+    "task": "T12",
+    "robot": "SV1",
+    "start_h": 54,
+    "end_h": 55
+   },
+   {
+    "task": "T13",
+    "robot": "SV1",
+    "start_h": 18,
+    "end_h": 19
+   }
+  ],
+  "makespan_h": 55,
+  "status": "optimal",
+  "objective_bound_h": 55,
+  "solve_time_s": 0.011665
+ },
+ "explanation": null,
+ "steps": [
+  {
+   "stage": "structure",
+   "attempt": 1,
+   "ok": true,
+   "failure": null,
+   "duration_s": 7.491993082920089,
+   "usage": {
+    "model": "nvidia/Nemotron-3_5-Lightning",
+    "input_tokens": 3171,
+    "output_tokens": 482,
+    "latency_s": 7.4889156660065055
+   },
+   "message": "3 structures, 5 robots, horizon 240h",
+   "payload": {
+    "zones": 3,
+    "grid": [
+     40,
+     40
+    ],
+    "depot": [
+     20,
+     2
+    ],
+    "warnings": []
+   }
+  },
+  {
+   "stage": "taskgraph",
+   "attempt": 1,
+   "ok": true,
+   "failure": null,
+   "duration_s": 48.19474637508392,
+   "usage": {
+    "model": "nvidia/Nemotron-3-Ultra-550b-a55b",
+    "input_tokens": 3406,
+    "output_tokens": 15057,
+    "latency_s": 48.18752399994992
+   },
+   "message": "13 tasks",
+   "payload": {
+    "advisories": [],
+    "rate_model": true,
+    "grounded": 13
+   }
+  },
+  {
+   "stage": "validate",
+   "attempt": 1,
+   "ok": true,
+   "failure": null,
+   "duration_s": 0.0014040840324014425,
+   "usage": null,
+   "message": "13 tasks valid",
+   "payload": null
+  },
+  {
+   "stage": "schedule",
+   "attempt": 1,
+   "ok": true,
+   "failure": null,
+   "duration_s": 0.017326708883047104,
+   "usage": null,
+   "message": "makespan 55h (optimal)",
+   "payload": {
+    "makespan_h": 55,
+    "status": "optimal",
+    "verified": true,
+    "verification": {
+     "precedence_edges": 12,
+     "robot_rows": 5,
+     "zone_groups": 3,
+     "battery": [
+      {
+       "robot": "EX1",
+       "used_wh": 2852.0,
+       "work_wh": 2816.0,
+       "travel_wh": 36.0,
+       "budget_wh": 5000.0,
+       "pct": 57.0
+      },
+      {
+       "robot": "HL1",
+       "used_wh": 327.728,
+       "work_wh": 315.0,
+       "travel_wh": 12.728,
+       "budget_wh": 3000.0,
+       "pct": 10.9
+      },
+      {
+       "robot": "CP1",
+       "used_wh": 978.0,
+       "work_wh": 960.0,
+       "travel_wh": 18.0,
+       "budget_wh": 3500.0,
+       "pct": 27.9
+      },
+      {
+       "robot": "CP2",
+       "used_wh": 1499.456,
+       "work_wh": 1456.0,
+       "travel_wh": 43.456,
+       "budget_wh": 3500.0,
+       "pct": 42.8
+      },
+      {
+       "robot": "SV1",
+       "used_wh": 690.912,
+       "work_wh": 604.0,
+       "travel_wh": 86.912,
+       "budget_wh": 1500.0,
+       "pct": 46.1
+      }
+     ],
+     "tightest_robot": "EX1",
+     "horizon_used_h": 55,
+     "horizon_h": 240,
+     "status": "optimal",
+     "objective_bound_h": 55,
+     "solve_time_s": 0.012,
+     "travel_allowance": true,
+     "recheck": "independent check_schedule passed"
+    }
+   }
+  }
+ ],
+ "repairs": 0,
+ "success": true,
+ "failure": null,
+ "suggestions": []
+}

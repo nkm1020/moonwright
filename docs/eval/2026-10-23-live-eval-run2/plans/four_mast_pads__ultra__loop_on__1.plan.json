@@ -1,0 +1,852 @@
+{
+ "requirements": {
+  "site": {
+   "name": "LS-1",
+   "grid": [
+    40,
+    40
+   ],
+   "zones": [
+    {
+     "id": "Z1",
+     "center": [
+      15,
+      15
+     ],
+     "radius": 3
+    },
+    {
+     "id": "Z2",
+     "center": [
+      15,
+      25
+     ],
+     "radius": 3
+    },
+    {
+     "id": "Z3",
+     "center": [
+      25,
+      15
+     ],
+     "radius": 3
+    },
+    {
+     "id": "Z4",
+     "center": [
+      25,
+      25
+     ],
+     "radius": 3
+    }
+   ],
+   "depot": [
+    20,
+    2
+   ]
+  },
+  "structures": [
+   {
+    "id": "PAD1",
+    "type": "mast_pad",
+    "zone": "Z1",
+    "operations": [
+     "survey",
+     "grade",
+     "excavate",
+     "compact"
+    ],
+    "diameter_m": 8,
+    "length_m": 8,
+    "height_m": 0.2,
+    "depth_m": 1
+   },
+   {
+    "id": "PAD2",
+    "type": "mast_pad",
+    "zone": "Z2",
+    "operations": [
+     "survey",
+     "grade",
+     "excavate",
+     "compact"
+    ],
+    "diameter_m": 8,
+    "length_m": 8,
+    "height_m": 0.2,
+    "depth_m": 1
+   },
+   {
+    "id": "PAD3",
+    "type": "mast_pad",
+    "zone": "Z3",
+    "operations": [
+     "survey",
+     "grade",
+     "excavate",
+     "compact"
+    ],
+    "diameter_m": 8,
+    "length_m": 8,
+    "height_m": 0.2,
+    "depth_m": 1
+   },
+   {
+    "id": "PAD4",
+    "type": "mast_pad",
+    "zone": "Z4",
+    "operations": [
+     "survey",
+     "grade",
+     "excavate",
+     "compact"
+    ],
+    "diameter_m": 8,
+    "length_m": 8,
+    "height_m": 0.2,
+    "depth_m": 1
+   }
+  ],
+  "robots": [
+   {
+    "id": "EX1",
+    "type": "excavator",
+    "battery_wh": 5000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "EX2",
+    "type": "excavator",
+    "battery_wh": 5000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "HL1",
+    "type": "hauler",
+    "battery_wh": 3000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "CP1",
+    "type": "compactor",
+    "battery_wh": 3500.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "CP2",
+    "type": "compactor",
+    "battery_wh": 3500.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "SV1",
+    "type": "surveyor",
+    "battery_wh": 1500.0,
+    "speed_cells_per_h": 12.0
+   }
+  ],
+  "horizon_h": 144,
+  "constraints": [
+   "The four pads are independent and should proceed in parallel wherever the fleet allows.",
+   "Each pad is staked before stripping and inspected after the anchor backfill.",
+   "Only one robot may work inside a pad at a time."
+  ],
+  "source_brief": "# Four Communication Mast Pads\n\n**Site.** Four corners of a 100 m square around the habitat area, each on firm regolith with 20 cm of fines. The depot is at the centre of the square; no recharging.\n\n**Structures.**\n\n1. Mast pad NE, 2. mast pad NW, 3. mast pad SE, 4. mast pad SW: each 8 m by 8 m, stripped of fines, levelled, compacted, with a 1 m deep central anchor hole excavated and backfilled with compacted regolith around the anchor.\n\n**Fleet.** EX1 and EX2 (excavators, 5000 Wh each), HL1 (hauler, 3000 Wh), CP1 and CP2 (compactors, 3500 Wh each) and SV1 (surveyor, 1500 Wh). Batteries are the whole budget.\n\n**Deadline.** 6 days.\n\n**Operational constraints.**\n\n- The four pads are independent and should proceed in parallel wherever the fleet allows.\n- Each pad is staked before stripping and inspected after the anchor backfill.\n- Only one robot may work inside a pad at a time.\n"
+ },
+ "task_graph": {
+  "tasks": [
+   {
+    "id": "PAD1_SURVEY",
+    "name": "survey PAD1",
+    "robot_type": "surveyor",
+    "duration_h": 1,
+    "energy_wh": 32.0,
+    "zone": "Z1",
+    "after": [],
+    "structure": "PAD1",
+    "quantity": 64.0,
+    "unit": "m2",
+    "basis": "8 m x 8 m = 64 m2",
+    "estimated_duration_h": 1.0,
+    "estimated_energy_wh": 32.0
+   },
+   {
+    "id": "PAD1_GRADE",
+    "name": "grade PAD1",
+    "robot_type": "excavator",
+    "duration_h": 3,
+    "energy_wh": 307.2,
+    "zone": "Z1",
+    "after": [
+     "PAD1_SURVEY"
+    ],
+    "structure": "PAD1",
+    "quantity": 64.0,
+    "unit": "m2",
+    "basis": "8 m x 8 m = 64 m2",
+    "estimated_duration_h": 3.0,
+    "estimated_energy_wh": 307.2
+   },
+   {
+    "id": "PAD1_EXCAVATE_1",
+    "name": "excavate PAD1 part 1",
+    "robot_type": "excavator",
+    "duration_h": 5,
+    "energy_wh": 512.0,
+    "zone": "Z1",
+    "after": [
+     "PAD1_GRADE"
+    ],
+    "structure": "PAD1",
+    "quantity": 32.0,
+    "unit": "m3",
+    "basis": "64 m3 / 2 = 32 m3",
+    "estimated_duration_h": 5.0,
+    "estimated_energy_wh": 512.0
+   },
+   {
+    "id": "PAD1_EXCAVATE_2",
+    "name": "excavate PAD1 part 2",
+    "robot_type": "excavator",
+    "duration_h": 5,
+    "energy_wh": 512.0,
+    "zone": "Z1",
+    "after": [
+     "PAD1_EXCAVATE_1"
+    ],
+    "structure": "PAD1",
+    "quantity": 32.0,
+    "unit": "m3",
+    "basis": "64 m3 / 2 = 32 m3",
+    "estimated_duration_h": 5.0,
+    "estimated_energy_wh": 512.0
+   },
+   {
+    "id": "PAD1_COMPACT",
+    "name": "compact PAD1",
+    "robot_type": "compactor",
+    "duration_h": 3,
+    "energy_wh": 256.0,
+    "zone": "Z1",
+    "after": [
+     "PAD1_EXCAVATE_2"
+    ],
+    "structure": "PAD1",
+    "quantity": 64.0,
+    "unit": "m2",
+    "basis": "8 m x 8 m = 64 m2",
+    "estimated_duration_h": 3.0,
+    "estimated_energy_wh": 256.0
+   },
+   {
+    "id": "PAD1_INSPECT",
+    "name": "inspect PAD1",
+    "robot_type": "surveyor",
+    "duration_h": 1,
+    "energy_wh": 32.0,
+    "zone": "Z1",
+    "after": [
+     "PAD1_COMPACT"
+    ],
+    "structure": "PAD1",
+    "quantity": 64.0,
+    "unit": "m2",
+    "basis": "8 m x 8 m = 64 m2",
+    "estimated_duration_h": 1.0,
+    "estimated_energy_wh": 32.0
+   },
+   {
+    "id": "PAD2_SURVEY",
+    "name": "survey PAD2",
+    "robot_type": "surveyor",
+    "duration_h": 1,
+    "energy_wh": 32.0,
+    "zone": "Z2",
+    "after": [],
+    "structure": "PAD2",
+    "quantity": 64.0,
+    "unit": "m2",
+    "basis": "8 m x 8 m = 64 m2",
+    "estimated_duration_h": 1.0,
+    "estimated_energy_wh": 32.0
+   },
+   {
+    "id": "PAD2_GRADE",
+    "name": "grade PAD2",
+    "robot_type": "excavator",
+    "duration_h": 3,
+    "energy_wh": 307.2,
+    "zone": "Z2",
+    "after": [
+     "PAD2_SURVEY"
+    ],
+    "structure": "PAD2",
+    "quantity": 64.0,
+    "unit": "m2",
+    "basis": "8 m x 8 m = 64 m2",
+    "estimated_duration_h": 3.0,
+    "estimated_energy_wh": 307.2
+   },
+   {
+    "id": "PAD2_EXCAVATE_1",
+    "name": "excavate PAD2 part 1",
+    "robot_type": "excavator",
+    "duration_h": 5,
+    "energy_wh": 512.0,
+    "zone": "Z2",
+    "after": [
+     "PAD2_GRADE"
+    ],
+    "structure": "PAD2",
+    "quantity": 32.0,
+    "unit": "m3",
+    "basis": "64 m3 / 2 = 32 m3",
+    "estimated_duration_h": 5.0,
+    "estimated_energy_wh": 512.0
+   },
+   {
+    "id": "PAD2_EXCAVATE_2",
+    "name": "excavate PAD2 part 2",
+    "robot_type": "excavator",
+    "duration_h": 5,
+    "energy_wh": 512.0,
+    "zone": "Z2",
+    "after": [
+     "PAD2_EXCAVATE_1"
+    ],
+    "structure": "PAD2",
+    "quantity": 32.0,
+    "unit": "m3",
+    "basis": "64 m3 / 2 = 32 m3",
+    "estimated_duration_h": 5.0,
+    "estimated_energy_wh": 512.0
+   },
+   {
+    "id": "PAD2_COMPACT",
+    "name": "compact PAD2",
+    "robot_type": "compactor",
+    "duration_h": 3,
+    "energy_wh": 256.0,
+    "zone": "Z2",
+    "after": [
+     "PAD2_EXCAVATE_2"
+    ],
+    "structure": "PAD2",
+    "quantity": 64.0,
+    "unit": "m2",
+    "basis": "8 m x 8 m = 64 m2",
+    "estimated_duration_h": 3.0,
+    "estimated_energy_wh": 256.0
+   },
+   {
+    "id": "PAD2_INSPECT",
+    "name": "inspect PAD2",
+    "robot_type": "surveyor",
+    "duration_h": 1,
+    "energy_wh": 32.0,
+    "zone": "Z2",
+    "after": [
+     "PAD2_COMPACT"
+    ],
+    "structure": "PAD2",
+    "quantity": 64.0,
+    "unit": "m2",
+    "basis": "8 m x 8 m = 64 m2",
+    "estimated_duration_h": 1.0,
+    "estimated_energy_wh": 32.0
+   },
+   {
+    "id": "PAD3_SURVEY",
+    "name": "survey PAD3",
+    "robot_type": "surveyor",
+    "duration_h": 1,
+    "energy_wh": 32.0,
+    "zone": "Z3",
+    "after": [],
+    "structure": "PAD3",
+    "quantity": 64.0,
+    "unit": "m2",
+    "basis": "8 m x 8 m = 64 m2",
+    "estimated_duration_h": 1.0,
+    "estimated_energy_wh": 32.0
+   },
+   {
+    "id": "PAD3_GRADE",
+    "name": "grade PAD3",
+    "robot_type": "excavator",
+    "duration_h": 3,
+    "energy_wh": 307.2,
+    "zone": "Z3",
+    "after": [
+     "PAD3_SURVEY"
+    ],
+    "structure": "PAD3",
+    "quantity": 64.0,
+    "unit": "m2",
+    "basis": "8 m x 8 m = 64 m2",
+    "estimated_duration_h": 3.0,
+    "estimated_energy_wh": 307.2
+   },
+   {
+    "id": "PAD3_EXCAVATE_1",
+    "name": "excavate PAD3 part 1",
+    "robot_type": "excavator",
+    "duration_h": 5,
+    "energy_wh": 512.0,
+    "zone": "Z3",
+    "after": [
+     "PAD3_GRADE"
+    ],
+    "structure": "PAD3",
+    "quantity": 32.0,
+    "unit": "m3",
+    "basis": "64 m3 / 2 = 32 m3",
+    "estimated_duration_h": 5.0,
+    "estimated_energy_wh": 512.0
+   },
+   {
+    "id": "PAD3_EXCAVATE_2",
+    "name": "excavate PAD3 part 2",
+    "robot_type": "excavator",
+    "duration_h": 5,
+    "energy_wh": 512.0,
+    "zone": "Z3",
+    "after": [
+     "PAD3_EXCAVATE_1"
+    ],
+    "structure": "PAD3",
+    "quantity": 32.0,
+    "unit": "m3",
+    "basis": "64 m3 / 2 = 32 m3",
+    "estimated_duration_h": 5.0,
+    "estimated_energy_wh": 512.0
+   },
+   {
+    "id": "PAD3_COMPACT",
+    "name": "compact PAD3",
+    "robot_type": "compactor",
+    "duration_h": 3,
+    "energy_wh": 256.0,
+    "zone": "Z3",
+    "after": [
+     "PAD3_EXCAVATE_2"
+    ],
+    "structure": "PAD3",
+    "quantity": 64.0,
+    "unit": "m2",
+    "basis": "8 m x 8 m = 64 m2",
+    "estimated_duration_h": 3.0,
+    "estimated_energy_wh": 256.0
+   },
+   {
+    "id": "PAD3_INSPECT",
+    "name": "inspect PAD3",
+    "robot_type": "surveyor",
+    "duration_h": 1,
+    "energy_wh": 32.0,
+    "zone": "Z3",
+    "after": [
+     "PAD3_COMPACT"
+    ],
+    "structure": "PAD3",
+    "quantity": 64.0,
+    "unit": "m2",
+    "basis": "8 m x 8 m = 64 m2",
+    "estimated_duration_h": 1.0,
+    "estimated_energy_wh": 32.0
+   },
+   {
+    "id": "PAD4_SURVEY",
+    "name": "survey PAD4",
+    "robot_type": "surveyor",
+    "duration_h": 1,
+    "energy_wh": 32.0,
+    "zone": "Z4",
+    "after": [],
+    "structure": "PAD4",
+    "quantity": 64.0,
+    "unit": "m2",
+    "basis": "8 m x 8 m = 64 m2",
+    "estimated_duration_h": 1.0,
+    "estimated_energy_wh": 32.0
+   },
+   {
+    "id": "PAD4_GRADE",
+    "name": "grade PAD4",
+    "robot_type": "excavator",
+    "duration_h": 3,
+    "energy_wh": 307.2,
+    "zone": "Z4",
+    "after": [
+     "PAD4_SURVEY"
+    ],
+    "structure": "PAD4",
+    "quantity": 64.0,
+    "unit": "m2",
+    "basis": "8 m x 8 m = 64 m2",
+    "estimated_duration_h": 3.0,
+    "estimated_energy_wh": 307.2
+   },
+   {
+    "id": "PAD4_EXCAVATE_1",
+    "name": "excavate PAD4 part 1",
+    "robot_type": "excavator",
+    "duration_h": 5,
+    "energy_wh": 512.0,
+    "zone": "Z4",
+    "after": [
+     "PAD4_GRADE"
+    ],
+    "structure": "PAD4",
+    "quantity": 32.0,
+    "unit": "m3",
+    "basis": "64 m3 / 2 = 32 m3",
+    "estimated_duration_h": 5.0,
+    "estimated_energy_wh": 512.0
+   },
+   {
+    "id": "PAD4_EXCAVATE_2",
+    "name": "excavate PAD4 part 2",
+    "robot_type": "excavator",
+    "duration_h": 5,
+    "energy_wh": 512.0,
+    "zone": "Z4",
+    "after": [
+     "PAD4_EXCAVATE_1"
+    ],
+    "structure": "PAD4",
+    "quantity": 32.0,
+    "unit": "m3",
+    "basis": "64 m3 / 2 = 32 m3",
+    "estimated_duration_h": 5.0,
+    "estimated_energy_wh": 512.0
+   },
+   {
+    "id": "PAD4_COMPACT",
+    "name": "compact PAD4",
+    "robot_type": "compactor",
+    "duration_h": 3,
+    "energy_wh": 256.0,
+    "zone": "Z4",
+    "after": [
+     "PAD4_EXCAVATE_2"
+    ],
+    "structure": "PAD4",
+    "quantity": 64.0,
+    "unit": "m2",
+    "basis": "8 m x 8 m = 64 m2",
+    "estimated_duration_h": 3.0,
+    "estimated_energy_wh": 256.0
+   },
+   {
+    "id": "PAD4_INSPECT",
+    "name": "inspect PAD4",
+    "robot_type": "surveyor",
+    "duration_h": 1,
+    "energy_wh": 32.0,
+    "zone": "Z4",
+    "after": [
+     "PAD4_COMPACT"
+    ],
+    "structure": "PAD4",
+    "quantity": 64.0,
+    "unit": "m2",
+    "basis": "8 m x 8 m = 64 m2",
+    "estimated_duration_h": 1.0,
+    "estimated_energy_wh": 32.0
+   }
+  ],
+  "notes": "Four independent mast pads (PAD1-PAD4) in zones Z1-Z4. Each pad receives survey, grade, excavation (split into two tasks per pad due to >60 m3 and two excavators), compaction, and inspection. Only one robot works in a pad at a time; pads run in parallel across zones. No hauling required. All tasks fit within robot battery budgets."
+ },
+ "schedule": {
+  "entries": [
+   {
+    "task": "PAD1_SURVEY",
+    "robot": "SV1",
+    "start_h": 5,
+    "end_h": 6
+   },
+   {
+    "task": "PAD1_GRADE",
+    "robot": "EX1",
+    "start_h": 6,
+    "end_h": 9
+   },
+   {
+    "task": "PAD1_EXCAVATE_1",
+    "robot": "EX2",
+    "start_h": 15,
+    "end_h": 20
+   },
+   {
+    "task": "PAD1_EXCAVATE_2",
+    "robot": "EX2",
+    "start_h": 27,
+    "end_h": 32
+   },
+   {
+    "task": "PAD1_COMPACT",
+    "robot": "CP2",
+    "start_h": 32,
+    "end_h": 35
+   },
+   {
+    "task": "PAD1_INSPECT",
+    "robot": "SV1",
+    "start_h": 35,
+    "end_h": 36
+   },
+   {
+    "task": "PAD2_SURVEY",
+    "robot": "SV1",
+    "start_h": 8,
+    "end_h": 9
+   },
+   {
+    "task": "PAD2_GRADE",
+    "robot": "EX1",
+    "start_h": 11,
+    "end_h": 14
+   },
+   {
+    "task": "PAD2_EXCAVATE_1",
+    "robot": "EX1",
+    "start_h": 16,
+    "end_h": 21
+   },
+   {
+    "task": "PAD2_EXCAVATE_2",
+    "robot": "EX1",
+    "start_h": 23,
+    "end_h": 28
+   },
+   {
+    "task": "PAD2_COMPACT",
+    "robot": "CP1",
+    "start_h": 28,
+    "end_h": 31
+   },
+   {
+    "task": "PAD2_INSPECT",
+    "robot": "SV1",
+    "start_h": 31,
+    "end_h": 32
+   },
+   {
+    "task": "PAD3_SURVEY",
+    "robot": "SV1",
+    "start_h": 11,
+    "end_h": 12
+   },
+   {
+    "task": "PAD3_GRADE",
+    "robot": "EX2",
+    "start_h": 22,
+    "end_h": 25
+   },
+   {
+    "task": "PAD3_EXCAVATE_1",
+    "robot": "EX1",
+    "start_h": 30,
+    "end_h": 35
+   },
+   {
+    "task": "PAD3_EXCAVATE_2",
+    "robot": "EX1",
+    "start_h": 37,
+    "end_h": 42
+   },
+   {
+    "task": "PAD3_COMPACT",
+    "robot": "CP1",
+    "start_h": 42,
+    "end_h": 45
+   },
+   {
+    "task": "PAD3_INSPECT",
+    "robot": "SV1",
+    "start_h": 45,
+    "end_h": 46
+   },
+   {
+    "task": "PAD4_SURVEY",
+    "robot": "SV1",
+    "start_h": 2,
+    "end_h": 3
+   },
+   {
+    "task": "PAD4_GRADE",
+    "robot": "EX2",
+    "start_h": 3,
+    "end_h": 6
+   },
+   {
+    "task": "PAD4_EXCAVATE_1",
+    "robot": "EX2",
+    "start_h": 8,
+    "end_h": 13
+   },
+   {
+    "task": "PAD4_EXCAVATE_2",
+    "robot": "EX2",
+    "start_h": 34,
+    "end_h": 39
+   },
+   {
+    "task": "PAD4_COMPACT",
+    "robot": "CP2",
+    "start_h": 39,
+    "end_h": 42
+   },
+   {
+    "task": "PAD4_INSPECT",
+    "robot": "SV1",
+    "start_h": 42,
+    "end_h": 43
+   }
+  ],
+  "makespan_h": 46,
+  "status": "optimal",
+  "objective_bound_h": 46,
+  "solve_time_s": 0.09731100000000001
+ },
+ "explanation": null,
+ "steps": [
+  {
+   "stage": "structure",
+   "attempt": 1,
+   "ok": true,
+   "failure": null,
+   "duration_s": 57.613608290906996,
+   "usage": {
+    "model": "nvidia/Nemotron-3_5-Lightning",
+    "input_tokens": 3062,
+    "output_tokens": 675,
+    "latency_s": 57.60648312512785
+   },
+   "message": "4 structures, 6 robots, horizon 144h",
+   "payload": {
+    "zones": 4,
+    "grid": [
+     40,
+     40
+    ],
+    "depot": [
+     20,
+     2
+    ],
+    "warnings": []
+   }
+  },
+  {
+   "stage": "taskgraph",
+   "attempt": 1,
+   "ok": true,
+   "failure": null,
+   "duration_s": 20.63947158306837,
+   "usage": {
+    "model": "nvidia/Nemotron-3-Ultra-550b-a55b",
+    "input_tokens": 3647,
+    "output_tokens": 8009,
+    "latency_s": 20.633540791925043
+   },
+   "message": "24 tasks",
+   "payload": {
+    "advisories": [],
+    "rate_model": true,
+    "grounded": 24
+   }
+  },
+  {
+   "stage": "validate",
+   "attempt": 1,
+   "ok": true,
+   "failure": null,
+   "duration_s": 0.0015582919586449862,
+   "usage": null,
+   "message": "24 tasks valid",
+   "payload": null
+  },
+  {
+   "stage": "schedule",
+   "attempt": 1,
+   "ok": true,
+   "failure": null,
+   "duration_s": 0.09886158397421241,
+   "usage": null,
+   "message": "makespan 46h (optimal)",
+   "payload": {
+    "makespan_h": 46,
+    "status": "optimal",
+    "verified": true,
+    "verification": {
+     "precedence_edges": 20,
+     "robot_rows": 6,
+     "zone_groups": 4,
+     "battery": [
+      {
+       "robot": "EX1",
+       "used_wh": 2681.435,
+       "work_wh": 2662.4,
+       "travel_wh": 19.035,
+       "budget_wh": 5000.0,
+       "pct": 53.6
+      },
+      {
+       "robot": "EX2",
+       "used_wh": 2698.311,
+       "work_wh": 2662.4,
+       "travel_wh": 35.911,
+       "budget_wh": 5000.0,
+       "pct": 54.0
+      },
+      {
+       "robot": "HL1",
+       "used_wh": 0.0,
+       "work_wh": 0.0,
+       "travel_wh": 0.0,
+       "budget_wh": 3000.0,
+       "pct": 0.0
+      },
+      {
+       "robot": "CP1",
+       "used_wh": 530.84,
+       "work_wh": 512.0,
+       "travel_wh": 18.84,
+       "budget_wh": 3500.0,
+       "pct": 15.2
+      },
+      {
+       "robot": "CP2",
+       "used_wh": 526.035,
+       "work_wh": 512.0,
+       "travel_wh": 14.035,
+       "budget_wh": 3500.0,
+       "pct": 15.0
+      },
+      {
+       "robot": "SV1",
+       "used_wh": 311.053,
+       "work_wh": 256.0,
+       "travel_wh": 55.053,
+       "budget_wh": 1500.0,
+       "pct": 20.7
+      }
+     ],
+     "tightest_robot": "EX2",
+     "horizon_used_h": 46,
+     "horizon_h": 144,
+     "status": "optimal",
+     "objective_bound_h": 46,
+     "solve_time_s": 0.097,
+     "travel_allowance": true,
+     "recheck": "independent check_schedule passed"
+    }
+   }
+  }
+ ],
+ "repairs": 0,
+ "success": true,
+ "failure": null,
+ "suggestions": []
+}

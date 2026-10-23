@@ -1,0 +1,145 @@
+{
+ "brief": "tight_battery",
+ "repeat": 2,
+ "requirements_sha": "be48f8b549",
+ "requirements": {
+  "site": {
+   "name": "LS-1",
+   "grid": [
+    40,
+    40
+   ],
+   "zones": [
+    {
+     "id": "Z1",
+     "center": [
+      15,
+      35
+     ],
+     "radius": 4
+    },
+    {
+     "id": "Z2",
+     "center": [
+      35,
+      5
+     ],
+     "radius": 4
+    },
+    {
+     "id": "Z3",
+     "center": [
+      20,
+      2
+     ],
+     "radius": 3
+    }
+   ],
+   "depot": [
+    20,
+    2
+   ]
+  },
+  "structures": [
+   {
+    "id": "S1",
+    "type": "landing_pad",
+    "zone": "Z1",
+    "operations": [
+     "excavate",
+     "compact"
+    ],
+    "diameter_m": 20,
+    "depth_m": 0.6
+   },
+   {
+    "id": "S2",
+    "type": "blast_berm",
+    "zone": "Z2",
+    "operations": [
+     "haul",
+     "compact",
+     "sinter"
+    ],
+    "length_m": 60,
+    "height_m": 2.5,
+    "width_m": 4,
+    "trench_width_m": 0.5,
+    "trench_depth_m": 0.5
+   },
+   {
+    "id": "S3",
+    "type": "stockpile",
+    "zone": "Z3",
+    "operations": [
+     "haul"
+    ],
+    "length_m": 30,
+    "width_m": 8
+   }
+  ],
+  "robots": [
+   {
+    "id": "EX1",
+    "type": "excavator",
+    "battery_wh": 5000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "EX2",
+    "type": "excavator",
+    "battery_wh": 5000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "HL1",
+    "type": "hauler",
+    "battery_wh": 3000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "CP1",
+    "type": "compactor",
+    "battery_wh": 3500.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "SV1",
+    "type": "surveyor",
+    "battery_wh": 1500.0,
+    "speed_cells_per_h": 12.0
+   }
+  ],
+  "horizon_h": 168,
+  "constraints": [
+   "Excavation dominates this sortie: close to 100 cubic metres of regolith must be moved, so both excavators share the dig and no robot may be loaded beyond its battery.",
+   "Only one robot may work inside a zone at a time.",
+   "Berm compaction waits for the pad bowl, which supplies the fill."
+  ],
+  "source_brief": "# LS-1 Landing Pad, Short Sortie\n\n**Site.** LS-1 plateau near the lunar south pole, same footprint as the baseline landing-pad job. Loose regolith extends to 40 cm and must be removed across the whole pad footprint; the berm needs a key trench cut into firm material because the plateau slopes north. The depot is on the south edge of the site.\n\n**Structures.**\n\n1. Landing pad: 20 m diameter bowl excavated 0.6 m to firm regolith across the full footprint, with a compacted subgrade. Sintering is deferred to a later sortie when the printer arrives.\n2. Blast berm: 60 m arc, 2.5 m high, 4 m at the base, on a 0.5 m deep key trench, built from pad spoil and compacted.\n3. Approach apron: strip a 30 m by 8 m lane on the south side so the hauler can reach the pad.\n\n**Fleet.** EX1 and EX2 (excavators, 5000 Wh each), HL1 (hauler, 3000 Wh), CP1 (compactor, 3500 Wh) and SV1 (surveyor, 1500 Wh). No printer. No recharging; each battery is the budget for the whole sortie.\n\n**Deadline.** 7 days.\n\n**Operational constraints.**\n\n- Excavation dominates this sortie: close to 100 cubic metres of regolith must be moved, so both excavators share the dig and no robot may be loaded beyond its battery.\n- Only one robot may work inside a zone at a time.\n- Berm compaction waits for the pad bowl, which supplies the fill.\n"
+ },
+ "ok": true,
+ "message": "3 structures, 5 robots, horizon 168h",
+ "payload": {
+  "zones": 3,
+  "grid": [
+   40,
+   40
+  ],
+  "depot": [
+   20,
+   2
+  ],
+  "warnings": [
+   "structure S2 lists sinter but the fleet has no printer: no sinter task will be required of it (add a printer or drop the operation)"
+  ]
+ },
+ "failure": null,
+ "usage": {
+  "model": "nvidia/Nemotron-3_5-Lightning",
+  "input_tokens": 3174,
+  "output_tokens": 515,
+  "latency_s": 4.411864541936666
+ },
+ "latency_s": 4.417
+}

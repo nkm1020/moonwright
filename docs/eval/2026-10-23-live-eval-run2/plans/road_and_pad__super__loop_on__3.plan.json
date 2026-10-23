@@ -1,0 +1,541 @@
+{
+ "requirements": {
+  "site": {
+   "name": "LS-1",
+   "grid": [
+    40,
+    40
+   ],
+   "zones": [
+    {
+     "id": "Z1",
+     "center": [
+      20,
+      2
+     ],
+     "radius": 3
+    },
+    {
+     "id": "Z2",
+     "center": [
+      20,
+      37
+     ],
+     "radius": 3
+    },
+    {
+     "id": "Z3",
+     "center": [
+      20,
+      20
+     ],
+     "radius": 3
+    }
+   ],
+   "depot": [
+    20,
+    2
+   ]
+  },
+  "structures": [
+   {
+    "id": "S1",
+    "type": "road",
+    "zone": "Z1",
+    "operations": [
+     "grade",
+     "compact"
+    ],
+    "length_m": 200,
+    "width_m": 5
+   },
+   {
+    "id": "S2",
+    "type": "pad",
+    "zone": "Z2",
+    "operations": [
+     "excavate",
+     "compact",
+     "sinter"
+    ],
+    "diameter_m": 15,
+    "depth_m": 0.3,
+    "thickness_m": 0.2
+   },
+   {
+    "id": "S3",
+    "type": "windrow",
+    "zone": "Z3",
+    "operations": [
+     "grade",
+     "compact"
+    ]
+   }
+  ],
+  "robots": [
+   {
+    "id": "EX1",
+    "type": "excavator",
+    "battery_wh": 5000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "EX2",
+    "type": "excavator",
+    "battery_wh": 5000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "HL1",
+    "type": "hauler",
+    "battery_wh": 3000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "CP1",
+    "type": "compactor",
+    "battery_wh": 3500.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "CP2",
+    "type": "compactor",
+    "battery_wh": 3500.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "PR1",
+    "type": "printer",
+    "battery_wh": 4000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "SV1",
+    "type": "surveyor",
+    "battery_wh": 1500.0,
+    "speed_cells_per_h": 12.0
+   }
+  ],
+  "horizon_h": 336,
+  "constraints": [
+   "Road segment one is compacted before segment two is graded so the haul route stays open.",
+   "The pad is excavated only after the surveyor has staked it and the road reaches it.",
+   "Only one robot may work inside a zone at a time."
+  ],
+  "source_brief": "# Service Road and Maintenance Pad\n\n**Site.** A 200 m corridor of loose regolith from the landing pad to a new maintenance area, ending in a 30 m by 30 m level patch. Fines are 30 cm deep. The depot is at the landing-pad end; no recharging.\n\n**Structures.**\n\n1. Service road: 200 m long, 5 m wide, graded in two 100 m segments, each compacted after grading.\n2. Maintenance pad: 15 m diameter, excavated 0.3 m, compacted, sintered 20 cm surface.\n3. Shoulder windrows: grading spoil pushed into continuous windrows on both shoulders and compacted lightly.\n\n**Fleet.** EX1 and EX2 (excavators, 5000 Wh each), HL1 (hauler, 3000 Wh), CP1 and CP2 (compactors, 3500 Wh each), PR1 (printer, 4000 Wh) and SV1 (surveyor, 1500 Wh). Batteries are not recharged.\n\n**Deadline.** 14 days.\n\n**Operational constraints.**\n\n- Road segment one is compacted before segment two is graded so the haul route stays open.\n- The pad is excavated only after the surveyor has staked it and the road reaches it.\n- Only one robot may work inside a zone at a time.\n"
+ },
+ "task_graph": {
+  "tasks": [
+   {
+    "id": "T1",
+    "name": "survey pad",
+    "robot_type": "surveyor",
+    "duration_h": 2,
+    "energy_wh": 88.5,
+    "zone": "Z2",
+    "after": [],
+    "structure": "S2",
+    "quantity": 177.0,
+    "unit": "m2",
+    "basis": "pi*(7.5 m)^2 = 177 m2",
+    "estimated_duration_h": 2.0,
+    "estimated_energy_wh": 88.5
+   },
+   {
+    "id": "T2",
+    "name": "survey road",
+    "robot_type": "surveyor",
+    "duration_h": 7,
+    "energy_wh": 500.0,
+    "zone": "Z1",
+    "after": [
+     "T1"
+    ],
+    "structure": "S1",
+    "quantity": 1000.0,
+    "unit": "m2",
+    "basis": "200 m * 5 m = 1000 m2",
+    "estimated_duration_h": 7.0,
+    "estimated_energy_wh": 500.0
+   },
+   {
+    "id": "T3",
+    "name": "grade road segment 1",
+    "robot_type": "excavator",
+    "duration_h": 20,
+    "energy_wh": 2400.0,
+    "zone": "Z1",
+    "after": [
+     "T2"
+    ],
+    "structure": "S1",
+    "quantity": 500.0,
+    "unit": "m2",
+    "basis": "200 m * 5 m / 2 = 500 m2",
+    "estimated_duration_h": 20.0,
+    "estimated_energy_wh": 2400.0
+   },
+   {
+    "id": "T4",
+    "name": "compact road segment 1",
+    "robot_type": "compactor",
+    "duration_h": 20,
+    "energy_wh": 2000.0,
+    "zone": "Z1",
+    "after": [
+     "T3"
+    ],
+    "structure": "S1",
+    "quantity": 500.0,
+    "unit": "m2",
+    "basis": "200 m * 5 m / 2 = 500 m2",
+    "estimated_duration_h": 20.0,
+    "estimated_energy_wh": 2000.0
+   },
+   {
+    "id": "T5",
+    "name": "grade road segment 2",
+    "robot_type": "excavator",
+    "duration_h": 20,
+    "energy_wh": 2400.0,
+    "zone": "Z1",
+    "after": [
+     "T4"
+    ],
+    "structure": "S1",
+    "quantity": 500.0,
+    "unit": "m2",
+    "basis": "200 m * 5 m / 2 = 500 m2",
+    "estimated_duration_h": 20.0,
+    "estimated_energy_wh": 2400.0
+   },
+   {
+    "id": "T6",
+    "name": "compact road segment 2",
+    "robot_type": "compactor",
+    "duration_h": 20,
+    "energy_wh": 2000.0,
+    "zone": "Z1",
+    "after": [
+     "T5"
+    ],
+    "structure": "S1",
+    "quantity": 500.0,
+    "unit": "m2",
+    "basis": "200 m * 5 m / 2 = 500 m2",
+    "estimated_duration_h": 20.0,
+    "estimated_energy_wh": 2000.0
+   },
+   {
+    "id": "T7",
+    "name": "excavate pad",
+    "robot_type": "excavator",
+    "duration_h": 8,
+    "energy_wh": 848.0,
+    "zone": "Z2",
+    "after": [
+     "T1",
+     "T6"
+    ],
+    "structure": "S2",
+    "quantity": 53.0,
+    "unit": "m3",
+    "basis": "pi*(7.5 m)^2*0.3 m = 53 m3",
+    "estimated_duration_h": 8.0,
+    "estimated_energy_wh": 848.0
+   },
+   {
+    "id": "T8",
+    "name": "compact pad",
+    "robot_type": "compactor",
+    "duration_h": 7,
+    "energy_wh": 708.0,
+    "zone": "Z2",
+    "after": [
+     "T7"
+    ],
+    "structure": "S2",
+    "quantity": 177.0,
+    "unit": "m2",
+    "basis": "pi*(7.5 m)^2 = 177 m2",
+    "estimated_duration_h": 7.0,
+    "estimated_energy_wh": 708.0
+   },
+   {
+    "id": "T9",
+    "name": "sinter pad",
+    "robot_type": "printer",
+    "duration_h": 13,
+    "energy_wh": 1522.2,
+    "zone": "Z2",
+    "after": [
+     "T8"
+    ],
+    "structure": "S2",
+    "quantity": 177.0,
+    "unit": "m2",
+    "basis": "pi*(7.5 m)^2 = 177 m2",
+    "estimated_duration_h": 13.0,
+    "estimated_energy_wh": 1522.0
+   },
+   {
+    "id": "T10",
+    "name": "grade windrow",
+    "robot_type": "excavator",
+    "duration_h": 4,
+    "energy_wh": 480.0,
+    "zone": "Z3",
+    "after": [
+     "T7"
+    ],
+    "structure": "S3",
+    "quantity": 100.0,
+    "unit": "m2",
+    "basis": "assumed 100 m2 for windrow grading",
+    "estimated_duration_h": 4.0,
+    "estimated_energy_wh": 480.0
+   },
+   {
+    "id": "T11",
+    "name": "compact windrow",
+    "robot_type": "compactor",
+    "duration_h": 4,
+    "energy_wh": 400.0,
+    "zone": "Z3",
+    "after": [
+     "T10"
+    ],
+    "structure": "S3",
+    "quantity": 100.0,
+    "unit": "m2",
+    "basis": "assumed 100 m2 for windrow compaction",
+    "estimated_duration_h": 4.0,
+    "estimated_energy_wh": 400.0
+   }
+  ],
+  "notes": "Windrow dimensions not specified; assumed 100 m2 area for grading and compaction tasks; adjust when details available."
+ },
+ "schedule": {
+  "entries": [
+   {
+    "task": "T1",
+    "robot": "SV1",
+    "start_h": 3,
+    "end_h": 5
+   },
+   {
+    "task": "T2",
+    "robot": "SV1",
+    "start_h": 8,
+    "end_h": 15
+   },
+   {
+    "task": "T3",
+    "robot": "EX1",
+    "start_h": 15,
+    "end_h": 35
+   },
+   {
+    "task": "T4",
+    "robot": "CP2",
+    "start_h": 35,
+    "end_h": 55
+   },
+   {
+    "task": "T5",
+    "robot": "EX2",
+    "start_h": 55,
+    "end_h": 75
+   },
+   {
+    "task": "T6",
+    "robot": "CP1",
+    "start_h": 75,
+    "end_h": 95
+   },
+   {
+    "task": "T7",
+    "robot": "EX2",
+    "start_h": 95,
+    "end_h": 103
+   },
+   {
+    "task": "T8",
+    "robot": "CP2",
+    "start_h": 103,
+    "end_h": 110
+   },
+   {
+    "task": "T9",
+    "robot": "PR1",
+    "start_h": 110,
+    "end_h": 123
+   },
+   {
+    "task": "T10",
+    "robot": "EX1",
+    "start_h": 103,
+    "end_h": 107
+   },
+   {
+    "task": "T11",
+    "robot": "CP1",
+    "start_h": 107,
+    "end_h": 111
+   }
+  ],
+  "makespan_h": 123,
+  "status": "optimal",
+  "objective_bound_h": 123,
+  "solve_time_s": 0.009724
+ },
+ "explanation": null,
+ "steps": [
+  {
+   "stage": "structure",
+   "attempt": 1,
+   "ok": true,
+   "failure": null,
+   "duration_s": 3.0067097910214216,
+   "usage": {
+    "model": "nvidia/Nemotron-3_5-Lightning",
+    "input_tokens": 3117,
+    "output_tokens": 514,
+    "latency_s": 3.00172624993138
+   },
+   "message": "3 structures, 7 robots, horizon 336h",
+   "payload": {
+    "zones": 3,
+    "grid": [
+     40,
+     40
+    ],
+    "depot": [
+     20,
+     2
+    ],
+    "warnings": [
+     "structure S3 (windrow) has no dimensions: the planner sizes its tasks from numeric fields such as diameter_m, length_m, width_m, depth_m or height_m and never sees the brief, so add the brief's numbers before planning"
+    ]
+   }
+  },
+  {
+   "stage": "taskgraph",
+   "attempt": 1,
+   "ok": true,
+   "failure": null,
+   "duration_s": 60.71444704197347,
+   "usage": {
+    "model": "nvidia/nemotron-3-super-120b-a12b",
+    "input_tokens": 3481,
+    "output_tokens": 10938,
+    "latency_s": 60.71065220795572
+   },
+   "message": "11 tasks",
+   "payload": {
+    "advisories": [],
+    "rate_model": true,
+    "grounded": 11
+   }
+  },
+  {
+   "stage": "validate",
+   "attempt": 1,
+   "ok": true,
+   "failure": null,
+   "duration_s": 0.001804332947358489,
+   "usage": null,
+   "message": "11 tasks valid",
+   "payload": null
+  },
+  {
+   "stage": "schedule",
+   "attempt": 1,
+   "ok": true,
+   "failure": null,
+   "duration_s": 0.014085459057241678,
+   "usage": null,
+   "message": "makespan 123h (optimal)",
+   "payload": {
+    "makespan_h": 123,
+    "status": "optimal",
+    "verified": true,
+    "verification": {
+     "precedence_edges": 11,
+     "robot_rows": 7,
+     "zone_groups": 3,
+     "battery": [
+      {
+       "robot": "EX1",
+       "used_wh": 2889.0,
+       "work_wh": 2880.0,
+       "travel_wh": 9.0,
+       "budget_wh": 5000.0,
+       "pct": 57.8
+      },
+      {
+       "robot": "EX2",
+       "used_wh": 3265.5,
+       "work_wh": 3248.0,
+       "travel_wh": 17.5,
+       "budget_wh": 5000.0,
+       "pct": 65.3
+      },
+      {
+       "robot": "HL1",
+       "used_wh": 0.0,
+       "work_wh": 0.0,
+       "travel_wh": 0.0,
+       "budget_wh": 3000.0,
+       "pct": 0.0
+      },
+      {
+       "robot": "CP1",
+       "used_wh": 2409.0,
+       "work_wh": 2400.0,
+       "travel_wh": 9.0,
+       "budget_wh": 3500.0,
+       "pct": 68.8
+      },
+      {
+       "robot": "CP2",
+       "used_wh": 2725.5,
+       "work_wh": 2708.0,
+       "travel_wh": 17.5,
+       "budget_wh": 3500.0,
+       "pct": 77.9
+      },
+      {
+       "robot": "PR1",
+       "used_wh": 1539.7,
+       "work_wh": 1522.2,
+       "travel_wh": 17.5,
+       "budget_wh": 4000.0,
+       "pct": 38.5
+      },
+      {
+       "robot": "SV1",
+       "used_wh": 623.5,
+       "work_wh": 588.5,
+       "travel_wh": 35.0,
+       "budget_wh": 1500.0,
+       "pct": 41.6
+      }
+     ],
+     "tightest_robot": "CP2",
+     "horizon_used_h": 123,
+     "horizon_h": 336,
+     "status": "optimal",
+     "objective_bound_h": 123,
+     "solve_time_s": 0.01,
+     "travel_allowance": true,
+     "recheck": "independent check_schedule passed"
+    }
+   }
+  }
+ ],
+ "repairs": 0,
+ "success": true,
+ "failure": null,
+ "suggestions": []
+}
