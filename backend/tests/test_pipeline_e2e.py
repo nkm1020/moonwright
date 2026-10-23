@@ -418,99 +418,93 @@ def test_quantities_ground_the_graph_before_it_is_scheduled() -> None:
 
 # --------------------------------------------------------------------------- live recordings
 def test_landing_pad_replays_its_live_run() -> None:
-    """Oct 23: Nemotron 3 Ultra's first graph needs more than the printer's 4,000 Wh (4,112 Wh
-    with the travel allowance of the time, at least 4,096 Wh with phase 3k's exact legs) and
-    hauls the 120 m3 berm twice over. Recorded live, the validator refused it on the printer
-    alone (the double haul was an advisory then); since phase 3i a 200 % haul is the conflict
-    volume:S2 too, so the replay refuses it on both (and the supply balance note gives way to
-    the double count). The one repair trims the crest sintering from 160 to 146 m2, halves the
-    hauls to 2 x 60 m3, each after the dig part that feeds it, and CP-SAT proves 87 h (89 h
-    live, before exact travel): in scope, never a supply conflict. The recorded explanation
-    still quotes 89 h until the take is re-recorded."""
+    """Oct 24, on the final pipeline: Nemotron 3 Ultra's first graph needs at least 4,095 Wh of
+    the printer's 4,000 (4,078 Wh of work, 18 Wh of travel). Repair 1 trims the berm crest's
+    sintering from 160 to 150 m2 and is still 9 Wh over; repair 2 trims it to 145 m2 and CP-SAT
+    proves 72 h: in scope, never a supply conflict, each robot's legs timed exactly."""
     plan = _plan("landing_pad")
 
     assert [(s.stage, s.ok) for s in plan.steps] == [
         ("structure", True), ("taskgraph", True), ("validate", False), ("repair", True),
-        ("validate", True), ("schedule", True), ("explain", True)]
-    # Lightning placed the three zones 4 cells apart with radius 3: a soft warning, kept
-    assert (plan.steps[0].payload or {})["warnings"] == [
-        "zones Z1 and Z2 overlap (centres 4.0 cells apart, radii 3 + 3)",
-        "zones Z2 and Z3 overlap (centres 4.0 cells apart, radii 3 + 3)"]
-    assert (plan.steps[1].payload or {})["advisories"] == [
-        ("volume:S2: its dimensions give 120 m3 (40 m long, 1.5 m high, 4 m wide at the base, "
-         "triangular section) but its haul tasks (T13 120 m3, T14 120 m3) total 240 m3 (200 %): "
-         "hauled twice over, a double count")]
-    refused = plan.steps[2].failure
-    assert refused is not None and refused.kind == "validation"
-    assert refused.conflicts == ["volume:S2", "energy:printer"]
-    assert ("printer tasks need at least 4,096 Wh, 4,078 Wh of work and 18 Wh of travel, but "
-            "its 1 robot carries only 4,000 Wh combined") in refused.hint
+        ("validate", False), ("repair", True), ("validate", True), ("schedule", True),
+        ("explain", True)]
+    assert (plan.steps[0].payload or {})["warnings"] == []
+    assert [(s.id, s.type) for s in plan.requirements.structures] == [
+        ("PAD1", "landing_pad"), ("BERM1", "blast_berm")]
+    verdicts = [(s.stage, s.attempt, s.failure.kind, s.failure.conflicts)
+                for s in plan.steps if s.failure is not None]
+    assert verdicts == [("validate", 1, "validation", ["energy:printer"]),
+                        ("validate", 2, "validation", ["energy:printer"])]
+    first, second = (s.failure for s in plan.steps if s.failure is not None)
+    assert first is not None and second is not None
+    assert ("printer tasks need at least 4,095 Wh, 4,078 Wh of work and 18 Wh of travel, but its "
+            "1 robot carries only 4,000 Wh combined") in first.hint
+    assert ("printer tasks need at least 4,009 Wh, 3,992 Wh of work and 18 Wh of travel, but its "
+            "1 robot carries only 4,000 Wh combined") in second.hint
 
-    repair = plan.steps[3]
-    assert repair.attempt == 2 and repair.usage is not None
-    assert repair.usage.model == "fixture:taskgraph_2.json"
-    assert (repair.payload or {})["advisories"] == []
+    repairs = [s for s in plan.steps if s.stage == "repair"]
+    assert [s.attempt for s in repairs] == [2, 3]
+    assert [s.usage.model for s in repairs if s.usage is not None] == [
+        "fixture:taskgraph_2.json", "fixture:taskgraph_3.json"]
+    assert [(s.payload or {})["diff"]["scope_drift_pct"] for s in repairs] == [-0.9, -0.5]
     graph = plan.task_graph
-    assert graph is not None and graph.ids() == _graph("landing_pad", "taskgraph_2.json").ids()
-    assert [graph.task(i).quantity for i in ("T12", "T13", "T14")] == [146.0, 60.0, 60.0]
-    assert "T5" in graph.task("T13").after and "T6" in graph.task("T14").after
-    assert plan.repairs == 1 and plan.schedule is not None
-    assert (plan.schedule.makespan_h, plan.schedule.status) == (87, "optimal")
+    assert graph is not None and graph.ids() == _graph("landing_pad", "taskgraph_3.json").ids()
+    assert graph.task("T10").quantity == 145.0
+    assert plan.repairs == 2 and plan.schedule is not None
+    assert (plan.schedule.makespan_h, plan.schedule.status) == (72, "optimal")
     assert not [c for s in plan.steps if s.failure is not None for c in s.failure.conflicts
                 if c.startswith("supply:")]
     assert validate_graph(plan.requirements, graph, coverage=True, supply=True) is None
     assert scope_gaps(plan.requirements, graph) == []
-    _assert_verified_plan(plan, explained=False)   # the recorded text quotes the live 89 h
+    _assert_verified_plan(plan)
 
 
 def test_front_loaded_replays_its_live_run() -> None:
     """Designed impossible: a 30 m pad dug and compacted in one zone, which admits one robot at
-    a time, and a 60 h window. Ultra's first graph is refused on an 82 h chain; repair 1
-    validates and CP-SAT proves ``horizon, zone:Z1``; repair 2 drops the pad compaction (scope
-    drift -26 %) and the validator refuses it (``scope:S1``); repair 3 restores it and CP-SAT
-    proves the same core. No plan after three repairs; the advice is CP-SAT-verified. The last
-    graph's notes claim a relaxed zone rule: the solver does not read notes. Lightning listed
-    only [excavate, survey] on the pad, as in all three run-3 structurings of the eval brief;
-    since phase 3l the structure stage restores the compaction its entry states ("subgrade
-    compacted and inspected"), so the verdicts are the same and repair 2's ``scope:S1`` detail
-    and hint say the operation is listed and quote the entry that asks for it."""
+    a time, and a 60 h window. Lightning typed the pad ``excavator`` and listed only [excavate,
+    survey] on it, as in all three run-3 structurings of the eval brief; the structure stage
+    restores the compaction its entry states (phase 3l). Ultra's first graph validates and
+    CP-SAT proves ``horizon, zone:Z1``; repair 1 is refused on an 82 h chain; repair 2 is
+    proved infeasible on the same core; repair 3 is refused on the chain again. No repair
+    shrinks the work (scope drift 0 % each time): no plan after three repairs, and the advice
+    is CP-SAT-verified."""
     plan = _plan("front_loaded")
     assert plan.steps[0].payload is not None
-    assert ('structure S1: operations compact restored: its entry states "subgrade compacted '
-            'and inspected"') in plan.steps[0].payload["warnings"]
-    assert plan.requirements.structures[0].operations == ["excavate", "survey", "compact"]
+    assert plan.steps[0].payload["warnings"] == [
+        ('structure S1: operations compact restored: its entry states "subgrade compacted and '
+         'inspected"')]
+    assert [(s.id, s.type, s.operations) for s in plan.requirements.structures] == [
+        ("S1", "excavator", ["excavate", "survey", "compact"]),
+        ("S2", "spoil_berm", ["haul", "compact"])]
 
     assert [s.stage for s in plan.steps] == [
-        "structure", "taskgraph", "validate", "repair", "validate", "schedule", "repair",
-        "validate", "repair", "validate", "schedule"]
+        "structure", "taskgraph", "validate", "schedule", "repair", "validate", "repair",
+        "validate", "schedule", "repair", "validate"]
     verdicts = [(s.stage, s.attempt, s.failure.kind, s.failure.conflicts)
                 for s in plan.steps if s.failure is not None]
     assert verdicts == [
-        ("validate", 1, "validation", ["horizon_path:T1->T2->T3->T6->T7->T8"]),
-        ("schedule", 2, "infeasible", ["horizon", "zone:Z1"]),
-        ("validate", 3, "validation", ["scope:S1", "horizon_path:T1->T2->T3->T6->T7->T9"]),
-        ("schedule", 4, "infeasible", ["horizon", "zone:Z1"])]
-    assert plan.steps[7].failure is not None
-    assert plan.steps[7].failure.details[0] == ("S1 (pad) lacks compact task (its operations "
-                                                "list compact)")
-    assert plan.steps[7].failure.hint.startswith(
-        'Structure coverage is incomplete: S1 (pad) lists compact (the brief asks for "subgrade '
-        'compacted and inspected") but no task compacts it; add a compactor task tagged S1; ')
+        ("schedule", 1, "infeasible", ["horizon", "zone:Z1"]),
+        ("validate", 2, "validation", ["horizon_path:T1->T2->T3->T6->T7->T8"]),
+        ("schedule", 3, "infeasible", ["horizon", "zone:Z1"]),
+        ("validate", 4, "validation", ["horizon_path:T1->T2->T3->T6->T7->T8"])]
+    core = plan.steps[3].failure
+    assert core is not None
+    assert ("Zone Z1 admits one robot at a time, so its 5 tasks (75 h in total) cannot "
+            "overlap.") in core.hint
     assert [(s.payload or {})["diff"]["scope_drift_pct"] for s in plan.steps
-            if s.stage == "repair"] == [0.0, -26.0, 35.4]
+            if s.stage == "repair"] == [0.0, 0.0, 0.0]
 
     assert not plan.success and plan.repairs == 3 and plan.schedule is None
     assert plan.failure is not None and plan.failure == plan.steps[-1].failure
+    assert plan.failure.details == ["T1->T2->T3->T6->T7->T8 takes 82 h in sequence; horizon is 60 h"]
     assert plan.explanation is None
-    assert ("Zone Z1 admits one robot at a time, so its 4 tasks (75 h in total) cannot "
-            "overlap.") in plan.failure.hint
     [advice] = plan.suggestions
     assert (advice.kind, advice.horizon_h, advice.makespan_h, advice.verified) == (
         "extend_horizon", 85, 85, True)
     assert advice.detail == "finishing needs 85 h, 25 h past the 60 h deadline (CP-SAT optimal)"
     assert (plan.steps[-1].payload or {})["suggestions"] == [advice.model_dump()]
     assert plan.task_graph is not None
-    assert "Relaxed 'one robot per zone'" in (plan.task_graph.notes or "")
+    assert [t.robot_type for t in plan.task_graph.tasks].count("compactor") == 3
 
 
 # --------------------------------------------------------------------------- the UI's samples
@@ -519,9 +513,9 @@ def _verdicts(plan: PlanResult) -> list[tuple[str, int, str, list[str]]]:
             for s in plan.steps if s.failure is not None]
 
 
-# landing_pad's take predates phase 3i: its first verdict says energy:printer alone, the replay
-# also says volume:S2 (the 200 % haul). The samples are re-recorded on the final code.
-_STALE_SAMPLES = {"landing_pad.plan.json"}
+# a sample whose take predates a verdict change would be listed here (strict xfail) until it is
+# re-recorded; both takes were recorded on the final code (Oct 24)
+_STALE_SAMPLES: set[str] = set()
 
 
 @pytest.mark.parametrize("path", [

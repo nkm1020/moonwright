@@ -1,0 +1,213 @@
+{
+ "tasks": [
+  {
+   "id": "T1",
+   "name": "survey PAD1",
+   "robot_type": "surveyor",
+   "duration_h": 3,
+   "energy_wh": 157.1,
+   "zone": "Z1",
+   "after": [],
+   "structure": "PAD1",
+   "quantity": 314.16,
+   "unit": "m2",
+   "basis": "pi*(10 m)^2 = 314.16 m2",
+   "estimated_duration_h": null,
+   "estimated_energy_wh": null
+  },
+  {
+   "id": "T2",
+   "name": "survey BERM1",
+   "robot_type": "surveyor",
+   "duration_h": 2,
+   "energy_wh": 80.0,
+   "zone": "Z2",
+   "after": [],
+   "structure": "BERM1",
+   "quantity": 160.0,
+   "unit": "m2",
+   "basis": "40 m * 4 m = 160 m2",
+   "estimated_duration_h": null,
+   "estimated_energy_wh": null
+  },
+  {
+   "id": "T3",
+   "name": "excavate PAD1 part 1",
+   "robot_type": "excavator",
+   "duration_h": 9,
+   "energy_wh": 1005.3,
+   "zone": "Z1",
+   "after": [
+    "T1"
+   ],
+   "structure": "PAD1",
+   "quantity": 62.83,
+   "unit": "m3",
+   "basis": "pi*(10 m)^2*0.4 m / 2 = 62.83 m3",
+   "estimated_duration_h": null,
+   "estimated_energy_wh": null
+  },
+  {
+   "id": "T4",
+   "name": "excavate PAD1 part 2",
+   "robot_type": "excavator",
+   "duration_h": 9,
+   "energy_wh": 1005.3,
+   "zone": "Z1",
+   "after": [
+    "T3"
+   ],
+   "structure": "PAD1",
+   "quantity": 62.83,
+   "unit": "m3",
+   "basis": "pi*(10 m)^2*0.4 m / 2 = 62.83 m3",
+   "estimated_duration_h": null,
+   "estimated_energy_wh": null
+  },
+  {
+   "id": "T5",
+   "name": "haul BERM1 part 1",
+   "robot_type": "hauler",
+   "duration_h": 5,
+   "energy_wh": 420.0,
+   "zone": "Z2",
+   "after": [
+    "T2",
+    "T3",
+    "T4"
+   ],
+   "structure": "BERM1",
+   "quantity": 60.0,
+   "unit": "m3",
+   "basis": "120 m3 / 2 = 60 m3",
+   "estimated_duration_h": null,
+   "estimated_energy_wh": null
+  },
+  {
+   "id": "T6",
+   "name": "haul BERM1 part 2",
+   "robot_type": "hauler",
+   "duration_h": 5,
+   "energy_wh": 420.0,
+   "zone": "Z2",
+   "after": [
+    "T5"
+   ],
+   "structure": "BERM1",
+   "quantity": 60.0,
+   "unit": "m3",
+   "basis": "120 m3 / 2 = 60 m3",
+   "estimated_duration_h": null,
+   "estimated_energy_wh": null
+  },
+  {
+   "id": "T7",
+   "name": "compact PAD1",
+   "robot_type": "compactor",
+   "duration_h": 13,
+   "energy_wh": 1256.6,
+   "zone": "Z1",
+   "after": [
+    "T4"
+   ],
+   "structure": "PAD1",
+   "quantity": 314.16,
+   "unit": "m2",
+   "basis": "pi*(10 m)^2 = 314.16 m2",
+   "estimated_duration_h": null,
+   "estimated_energy_wh": null
+  },
+  {
+   "id": "T8",
+   "name": "compact BERM1",
+   "robot_type": "compactor",
+   "duration_h": 7,
+   "energy_wh": 640.0,
+   "zone": "Z2",
+   "after": [
+    "T6",
+    "T7"
+   ],
+   "structure": "BERM1",
+   "quantity": 160.0,
+   "unit": "m2",
+   "basis": "40 m * 4 m = 160 m2",
+   "estimated_duration_h": null,
+   "estimated_energy_wh": null
+  },
+  {
+   "id": "T9",
+   "name": "sinter PAD1",
+   "robot_type": "printer",
+   "duration_h": 23,
+   "energy_wh": 2701.8,
+   "zone": "Z1",
+   "after": [
+    "T1",
+    "T7"
+   ],
+   "structure": "PAD1",
+   "quantity": 314.16,
+   "unit": "m2",
+   "basis": "pi*(10 m)^2 = 314.16 m2",
+   "estimated_duration_h": null,
+   "estimated_energy_wh": null
+  },
+  {
+   "id": "T10",
+   "name": "sinter BERM1",
+   "robot_type": "printer",
+   "duration_h": 11,
+   "energy_wh": 1247.0,
+   "zone": "Z2",
+   "after": [
+    "T2",
+    "T8",
+    "T9"
+   ],
+   "structure": "BERM1",
+   "quantity": 145.0,
+   "unit": "m2",
+   "basis": "40 m * 4 m - 15 m2 = 145 m2 (reduced to meet printer battery)",
+   "estimated_duration_h": 11.0,
+   "estimated_energy_wh": 1247.0
+  },
+  {
+   "id": "T11",
+   "name": "inspect PAD1",
+   "robot_type": "surveyor",
+   "duration_h": 1,
+   "energy_wh": 75.0,
+   "zone": "Z1",
+   "after": [
+    "T2",
+    "T9"
+   ],
+   "structure": "PAD1",
+   "quantity": null,
+   "unit": null,
+   "basis": null,
+   "estimated_duration_h": null,
+   "estimated_energy_wh": null
+  },
+  {
+   "id": "T12",
+   "name": "inspect BERM1",
+   "robot_type": "surveyor",
+   "duration_h": 1,
+   "energy_wh": 75.0,
+   "zone": "Z2",
+   "after": [
+    "T10",
+    "T8"
+   ],
+   "structure": "BERM1",
+   "quantity": null,
+   "unit": null,
+   "basis": null,
+   "estimated_duration_h": null,
+   "estimated_energy_wh": null
+  }
+ ],
+ "notes": "Reduced BERM1 sinter area from 150 m2 to 145 m2 to keep total printer work energy (3948.8 Wh) within the single printer's 4000 Wh battery including travel margin. The brief does not specify a minimum sinter coverage for the berm, only that sintering is performed. Excavation volume (125.66 m3) closely matches berm fill volume (120 m3). All tasks fit within horizon (critical path ~70h < 336h)."
+}

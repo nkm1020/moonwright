@@ -390,11 +390,11 @@ def test_fixtures_declare_what_their_briefs_ask_and_their_graphs_serve(brief_id:
 
 
 @pytest.mark.parametrize(("brief_id", "structure_id", "phase", "quote"), [
-    ("landing_pad", "S2", "sinter", "with a sintered crest to resist plume erosion"),
-    ("landing_pad", "S2", "haul", "built from pad spoil"),
-    ("landing_pad", "S1", "sinter", "then sinter a 30 cm regolith surface"),
-    ("landing_pad", "S1", "excavate", "Excavate a bowl 0.4 m deep to firm regolith"),
-    ("landing_pad", "S2", "survey", None),
+    ("landing_pad", "BERM1", "sinter", "with a sintered crest to resist plume erosion"),
+    ("landing_pad", "BERM1", "haul", "built from pad spoil"),
+    ("landing_pad", "PAD1", "sinter", "then sinter a 30 cm regolith surface"),
+    ("landing_pad", "PAD1", "excavate", "Excavate a bowl 0.4 m deep to firm regolith"),
+    ("landing_pad", "BERM1", "survey", None),
     ("tight_battery", "S2", "excavate", "on a 0.5 m deep key trench"),
     ("tight_battery", "S1", "excavate",
      "20 m diameter bowl excavated 0.6 m to firm regolith across the full footprint"),

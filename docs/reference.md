@@ -11,10 +11,10 @@ Commands, endpoints and settings. See the [README](../README.md) for the overvie
 cd backend
 uv sync
 # offline demo (no API key needed; replays the Nemotron answers recorded under fixtures/)
-uv run moonwright plan examples/briefs/landing_pad.md --llm fixture        # energy:printer, one repair, 89 h
+uv run moonwright plan examples/briefs/landing_pad.md --llm fixture        # energy:printer, two repairs, 72 h
 uv run moonwright plan examples/briefs/front_loaded.md --llm fixture       # no plan after 3 repairs; advice 85 h
 uv run moonwright plan examples/briefs/tight_battery.md --llm fixture      # a CP-SAT energy core, repaired
-uv run moonwright simulate out/landing_pad.plan.json --fail EX2@10         # failure + solver-only replan
+uv run moonwright simulate out/landing_pad.plan.json --fail EX1@10         # failure + solver-only replan
 uv run moonwright montecarlo out/landing_pad.plan.json --runs 200 --seed 1 # robustness: P(finish in time)
 uv run pytest
 ```
@@ -62,15 +62,15 @@ component galleries over the bundled sample payloads.
 | Command | What it does |
 | --- | --- |
 | `moonwright plan <brief.md>` | brief → requirements → task graph → validate → CP-SAT → repair loop → explanation; writes `out/<id>.plan.json`; when no plan is found it prints the solver's advice (`what would make it feasible:`); `--max-repairs 0` is the loop-off setting |
-| `moonwright simulate <plan.json> --fail EX2@10` | replays the plan in the 2D simulator, injects a robot failure at t = 10 h, replans, continues; writes `out/<id>.sim.json` |
+| `moonwright simulate <plan.json> --fail EX1@10` | replays the plan in the 2D simulator, injects a robot failure at t = 10 h, replans, continues; writes `out/<id>.sim.json` |
 | `moonwright montecarlo <plan.json> --runs 200 --seed 1` | replays the plan N times with random robot failures (`--failure-rate` per robot-hour, default 0.002) and duration jitter (`--jitter`, default 0.15), `--max-replans` per run; prints completion / within-horizon rates, finish percentiles and a histogram; writes `out/<id>.mc.json` |
 | `moonwright eval --briefs examples/eval --loop both` | runs every brief with the repair loop on and off and reports feasible-plan rate (Wilson 95 % CI), first-try feasibility, repairs, makespan, scope drift, p50/p95 latency, tokens and cost at Token Factory list prices; `--models ultra,super` adds one set of conditions per model arm for the task-graph and repair roles (named `ultra/loop_on`, ...), `--thinking on\|off\|auto`, `--markdown PATH` writes the results document (per-condition table, per-brief matrix, how to read); `--repeat N`, `--workers N` (parallel runs, rows flushed to `--csv` as they finish), `--feedback core\|verdict` (ablation: the repair round gets the minimal core with hints, or only the verdict), `--max-answer-retries N` (schema / transport re-asks, both conditions), `--save-plans DIR` (every run's PlanResult as `DIR/<brief>__<arm>__<loop>__<repeat>.plan.json`, `plan_path` in the rows, plus each job's structuring), `--resume` (keep the rows an interrupted run left in `--csv`, run only the missing brief x condition x repeat cells, summarise old and new together) |
 | `moonwright serve` | FastAPI on :8000 (endpoints below); offline fixtures when `NEBIUS_API_KEY` is unset |
 
 ## Samples (`frontend/public/samples`)
 
-The UI's samples are the live PlanResults of the demo briefs (Token Factory, final prompts,
-Oct 23) and what the CLI derives from them offline. The same runs are the fixtures, so
+The UI's samples are the live PlanResults of the demo briefs (Token Factory, the final pipeline,
+Oct 24) and what the CLI derives from them offline. The same runs are the fixtures, so
 `moonwright plan examples/briefs/<id>.md --llm fixture` replays each step for step (same
 verdicts, repairs and schedule: the solve breaks ties between optimal schedules the same way
 every time; only usage and solve times differ), and the README's offline commands give the
@@ -78,13 +78,13 @@ samples' numbers. A sample is the take's own PlanResult, never such a replay: a 
 name `fixture:` models, and the page would lose its "recorded live run" labels.
 `tests/test_pipeline_e2e.py` checks both for every `*.plan.json` here. From `backend/`, with the
 takes in `out/demo/` (recording them: [live-run-runbook.md](live-run-runbook.md), section 2;
-today's samples are the takes `landing_pad_try3` and `front_loaded_rec1`):
+today's samples are the takes `landing_pad_final1` and `front_loaded_final2`):
 
 ```bash
 S=../frontend/public/samples
 cp out/demo/landing_pad_next.plan.json $S/landing_pad.plan.json     # the takes, as recorded
 cp out/demo/front_loaded_next.plan.json $S/front_loaded.plan.json
-uv run moonwright simulate $S/landing_pad.plan.json --fail EX2@10 --llm fixture --out $S/landing_pad.sim.json
+uv run moonwright simulate $S/landing_pad.plan.json --fail EX1@10 --llm fixture --out $S/landing_pad.sim.json
 uv run moonwright montecarlo $S/landing_pad.plan.json --runs 200 --seed 1 --out $S/landing_pad.mc.json
 uv run python - <<'PY'   # the what-if: one spare per single-point type (CP2, PR2, SV2)
 import json
@@ -97,13 +97,13 @@ uv run moonwright montecarlo out/landing_pad.whatif.plan.json --runs 200 --seed 
   --out $S/landing_pad.whatif.mc.json
 ```
 
-* `landing_pad.sim.json`: EX2 fails at 10 h, 44 % into T5; CP-SAT replans alone and the run
-  finishes at 91 h instead of 89 h.
+* `landing_pad.sim.json`: EX1 fails at 10 h, 78 % into T3; CP-SAT replans alone and the run
+  finishes at 79 h instead of 72 h.
 * `landing_pad.mc.json`: 200 runs at the defaults (0.002 failures per robot-hour, jitter 0.15):
-  37.5 % within the horizon (95 % CI 31-44 %); compactor, printer and surveyor are single
+  37 % within the horizon (95 % CI 31-44 %); compactor, printer and surveyor are single
   points of failure.
 * `landing_pad.whatif.mc.json`: the same seed and runs with a spare CP2 (3,500 Wh), PR2
-  (4,000 Wh) and SV2 (1,500 Wh), copies of CP1, PR1 and SV1: 84 % (78-88 %), no single point
+  (4,000 Wh) and SV2 (1,500 Wh), copies of CP1, PR1 and SV1: 86 % (81-90 %), no single point
   of failure.
 * `front_loaded.plan.json` has neither: there is no plan to run.
 

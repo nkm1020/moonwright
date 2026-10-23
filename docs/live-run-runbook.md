@@ -63,9 +63,9 @@ the `MOONWRIGHT_MODEL_*` variables. If the Ultra request answers 404, the client
 
 ## 2. Demo plans and the fixture refresh
 
-The demo briefs' fixtures are the live runs of Oct 23 (final prompts): `landing_pad`
-(`energy:printer`, one repair, 89 h; 3.4 min of model time, 36k output tokens, $0.12) and
-`front_loaded` (no plan after three repairs, advice 85 h; 5.4 min, 73k tokens, $0.24). Record a
+The demo briefs' fixtures are the live runs of Oct 24 (the final pipeline): `landing_pad`
+(`energy:printer` twice, two repairs, 72 h; 1.9 min of model time, 26k output tokens, $0.09) and
+`front_loaded` (no plan after three repairs, advice 85 h; 5.0 min, 70k tokens, $0.23). Record a
 new take under its own id, so it never overwrites the fixtures the demo and the tests replay:
 
 ```bash
@@ -85,7 +85,7 @@ landing_pad's replan at 10 h) until `uv run pytest` passes. Never re-record `lan
 hand-made fixtures the arithmetic tests are written against. Then regenerate
 `frontend/public/samples` from the take itself: copy the take's own PlanResult
 (`out/demo/<take>.plan.json`, never a `--llm fixture` replay, whose steps name `fixture:`
-models), then `simulate --fail EX2@10 --llm fixture`, `montecarlo --runs 200 --seed 1` and the
+models), then `simulate --fail EX1@10 --llm fixture`, `montecarlo --runs 200 --seed 1` and the
 what-if (the plan with one spare per single-point type, same seed and runs) on that file
 ([reference.md](reference.md#samples-frontendpublicsamples) has the commands).
 `test_ui_samples_are_the_live_runs_their_fixtures_replay` fails on a sample that is a replay or

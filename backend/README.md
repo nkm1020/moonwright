@@ -16,7 +16,7 @@ tests check):
     uv run moonwright plan examples/briefs/landing_pad.md --llm fixture --out out/landing_pad.plan.json
     uv run moonwright plan examples/briefs/front_loaded.md --llm fixture    # no plan after 3 repairs: the advice
     uv run moonwright plan examples/briefs/tight_battery.md --llm fixture --max-repairs 0   # loop off: the solver's advice
-    uv run moonwright simulate out/landing_pad.plan.json --fail EX2@10 --llm fixture
+    uv run moonwright simulate out/landing_pad.plan.json --fail EX1@10 --llm fixture
     uv run moonwright montecarlo out/landing_pad.plan.json --runs 200 --seed 1 --out out/landing_pad.mc.json
     uv run moonwright eval --briefs examples/briefs --llm fixture --out out/eval.json --csv out/eval.csv --save-plans out/plans
     uv run moonwright eval --briefs examples/briefs --llm fixture --models ultra,super --markdown out/eval.md

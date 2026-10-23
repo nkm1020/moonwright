@@ -987,8 +987,9 @@ class TestApi:
                                              "llm": "fixture", "explain": False}).json()
         assert body["success"] is True and body["schedule"]["makespan_h"] > 0
         assert body["schedule"]["makespan_h"] == from_brief["schedule"]["makespan_h"]
-        assert [s["stage"] for s in body["steps"]] == ["structure", "taskgraph", "validate",
-                                                        "repair", "validate", "schedule"]
+        assert [s["stage"] for s in body["steps"]] == [
+            "structure", "taskgraph", "validate", "repair", "validate", "repair", "validate",
+            "schedule"]
         first = body["steps"][0]
         assert first["ok"] is True and first["failure"] is None
         assert first["message"] == ("requirements provided by the user: 2 structures, "
@@ -1137,9 +1138,10 @@ class TestApi:
         assert r.status_code == 200
         body = r.json()
         assert body["success"] is True and body["schedule"]["makespan_h"] > 0
-        assert [s["stage"] for s in body["steps"]] == ["structure", "taskgraph", "validate",
-                                                        "repair", "validate", "schedule"]
-        assert body["repairs"] == 1 and body["explanation"] is None
+        assert [s["stage"] for s in body["steps"]] == [
+            "structure", "taskgraph", "validate", "repair", "validate", "repair", "validate",
+            "schedule"]
+        assert body["repairs"] == 2 and body["explanation"] is None
 
     # ---- /montecarlo
     def test_montecarlo_runs_and_is_deterministic_for_a_seed(self, api):
@@ -1251,11 +1253,12 @@ class TestPlanStream:
         brief = landing_pad_text()
         body = {"brief": brief, "brief_id": "landing_pad", "llm": "fixture", "explain": False}
         events = stream_plan(api, body)
-        assert [kind for kind, _ in events] == ["step"] * 6 + ["result"]
+        assert [kind for kind, _ in events] == ["step"] * 8 + ["result"]
         steps = [data for kind, data in events if kind == "step"]
         assert [(s["stage"], s["ok"]) for s in steps] == [
             ("structure", True), ("taskgraph", True), ("validate", False), ("repair", True),
-            ("validate", True), ("schedule", True)]   # the recorded live run: one repair
+            ("validate", False), ("repair", True), ("validate", True),
+            ("schedule", True)]   # the recorded live run: two repairs
         result = events[-1][1]
         assert result["success"] is True and result["schedule"]["makespan_h"] > 0
         assert [s["stage"] for s in result["steps"]] == [s["stage"] for s in steps]
@@ -1274,7 +1277,7 @@ class TestPlanStream:
         events = stream_plan(api, {"requirements": structured["requirements"],
                                    "brief_id": "landing_pad", "llm": "fixture",
                                    "explain": False})
-        assert [kind for kind, _ in events] == ["step"] * 6 + ["result"]
+        assert [kind for kind, _ in events] == ["step"] * 8 + ["result"]
         assert events[0][1]["stage"] == "structure"
         assert events[0][1]["message"].startswith("requirements provided by the user: ")
         assert events[-1][1]["success"] is True

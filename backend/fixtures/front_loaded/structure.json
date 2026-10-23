@@ -31,14 +31,15 @@
  "structures": [
   {
    "id": "S1",
-   "type": "pad",
+   "type": "excavator",
    "zone": "Z1",
    "operations": [
     "excavate",
     "survey"
    ],
    "diameter_m": 30,
-   "depth_m": 0.4
+   "depth_m": 0.4,
+   "lifts": 1
   },
   {
    "id": "S2",

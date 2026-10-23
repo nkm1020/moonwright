@@ -1,11 +1,11 @@
 """Cross-module integration tests for the offline demo flows (``FixtureClient``, no network).
 
 * CLI ``plan`` -> ``simulate`` on the landing_pad example, the demo's own commands: the
-  recorded live run plans with one repair at 87 h (89 h when recorded, before phase 3k's exact
-  travel), and EX1, which runs every dig of the settled schedule, lost at 10 h is replanned by
-  CP-SAT alone (the robot_failure event, before/after makespan, completion at 94 h, every
-  schedule the pipeline produced re-verified with :func:`check_schedule`).
-* API ``POST /plan`` -> ``POST /simulate`` with EX1 failing at 30 h, and the UI flow
+  recorded live run (Oct 24, final pipeline) plans with two repairs at 72 h, and EX1, which runs
+  both digs, lost at 10 h is replanned by CP-SAT alone (the robot_failure event, before/after
+  makespan, completion at 79 h, every schedule the pipeline produced re-verified with
+  :func:`check_schedule`).
+* API ``POST /plan`` -> ``POST /simulate`` with EX1 failing at 15 h, and the UI flow
   ``GET /examples/{id}`` -> ``POST /structure`` -> ``POST /plan`` (user-corrected requirements)
   -> ``POST /plan/stream`` -> ``POST /simulate`` with the API defaults.
 * CLI ``eval`` over the example briefs: the repair loop turns 1/4 feasible briefs into 3/4, and
@@ -159,17 +159,17 @@ def api():
 
 
 # --------------------------------------------------------------------------- CLI
-def test_cli_plan_then_simulate_landing_pad_with_ex2_failure(tmp_path, capsys):
-    """The README's offline commands: EX1 fails 44 % into its first dig, CP-SAT reschedules
-    everything left on EX2 and the others without a model call, and the mission finishes at
-    94 h instead of 87 h."""
+def test_cli_plan_then_simulate_landing_pad_with_ex1_failure(tmp_path, capsys):
+    """The README's offline commands (the UI's sample is the same run): EX1 fails 78 % into
+    its first dig, CP-SAT reschedules everything left on EX2 and the others without a model
+    call, and the mission finishes at 79 h instead of 72 h."""
     plan_path = tmp_path / "landing_pad.plan.json"
     sim_path = tmp_path / "landing_pad.sim.json"
     code = main(["plan", str(BRIEF), "--llm", "fixture", "--out", str(plan_path), "-q"])
     assert code == EXIT_OK
     plan = PlanResult.model_validate_json(plan_path.read_text())
     assert plan.success and plan.schedule is not None and plan.task_graph is not None
-    assert (plan.schedule.makespan_h, plan.repairs) == (87, 1)
+    assert (plan.schedule.makespan_h, plan.repairs) == (72, 2)
     assert check_schedule(plan.requirements, plan.task_graph, plan.schedule) == []
     capsys.readouterr()
 
@@ -177,21 +177,21 @@ def test_cli_plan_then_simulate_landing_pad_with_ex2_failure(tmp_path, capsys):
                  "--out", str(sim_path)])
     out = capsys.readouterr().out
     assert code == EXIT_OK, out
-    assert ("t=  10.00h  robot_failure  EX1 task T5  EX1 failed at 10 h while working on T5 "
-            "(44% done)") in out
-    assert ("#1 at t=10.00h after robot_failure EX1: 12 tasks remaining; makespan 87h -> 94h "
+    assert ("t=  10.00h  robot_failure  EX1 task T3  EX1 failed at 10 h while working on T3 "
+            "(78% done)") in out
+    assert ("#1 at t=10.00h after robot_failure EX1: 10 tasks remaining; makespan 72h -> 79h "
             "(optimal, 0 repair(s))") in out
-    assert "; CP-SAT rescheduled 12 tasks in " in out and "Nemotron not needed" in out
-    assert "completed at t=94.00h" in out
+    assert "; CP-SAT rescheduled 10 tasks in " in out and "Nemotron not needed" in out
+    assert "completed at t=79.00h" in out
 
     sim = SimResult.model_validate_json(sim_path.read_text())
     _assert_failure_recovered(sim, plan, 10.0)
-    assert sim.finished_at_h == 94.0
+    assert sim.finished_at_h == 79.0
 
 
 def test_cli_eval_over_example_briefs(tmp_path, capsys):
     """The demo briefs as shipped: with the loop on, the recorded repairs of landing_pad (the
-    printer's Wh) and tight_battery (the excavators' core) verify; front_loaded, designed
+    printer's Wh, twice) and tight_battery (the excavators' core) verify; front_loaded, designed
     impossible, fails both ways, after three repairs with the loop on."""
     out_json, out_csv = tmp_path / "eval.json", tmp_path / "eval.csv"
     code = main(["eval", "--briefs", str(EXAMPLES_DIR), "--llm", "fixture",
@@ -200,16 +200,16 @@ def test_cli_eval_over_example_briefs(tmp_path, capsys):
     report = json.loads(out_json.read_text())
     summary = {s["condition"]: s for s in report["summary"]}
     assert (summary["loop_off"]["feasible"], summary["loop_on"]["feasible"]) == (1, 3)
-    assert summary["loop_on"]["mean_repairs"] == pytest.approx(5 / 4)
+    assert summary["loop_on"]["mean_repairs"] == pytest.approx(6 / 4)
     rows = {(r["brief"], r["condition"]): r for r in report["rows"]}
     assert rows["tight_battery", "loop_off"]["conflicts"] == ["energy:EX1", "energy:EX2"]
     assert rows["tight_battery", "loop_on"]["repairs"] == 1
     assert rows["tight_battery", "loop_on"]["makespan_h"] > 0
-    assert rows["landing_pad", "loop_off"]["conflicts"] == ["volume:S2", "energy:printer"]
-    assert rows["landing_pad", "loop_on"]["repairs"] == 1
-    assert rows["landing_pad", "loop_on"]["makespan_h"] == 87
-    assert rows["front_loaded", "loop_off"]["conflicts"] == ["horizon_path:T1->T2->T3->T6->T7->T8"]
-    assert rows["front_loaded", "loop_on"]["conflicts"] == ["horizon", "zone:Z1"]
+    assert rows["landing_pad", "loop_off"]["conflicts"] == ["energy:printer"]
+    assert rows["landing_pad", "loop_on"]["repairs"] == 2
+    assert rows["landing_pad", "loop_on"]["makespan_h"] == 72
+    assert rows["front_loaded", "loop_off"]["conflicts"] == ["horizon", "zone:Z1"]
+    assert rows["front_loaded", "loop_on"]["conflicts"] == ["horizon_path:T1->T2->T3->T6->T7->T8"]
     assert rows["front_loaded", "loop_on"]["repairs"] == 3
     assert not rows["front_loaded", "loop_on"]["success"]
     # phase-3 columns: fixture answers are valid, only the road is feasible first try, the
@@ -222,7 +222,7 @@ def test_cli_eval_over_example_briefs(tmp_path, capsys):
     assert rows["landing_pad", "loop_off"]["models"] == "fixture:taskgraph_1.json"
     assert rows["tight_battery", "loop_on"]["scope_drift_pct"] is not None
     assert rows["tight_battery", "loop_on"]["scope_drift_pct"] != 0.0
-    assert rows["landing_pad", "loop_on"]["scope_drift_pct"] == pytest.approx(-8.3, abs=0.05)
+    assert rows["landing_pad", "loop_on"]["scope_drift_pct"] == pytest.approx(-1.4, abs=0.05)
     assert rows["access_road", "loop_on"]["scope_drift_pct"] == 0.0
     assert all(r["first_energy_wh"] and r["final_energy_wh"] for r in report["rows"])
     loop_on = summary["loop_on"]
@@ -337,7 +337,7 @@ def test_cli_montecarlo_over_the_landing_pad_plan(tmp_path, capsys):
     assert sum(b.count for b in result.histogram) == result.completed
     assert len(result.histogram) >= 12 and result.histogram[11].end_h == 336
     if result.finish_h.min is not None:
-        # jitter can make a run beat the plan's 87 h, never its longest precedence chain with
+        # jitter can make a run beat the plan's 72 h, never its longest precedence chain with
         # every task at its shortest jittered duration (default jitter 0.15: at least
         # floor(0.85 d), never under 1 h)
         graph = PlanResult.model_validate_json(plan_path.read_text()).task_graph
@@ -384,12 +384,12 @@ def test_api_plan_then_simulate_landing_pad(api):
     assert r.status_code == 200 and r.json()["success"] is True
     plan = PlanResult.model_validate(r.json())
 
-    r = api.post("/simulate", json={"plan": r.json(), "failures": [{"robot": "EX1", "t_h": 30}],
+    r = api.post("/simulate", json={"plan": r.json(), "failures": [{"robot": "EX1", "t_h": 15}],
                                     "brief_id": "landing_pad", "llm": "fixture",
                                     "frame_stride": 8, "dt_h": 0.5})
     assert r.status_code == 200, r.text
     sim = SimResult.model_validate(r.json())
-    _assert_failure_recovered(sim, plan)
+    _assert_failure_recovered(sim, plan, 15.0)
     assert all(f.t_h % 0.5 == 0 for f in sim.frames)  # dt_h honoured
 
 
@@ -416,25 +416,26 @@ def test_api_ui_flow_example_structure_corrected_plan_stream_simulate(api):
     assert plan.success and plan.schedule is not None and plan.task_graph is not None
     assert plan.requirements.horizon_h == 120 and 0 < plan.schedule.makespan_h <= 120
     assert [s.stage for s in plan.steps] == ["structure", "taskgraph", "validate", "repair",
-                                             "validate", "schedule", "explain"]
+                                             "validate", "repair", "validate", "schedule",
+                                             "explain"]
     assert plan.steps[0].message is not None
     assert plan.steps[0].message.startswith("requirements provided by the user: ")
     assert plan.explanation
     assert check_schedule(plan.requirements, plan.task_graph, plan.schedule) == []
 
     events = stream_plan(api, body)
-    assert [kind for kind, _ in events] == ["step"] * 7 + ["result"]
-    assert [data["stage"] for kind, data in events[:7]] == [s.stage for s in plan.steps]
+    assert [kind for kind, _ in events] == ["step"] * 9 + ["result"]
+    assert [data["stage"] for kind, data in events[:9]] == [s.stage for s in plan.steps]
     streamed = PlanResult.model_validate(events[-1][1])
     assert streamed.success and streamed.schedule is not None
     assert streamed.schedule.entries == plan.schedule.entries
     assert streamed.schedule.makespan_h == plan.schedule.makespan_h
 
-    r = api.post("/simulate", json={"plan": r.json(), "failures": [{"robot": "EX1", "t_h": 30}],
+    r = api.post("/simulate", json={"plan": r.json(), "failures": [{"robot": "EX1", "t_h": 15}],
                                     "brief_id": "landing_pad", "llm": "fixture"})
     assert r.status_code == 200, r.text
     sim = SimResult.model_validate(r.json())
-    _assert_failure_recovered(sim, plan)
+    _assert_failure_recovered(sim, plan, 15.0)
     assert all(round(f.t_h % 1.0, 9) in (0.0, 0.25, 0.5, 0.75) for f in sim.frames)
     assert [f.t_h for f in sim.frames[:3]] == [0.0, 1.0, 2.0]   # default stride 4 at dt 0.25
 

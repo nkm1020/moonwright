@@ -50,12 +50,9 @@ CHECK_ORDER = [
 # structuring and answers are what the model said
 HAND_MADE = ("access_road", "landing_pad_v1", "tight_battery")
 # the soft site warnings of each fixture's structure.json; every fixture not named is clean
-EXPECTED_SITE_WARNINGS = {
-    "landing_pad": [   # Lightning placed the demo's three zones 4 cells apart with radius 3
-        "zones Z1 and Z2 overlap (centres 4.0 cells apart, radii 3 + 3)",
-        "zones Z2 and Z3 overlap (centres 4.0 cells apart, radii 3 + 3)",
-    ],
-}
+# soft geometry warnings a fixture's recorded structure is expected to raise (the Oct 23 take of
+# landing_pad placed its zones 4 cells apart with radius 3; the Oct 24 takes raise none)
+EXPECTED_SITE_WARNINGS: dict[str, list[str]] = {}
 
 
 def fixture_answers(d: Path) -> list[Path]:
@@ -898,14 +895,20 @@ def test_scope_sits_between_capability_and_energy_task_in_check_order() -> None:
 
 
 def test_fixture_graphs_pass_the_coverage_check() -> None:
-    """Every hand-made graph passes, and so does the graph a live recording ended on; its
-    earlier answers may be refused, which is what the repair loop is recorded for."""
+    """Every hand-made graph passes. A live recording's earlier answers may be refused, which
+    is what the repair loop is recorded for; the graph it ended on covers every structure (it
+    may still be refused on time: front_loaded's take ends on an 82 h chain in a 60 h window)."""
     for d in sorted(p for p in FIXTURES_DIR.iterdir() if p.is_dir()):
         r = Requirements.model_validate_json((d / "structure.json").read_text())
         answers = fixture_answers(d)
         for path in answers if d.name in HAND_MADE else answers[-1:]:
             g = TaskGraph.model_validate_json(path.read_text())
-            assert validate_graph(r, g, coverage=True) is None, path
+            failure = validate_graph(r, g, coverage=True)
+            if d.name in HAND_MADE:
+                assert failure is None, path
+            else:
+                assert failure is None or not [
+                    c for c in failure.conflicts if c.startswith("scope:")], (path, failure)
             for s in r.structures:
                 assert structure_tasks(s, g), f"{path}: {s.id} has no task"
 

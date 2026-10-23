@@ -456,7 +456,7 @@ def test_recorded_fixtures_other_than_tight_battery_still_schedule():
     for brief, graph_file in (("landing_pad_v1", "taskgraph_1.json"),
                               ("access_road", "taskgraph_1.json"),
                               ("tight_battery", "taskgraph_2.json"),
-                              ("landing_pad", "taskgraph_2.json")):   # the live repair
+                              ("landing_pad", "taskgraph_3.json")):   # the live take's last repair
         req, graph = fixture(brief, graph_file)
         out = solve_schedule(req, graph, FAST)
         assert not isinstance(out, Failure), (brief, out)

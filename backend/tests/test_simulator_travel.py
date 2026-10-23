@@ -154,7 +154,8 @@ def test_fixture_plans_charge_what_the_simulator_spends():
                 pos = layout[graph.task(e.task).zone]
             work = sum(graph.task(e.task).energy_wh for e in entries)
             left = next(r.battery_wh for r in res.frames[-1].robots if r.id == robot_id)
-            assert left == pytest.approx(robot.battery_wh - work - travel_wh(cells), abs=0.01)
+            # frames carry batteries to 0.01 Wh after the per-step drains
+            assert left == pytest.approx(robot.battery_wh - work - travel_wh(cells), abs=0.02)
             charged = sequence_travel(req, graph, schedule, SolveOptions())[robot_id].mwh
             assert 0 <= charged - travel_wh(cells) * 1000 < len(entries)   # < 1 mWh per leg
             # every robot of the hand-made plans keeps a tenth in hand

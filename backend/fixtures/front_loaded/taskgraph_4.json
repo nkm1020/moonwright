@@ -2,25 +2,25 @@
  "tasks": [
   {
    "id": "T1",
-   "name": "survey pad S1",
+   "name": "survey S1",
    "robot_type": "surveyor",
    "duration_h": 5,
-   "energy_wh": 353.429173,
+   "energy_wh": 353.4,
    "zone": "Z1",
    "after": [],
    "structure": "S1",
    "quantity": 706.858347,
    "unit": "m2",
-   "basis": "pi*(15 m)^2 = 706.86 m2",
+   "basis": "pi*(15 m)^2 = 707 m2",
    "estimated_duration_h": null,
    "estimated_energy_wh": null
   },
   {
    "id": "T2",
-   "name": "excavate pad S1 part 1",
+   "name": "excavate S1 part 1",
    "robot_type": "excavator",
    "duration_h": 21,
-   "energy_wh": 2261.946711,
+   "energy_wh": 2261.9,
    "zone": "Z1",
    "after": [
     "T1"
@@ -28,91 +28,104 @@
    "structure": "S1",
    "quantity": 141.371669,
    "unit": "m3",
-   "basis": "pi*(15 m)^2*0.4 m / 2 = 141.37 m3",
+   "basis": "pi*(15 m)^2*0.4 m / 2 = 141 m3",
    "estimated_duration_h": null,
    "estimated_energy_wh": null
   },
   {
    "id": "T3",
-   "name": "excavate pad S1 part 2",
+   "name": "excavate S1 part 2",
    "robot_type": "excavator",
    "duration_h": 21,
-   "energy_wh": 2261.946711,
+   "energy_wh": 2261.9,
    "zone": "Z1",
    "after": [
-    "T1"
+    "T2"
    ],
    "structure": "S1",
    "quantity": 141.371669,
    "unit": "m3",
-   "basis": "pi*(15 m)^2*0.4 m / 2 = 141.37 m3",
+   "basis": "pi*(15 m)^2*0.4 m / 2 = 141 m3",
    "estimated_duration_h": null,
    "estimated_energy_wh": null
   },
   {
    "id": "T4",
-   "name": "compact pad S1",
+   "name": "compact S1 part 1",
    "robot_type": "compactor",
-   "duration_h": 28,
-   "energy_wh": 2827.433388,
+   "duration_h": 14,
+   "energy_wh": 1413.7,
    "zone": "Z1",
    "after": [
-    "T2",
     "T3"
    ],
    "structure": "S1",
-   "quantity": 706.858347,
+   "quantity": 353.429173,
    "unit": "m2",
-   "basis": "pi*(15 m)^2 = 706.86 m2",
+   "basis": "pi*(15 m)^2 / 2 = 353 m2",
    "estimated_duration_h": null,
    "estimated_energy_wh": null
   },
   {
    "id": "T5",
-   "name": "haul berm S2 part 1",
-   "robot_type": "hauler",
-   "duration_h": 12,
-   "energy_wh": 989.601686,
-   "zone": "Z2",
+   "name": "compact S1 part 2",
+   "robot_type": "compactor",
+   "duration_h": 14,
+   "energy_wh": 1413.7,
+   "zone": "Z1",
    "after": [
-    "T2",
-    "T3"
+    "T4"
    ],
-   "structure": "S2",
-   "quantity": 141.371669,
-   "unit": "m3",
-   "basis": "spoil from S1 / 2 = 141.37 m3",
+   "structure": "S1",
+   "quantity": 353.429173,
+   "unit": "m2",
+   "basis": "pi*(15 m)^2 / 2 = 353 m2",
    "estimated_duration_h": null,
    "estimated_energy_wh": null
   },
   {
    "id": "T6",
-   "name": "haul berm S2 part 2",
+   "name": "haul S2 part 1",
    "robot_type": "hauler",
    "duration_h": 12,
-   "energy_wh": 989.601686,
+   "energy_wh": 980.0,
    "zone": "Z2",
    "after": [
-    "T2",
     "T3"
    ],
    "structure": "S2",
-   "quantity": 141.371669,
+   "quantity": 140.0,
    "unit": "m3",
-   "basis": "spoil from S1 / 2 = 141.37 m3",
+   "basis": "(70 m * 2 m * 4 m / 2) / 2 = 140 m3",
    "estimated_duration_h": null,
    "estimated_energy_wh": null
   },
   {
    "id": "T7",
-   "name": "compact berm S2",
+   "name": "haul S2 part 2",
+   "robot_type": "hauler",
+   "duration_h": 12,
+   "energy_wh": 980.0,
+   "zone": "Z2",
+   "after": [
+    "T6"
+   ],
+   "structure": "S2",
+   "quantity": 140.0,
+   "unit": "m3",
+   "basis": "(70 m * 2 m * 4 m / 2) / 2 = 140 m3",
+   "estimated_duration_h": null,
+   "estimated_energy_wh": null
+  },
+  {
+   "id": "T8",
+   "name": "compact S2",
    "robot_type": "compactor",
    "duration_h": 11,
    "energy_wh": 1120.0,
    "zone": "Z2",
    "after": [
-    "T5",
-    "T6"
+    "T7"
    ],
    "structure": "S2",
    "quantity": 280.0,
@@ -122,5 +135,5 @@
    "estimated_energy_wh": null
   }
  ],
- "notes": "Added compact task for S1 (pad) to satisfy scope. Parallelized excavation (T2, T3) and hauling (T5, T6) across both excavators and haulers respectively. Compacted S2 with single compactor (T7). Relaxed 'one robot per zone' constraint to allow concurrent robots in Z1 and Z2, enabling critical path of 54h (T1->T2->T4) within 60h horizon. Berm hauling starts only after full excavation (T2,T3) per constraint. All work kept; no volumes reduced."
+ "notes": "Sequenced all tasks within each zone (Z1: T1->T2->T3->T4->T5; Z2: T6->T7->T8 after T3) to respect 'only one robot per zone' constraint. This resolves zone:Z1 conflict. However, the critical path (T1-T2-T3-T6-T7-T8) is 5+21+21+12+12+11=82h plus 3h transit = 85h, exceeding the 60h horizon. The fleet cannot meet the horizon under the given zone constraint without dropping work; all required volumes and operations are planned per the brief."
 }

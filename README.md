@@ -144,7 +144,7 @@ Offline, no API key: the demo briefs replay live Nemotron runs recorded on Token
 
 ```bash
 cd backend && uv sync
-uv run moonwright plan examples/briefs/landing_pad.md --llm fixture       # one repair, verified at 87 h
+uv run moonwright plan examples/briefs/landing_pad.md --llm fixture       # two repairs, verified at 72 h
 uv run moonwright plan examples/briefs/front_loaded.md --llm fixture      # no plan; CP-SAT-proven advice: 85 h
 uv run moonwright simulate out/landing_pad.plan.json --fail EX1@10        # the digging robot fails at hour 10
 uv run moonwright montecarlo out/landing_pad.plan.json --runs 200 --seed 1

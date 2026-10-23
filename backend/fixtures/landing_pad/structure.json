@@ -10,7 +10,7 @@
     "id": "Z1",
     "center": [
      20,
-     38
+     2
     ],
     "radius": 3
    },
@@ -18,15 +18,7 @@
     "id": "Z2",
     "center": [
      20,
-     34
-    ],
-    "radius": 3
-   },
-   {
-    "id": "Z3",
-    "center": [
-     20,
-     30
+     37
     ],
     "radius": 3
    }
@@ -38,12 +30,11 @@
  },
  "structures": [
   {
-   "id": "S1",
+   "id": "PAD1",
    "type": "landing_pad",
    "zone": "Z1",
    "operations": [
     "excavate",
-    "grade",
     "compact",
     "sinter"
    ],
@@ -52,7 +43,7 @@
    "thickness_m": 0.3
   },
   {
-   "id": "S2",
+   "id": "BERM1",
    "type": "blast_berm",
    "zone": "Z2",
    "operations": [

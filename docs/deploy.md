@@ -16,7 +16,7 @@ step of the recorded run, so one button at a time walks the whole loop:
 | --- | --- | --- |
 | 01 Brief | Replay structuring | the requirements Nemotron 3.5 Lightning structured (model, tokens, latency) |
 | 02 Requirements | Replay planning | the trace: Nemotron 3 Ultra's graph, the `energy:printer` core, the repair diff, the receipt, the verified Gantt |
-| 04 Simulate | Replay the simulation | EX2 fails at 10 h, CP-SAT replans alone, the run finishes at 91 h |
+| 04 Simulate | Replay the simulation | EX1 fails at 10 h, CP-SAT replans alone, the run finishes at 79 h |
 | 05 Robustness | Replay Monte Carlo | 200 runs, the single points of failure, and the recorded what-if with one spare of each |
 
 The top bar loads a whole sample in one click: **Landing pad** (everything above at once) and
