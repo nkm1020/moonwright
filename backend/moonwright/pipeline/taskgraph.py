@@ -13,14 +13,21 @@ of a repair) is passed to ``apply_rates`` as ``keep`` together with the ids of t
 tasks (underway on a robot), so a task returned as handed over, or underway, keeps its
 *remaining* hours and Wh instead of being re-sized to its full quantity, while a task whose
 numbers the model edited is grounded from its quantity again.
+
+A repair is told, besides the verdict, the ``advisories`` of the step that produced the graph
+it repairs (:func:`~moonwright.llm.prompts.repair_messages` renders them under the FAILURE
+block), so a 200 % double haul is cut in the same round as an energy verdict. A rejected
+answer (every ask cut off, not JSON or off the schema; a request that failed) ends the step
+with the client's own account of it when the client attached one, else one built from the
+exception (:func:`~moonwright.llm.base.answer_failure`: ``schema:json`` / ``schema:shape``).
 """
 
 from __future__ import annotations
 
 import time
-from collections.abc import Collection
+from collections.abc import Collection, Sequence
 
-from moonwright.llm.base import FixtureMissing, LLMClient, LLMError
+from moonwright.llm.base import FixtureMissing, LLMClient, LLMError, answer_failure
 from moonwright.llm.prompts import repair_messages, replan_messages, taskgraph_messages
 from moonwright.pipeline.rates import (
     UNGROUNDED_ADVISORY,
@@ -28,7 +35,7 @@ from moonwright.pipeline.rates import (
     is_engaged,
     volume_advisories,
 )
-from moonwright.schemas import Failure, LoopStep, Requirements, TaskGraph, schema_conflict
+from moonwright.schemas import Failure, LoopStep, Requirements, TaskGraph
 
 
 def generate_task_graph(
@@ -43,6 +50,7 @@ def generate_task_graph(
     variant: str | None = None,
     baseline: TaskGraph | None = None,
     locked: Collection[str] = (),
+    advisories: Sequence[str] | None = None,
 ) -> tuple[TaskGraph | None, LoopStep]:
     """attempt=1 generates; attempt>=2 with ``prior``+``feedback`` repairs.
 
@@ -51,7 +59,9 @@ def generate_task_graph(
     instead of guessing it from task ids; ``context`` says what happened (what is done, which
     robot failed, time now); ``baseline`` is that remaining graph again for the repair rounds
     of a replan, and ``locked`` the ids of its tasks that are underway on a robot (the rate
-    model leaves their numbers alone). ``variant`` ("replan") selects the replan fixture offline; when that
+    model leaves their numbers alone); ``advisories`` the warnings on ``prior`` a repair
+    should resolve too (the planner passes those of the step that produced it; only a repair
+    uses them). ``variant`` ("replan") selects the replan fixture offline; when that
     fixture is missing the first attempt keeps ``prior`` as-is and a repair attempt fails with
     ``feedback`` (the solver's verdict) rather than falling back to the original run's fixtures.
 
@@ -62,7 +72,8 @@ def generate_task_graph(
     t0 = time.perf_counter()
     if prior is not None and feedback is not None:
         role = "repair"
-        system, user = repair_messages(req, prior, feedback, context, baseline)
+        system, user = repair_messages(req, prior, feedback, context, baseline,
+                                       advisories=list(advisories) if advisories else None)
     elif prior is not None:
         role = "taskgraph"  # same fixture family as a first graph: taskgraph_<variant>.json
         system, user = replan_messages(req, prior, context)
@@ -92,13 +103,9 @@ def generate_task_graph(
                                               details=list(getattr(e, "details", []))),
                               message=f"offline: {e}")
     except LLMError as e:
-        errors = list(getattr(e, "errors", []))
         return None, LoopStep(
             stage=stage, attempt=attempt, ok=False, duration_s=time.perf_counter() - t0,
-            usage=getattr(e, "usage", None),
-            failure=Failure(kind="schema" if errors else "llm_error",
-                            conflicts=[schema_conflict(x) for x in errors],
-                            hint=str(e), details=errors),
+            usage=getattr(e, "usage", None), failure=answer_failure(e),
             # a fixture that exists but cannot be read is as deterministic as a missing one
             message=None if getattr(e, "retryable", True) else f"offline: {e}",
         )

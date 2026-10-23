@@ -12,6 +12,7 @@ import argparse
 import csv
 import hashlib
 import inspect
+import io
 import json
 import math
 import os
@@ -38,7 +39,14 @@ from moonwright.llm.tokenfactory import (
     models_from_env,
 )
 from moonwright.pipeline.loop import Planner, brief_key, unstructured_result
-from moonwright.pipeline.rates import apply_rates, volume_advisories, volume_shares
+from moonwright.pipeline.rates import (
+    IN_SCOPE_SHARE,
+    apply_rates,
+    area_shares,
+    scope_gaps,
+    volume_advisories,
+    volume_shares,
+)
 from moonwright.pipeline.relax import format_suggestions
 from moonwright.pipeline.schedule import check_schedule
 from moonwright.schemas import (
@@ -61,6 +69,7 @@ from moonwright.sim.montecarlo import (
 )
 from moonwright.sim.replan import run_with_replanning
 from moonwright.sim.simulator import FailureInjection
+from moonwright.text import pct, plural
 
 EXIT_OK: Final = 0
 EXIT_NO_PLAN: Final = 1
@@ -87,6 +96,8 @@ ARM_MODELS: Final[dict[str, str]] = {         # eval `--models` arm -> task-grap
 ARM_ROLES: Final = ("taskgraph", "repair")    # the roles an arm (and --thinking) re-routes
 THINKING_CHOICES: Final = ("on", "off", "auto")
 ARM_NAME_RE: Final = re.compile(r"^[A-Za-z0-9_.-]+$")   # no "/" or ",": it joins the condition name
+REJECTED_KINDS: Final = frozenset({"schema", "llm_error"})   # an answer rejected before any verdict
+FILE_NAME_RE: Final = re.compile(r"[^A-Za-z0-9_.-]+")        # --save-plans file names
 
 
 def say(message: str) -> None:
@@ -186,16 +197,21 @@ def format_gantt(schedule: Schedule, req: Requirements) -> str:
 
 
 def plan_summary(result: PlanResult, out_path: Path) -> str:
-    """The closing line(s): a verified plan names its makespan, and when the final graph
-    plans clearly less or more m3 than a structure's dimensions imply, the ``volume:<structure>``
-    advisories follow it, so "verified" is never read as "built to the brief's size"."""
+    """The closing line(s): a verified plan names its makespan, and when the final graph is
+    not in scope (:func:`~moonwright.pipeline.rates.scope_gaps`: a structure's volume or
+    area of work under 95 % of what its dimensions give) or plans clearly more m3 than they
+    imply (the ``volume:<structure>`` excess advisories), those lines follow it, so
+    "verified" is never read as "built to the brief's size"."""
     if result.success and result.schedule is not None:
         line = (
             f"verified plan: makespan {result.schedule.makespan_h}h of "
             f"{result.requirements.horizon_h}h horizon, {result.repairs} repair(s) -> {out_path}"
         )
-        scope = (volume_advisories(result.requirements, result.task_graph)
-                 if result.task_graph is not None else [])
+        scope: list[str] = []
+        if result.task_graph is not None:
+            scope = scope_gaps(result.requirements, result.task_graph)
+            scope += [a for a in volume_advisories(result.requirements, result.task_graph)
+                      if a not in scope]
         if scope:
             line += ("\nverified against the planning model; scope differs from the "
                      "dimensions:\n" + "\n".join(f"  {a}" for a in scope))
@@ -430,16 +446,28 @@ class EvalRow(BaseModel):
     (:func:`run_cost_usd`: 0 for an offline run, None when a model is not priced).
     ``volume_advisories`` counts the ``volume:<structure>`` advisories on the final graph
     (:func:`~moonwright.pipeline.rates.volume_advisories`: a structure whose planned m3 are
-    below 70 % or above 150 % of what its dimensions imply) and ``min_volume_share`` is the
-    smallest planned / dimension share over the structures the check could judge (None when
-    none: no dimensions, no quantities); ``in_scope`` is ``success`` with no such advisory,
-    the rate the eval reports as "feasible in scope", so an impossible brief that was
-    "verified" by digging a third of the pad is never a plain success. ``requirements_sha``
+    below 70 % or above 150 % of what its dimensions imply), ``min_volume_share`` is the
+    smallest judged volume share over the structures the check could judge and
+    ``min_area_share`` the smallest compaction / sintering area share
+    (:func:`~moonwright.pipeline.rates.area_shares`: footprint x lifts), None when nothing
+    was judged (no dimensions, no quantities); ``in_scope`` is ``success`` with every judged
+    volume and area at 95 % or more of the smallest size the brief allows
+    (:func:`~moonwright.pipeline.rates.scope_gaps`), the rate the eval reports as "feasible
+    in scope": an impossible brief "verified" by digging a third of the pad, or by trimming
+    the dig or the compaction lifts 15-25 %, is never a success in scope, while an excess
+    (hauled twice over) is counted in ``volume_advisories`` but is no gap. ``requirements_sha``
     identifies the structured requirements the run planned from (the first 10 hex digits of
     the SHA-1 of their JSON): every condition of a brief and repeat shares one, which is
     what makes the conditions a paired comparison. ``kind`` is the brief's designed kind
-    (``--kinds``, else ``kinds.json`` next to the briefs; empty when unknown). New columns go
-    at the end so the CSV header keeps its prefix.
+    (``--kinds``, else ``kinds.json`` next to the briefs; empty when unknown).
+    ``rejected_answers`` counts the task-graph / repair answers the run could not use: steps
+    of those stages with ``ok`` False and a ``schema`` or ``llm_error`` failure (an answer
+    cut off at max_tokens and re-asked counts once per re-ask; a verdict is never one).
+    ``plan_path`` is the run's PlanResult file (``--save-plans DIR``,
+    :func:`plan_file_name`), relative to the CSV's directory (:func:`csv_relative`: rows a
+    ``--resume`` kept from a run that saved its plans elsewhere still name their own files;
+    empty when the run kept no plan). New columns go at the end so the CSV header keeps its
+    prefix; ``plan_path`` stays last.
     """
 
     brief: str
@@ -469,6 +497,9 @@ class EvalRow(BaseModel):
     in_scope: bool | None = None     # None: a row recorded before the column existed
     requirements_sha: str = ""
     kind: str = ""
+    rejected_answers: int = 0
+    min_area_share: float | None = None
+    plan_path: str = ""           # --save-plans: the run's PlanResult, relative to the CSV
 
 
 class ConditionSummary(BaseModel):
@@ -497,6 +528,9 @@ class ConditionSummary(BaseModel):
     in_scope_rate: float = 0.0
     in_scope_ci_low: float = 0.0
     in_scope_ci_high: float = 1.0
+    rejected_runs: int = 0                      # runs with a schema / llm_error answer rejected
+    rejected_answers: int = 0                   # those rejections, summed over the runs
+    cost_p50_usd: float | None = None           # median cost of a priced run
 
 
 class EvalReport(BaseModel):
@@ -514,6 +548,8 @@ class EvalReport(BaseModel):
     thinking: str = "auto"
     arms: dict[str, str] = Field(default_factory=dict)         # --models arm -> model id
     role_models: dict[str, str] = Field(default_factory=dict)  # structure / explain (live runs)
+    resumed_rows: int = 0            # --resume: rows kept from the CSV of an earlier run
+    plans_dir: str | None = None     # --save-plans DIR (``plan_path`` in the rows)
 
 
 class GraphCapture:
@@ -693,10 +729,12 @@ def eval_row(
     thinking: str = "auto",
     kind: str = "",
     sha: str | None = None,
+    plan_path: str = "",
 ) -> EvalRow:
     """The row of one run. ``sha`` is the :func:`requirements_sha` of the requirements the
     run planned from; when None it is derived from the result (empty when the run never got
-    past structuring)."""
+    past structuring). ``plan_path`` is where ``--save-plans`` wrote the run's PlanResult,
+    relative to the CSV's directory."""
     if sha is None:
         structured = any(s.stage == "structure" and s.ok for s in result.steps)
         sha = requirements_sha(result.requirements) if structured else ""
@@ -709,6 +747,12 @@ def eval_row(
               if result.task_graph is not None else [])
     shares = (volume_shares(result.requirements, result.task_graph)
               if result.task_graph is not None else {})
+    areas = (area_shares(result.requirements, result.task_graph)
+             if result.task_graph is not None else {})
+    gaps = (scope_gaps(result.requirements, result.task_graph)
+            if result.task_graph is not None else [])
+    rejected = sum(1 for s in graph_steps
+                   if not s.ok and s.failure is not None and s.failure.kind in REJECTED_KINDS)
     return EvalRow(
         brief=brief_id,
         condition=condition,
@@ -734,9 +778,12 @@ def eval_row(
         cost_usd=run_cost_usd(result),
         volume_advisories=len(volume),
         min_volume_share=round(min(shares.values()), 3) if shares else None,
-        in_scope=result.success and not volume,
+        in_scope=result.success and not gaps,
         requirements_sha=sha,
         kind=kind,
+        rejected_answers=rejected,
+        min_area_share=round(min(areas.values()), 3) if areas else None,
+        plan_path=plan_path,
     )
 
 
@@ -756,7 +803,10 @@ def wilson_interval(successes: int, n: int, z: float = WILSON_Z) -> tuple[float,
 
 def summarise(rows: Sequence[EvalRow]) -> list[ConditionSummary]:
     """Per-condition aggregates in first-seen order; makespan is averaged over feasible runs,
-    scope drift over runs that have one, the CI is :func:`wilson_interval` of the feasible rate."""
+    scope drift over runs that have one, the CI is :func:`wilson_interval` of the feasible rate,
+    ``rejected_runs`` counts the runs with a rejected task-graph / repair answer
+    (``rejected_answers`` those answers) and ``cost_p50_usd`` is the median cost of a priced
+    run next to the mean."""
     out: list[ConditionSummary] = []
     for condition in dict.fromkeys(r.condition for r in rows):
         group = [r for r in rows if r.condition == condition]
@@ -797,6 +847,9 @@ def summarise(rows: Sequence[EvalRow]) -> list[ConditionSummary]:
                 in_scope_rate=in_scope / n,
                 in_scope_ci_low=round(scope_low, 4),
                 in_scope_ci_high=round(scope_high, 4),
+                rejected_runs=sum(r.rejected_answers > 0 for r in group),
+                rejected_answers=sum(r.rejected_answers for r in group),
+                cost_p50_usd=round(percentile(costs, 0.5), 6) if costs else None,
             )
         )
     return out
@@ -804,7 +857,8 @@ def summarise(rows: Sequence[EvalRow]) -> list[ConditionSummary]:
 
 def format_summary(summary: Sequence[ConditionSummary]) -> str:
     """The per-condition text table (stdout, and stderr at the end of a run): feasible rate
-    with its Wilson interval, the in-scope rate (verified and no volume advisory), first-try
+    with its Wilson interval, the in-scope rate (verified with every judged volume and area
+    at 95 % or more of the brief's), first-try
     rate, repairs, makespan, scope drift, mean and p95 wall latency, tokens and the mean cost
     of a priced run (``-`` when no run is priced)."""
     width = max([10, *(len(s.condition) + 1 for s in summary)])
@@ -838,20 +892,88 @@ def csv_record(row: EvalRow) -> dict[str, Any]:
     return record
 
 
+def csv_row(record: Mapping[str, str | None]) -> EvalRow:
+    """:func:`csv_record` inverted: the row of one CSV record. An empty cell is the field's
+    default (None for an optional column, so a row written before a column existed still
+    parses), ``conflicts`` splits on ``;`` and columns this build does not know are ignored.
+    A value that does not fit its column is a ``ValueError``."""
+    data: dict[str, Any] = {k: v for k, v in record.items()
+                            if k in EvalRow.model_fields and v not in ("", None)}
+    data["conflicts"] = [c for c in (record.get("conflicts") or "").split(";") if c]
+    return EvalRow.model_validate(data)
+
+
+def _read_csv(path: Path) -> tuple[list[str], list[EvalRow], bool]:
+    """:func:`read_csv` plus whether a cut-off last record was left out."""
+    text = path.read_text(encoding="utf-8")
+    reader = csv.DictReader(io.StringIO(text, newline=""))
+    records: list[tuple[int, dict[str, str | None]]] = []
+    for record in reader:
+        records.append((reader.line_num, record))
+    header = list(reader.fieldnames or [])
+    cut = bool(records) and (not text.endswith(("\n", "\r"))
+                             or any(v is None for v in records[-1][1].values())
+                             or len(records[-1][1]) < len(header))
+    if cut:
+        records.pop()
+    rows: list[EvalRow] = []
+    for line, record in records:
+        try:
+            rows.append(csv_row(record))
+        except ValueError as e:   # pydantic's ValidationError is one
+            raise ValueError(f"{path} line {line}: {e}") from None
+    return header, rows, cut
+
+
+def read_csv(path: Path) -> tuple[list[str], list[EvalRow]]:
+    """``(header, rows)`` of an eval CSV; a row that does not parse is an input error naming
+    the file and the line. A last record that is cut off (no newline after it, or fewer
+    fields than the header: a run killed while appending it) is left out: it is no finished
+    run, and its job runs again on ``--resume``."""
+    header, rows, _cut = _read_csv(path)
+    return header, rows
+
+
+def resume_csv(path: Path) -> list[EvalRow]:
+    """The rows an earlier run left in ``path`` (``--resume``), one per (brief, condition,
+    repeat) with the last occurrence winning. A CSV whose header is not this build's
+    :data:`CSV_FIELDS` (written by an older build), or whose last record was cut off, is
+    rewritten with the current header and its rows re-serialised, so the rows appended next
+    line up with it and the cut record is gone for good."""
+    header, rows, cut = _read_csv(path)
+    unique = {(r.brief, r.condition, r.repeat): r for r in rows}
+    rows = list(unique.values())
+    if cut or tuple(header) != CSV_FIELDS:
+        write_csv(path, rows)
+    return rows
+
+
 class CsvSink:
     """``eval.csv`` written one row at a time: the header on open, every row appended and
-    flushed the moment it arrives, so a run killed half-way keeps the rows it finished."""
+    flushed the moment it arrives, so a run killed half-way keeps the rows it finished.
+    ``append`` (``--resume``) keeps the rows already in the file and writes the header only
+    when the file is new or empty, so the file never carries two headers."""
 
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, *, append: bool = False):
         self.path = path
+        self.append = append
         self._fh = None
         self._writer: csv.DictWriter | None = None
 
     def __enter__(self) -> Self:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._fh = self.path.open("w", newline="", encoding="utf-8")
+        resume = self.append and self.path.is_file() and self.path.stat().st_size > 0
+        missing_newline = False
+        if resume:   # a file whose last line has no newline would swallow the first new row
+            with self.path.open("rb") as fh:
+                fh.seek(-1, os.SEEK_END)
+                missing_newline = fh.read(1) not in (b"\n", b"\r")
+        self._fh = self.path.open("a" if resume else "w", newline="", encoding="utf-8")
         self._writer = csv.DictWriter(self._fh, fieldnames=list(CSV_FIELDS))
-        self._writer.writeheader()
+        if not resume:
+            self._writer.writeheader()
+        elif missing_newline:
+            self._fh.write("\r\n")
         self._fh.flush()
         return self
 
@@ -893,24 +1015,27 @@ def planner_options(feedback: str, max_answer_retries: int | None) -> dict[str, 
     return options
 
 
-EvalJob = tuple[ExampleBrief, int]
+EvalJob = tuple[ExampleBrief, int, tuple[str, ...]]   # brief, repeat, the conditions to run
 
 
 def run_eval_jobs(
     jobs: Sequence[EvalJob],
-    run: Callable[[ExampleBrief, int], Sequence[EvalRow]],
+    run: Callable[[ExampleBrief, int, tuple[str, ...]], Sequence[EvalRow]],
     *,
     workers: int,
     csv_path: Path,
     report: Callable[[EvalRow], None],
+    append: bool = False,
 ) -> list[EvalRow]:
-    """Run every ``(brief, repeat)`` job, ``workers`` at a time; a job structures its brief
-    once and returns one row per condition, each appended to ``csv_path`` and reported the
-    moment the job completes (so a killed run keeps the rows it finished, in completion
-    order); the rows come back in job order whatever order the jobs finished in. An
-    interrupt cancels the jobs not yet started."""
+    """Run every ``(brief, repeat, conditions)`` job, ``workers`` at a time; a job structures
+    its brief once and returns one row per condition, each appended to ``csv_path`` and
+    reported the moment the job completes (so a killed run keeps the rows it finished, in
+    completion order); the rows come back in job order whatever order the jobs finished in.
+    ``append`` keeps the rows already in ``csv_path`` (``--resume``). An interrupt cancels
+    the jobs not yet started."""
     done: dict[int, Sequence[EvalRow]] = {}
-    with CsvSink(csv_path) as sink, ThreadPoolExecutor(max_workers=workers) as pool:
+    with CsvSink(csv_path, append=append) as sink, \
+            ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {pool.submit(run, *job): i for i, job in enumerate(jobs)}
         try:
             for future in as_completed(futures):
@@ -926,16 +1051,102 @@ def run_eval_jobs(
     return [row for i in range(len(jobs)) for row in done[i]]
 
 
+def scope_shortfall(row: EvalRow) -> str:
+    """Why a verified row is not in scope, from its smallest shares: 'volume 85 %, area 78 %'
+    (each only when under the in-scope share)."""
+    parts = [f"{name} {pct(share, floor=True)}"
+             for name, share in (("volume", row.min_volume_share), ("area", row.min_area_share))
+             if share is not None and share < IN_SCOPE_SHARE]
+    return ", ".join(parts) or "scope differs from the dimensions"
+
+
 def report_row(row: EvalRow) -> None:
     verdict = f"makespan {row.makespan_h}h" if row.success else f"FAIL {row.failure_kind}"
     if row.success and row.in_scope is False:
-        verdict += f" (scope differs from dimensions: {row.volume_advisories} advisor"
-        verdict += "y)" if row.volume_advisories == 1 else "ies)"
+        verdict += f" (not in scope: {scope_shortfall(row)})"
     cost = f", {format_usd(row.cost_usd)}" if row.cost_usd else ""
+    rejected = (f", {plural(row.rejected_answers, 'rejected answer')}"
+                if row.rejected_answers else "")
     say(
         f"  {row.brief:<16} {row.condition:<8} #{row.repeat} {verdict}, "
-        f"{row.repairs} repair(s), {row.latency_s:.1f}s{cost}"
+        f"{row.repairs} repair(s), {row.latency_s:.1f}s{cost}{rejected}"
     )
+
+
+# --------------------------------------------------------------------------- eval plan files
+def file_safe(text: str) -> str:
+    """``text`` as a file-name part: a condition's ``/`` becomes ``__`` (``ultra/loop_on`` ->
+    ``ultra__loop_on``) and every other character outside letters, digits, ``_ . -`` an ``_``."""
+    return FILE_NAME_RE.sub("_", text.replace("/", "__"))
+
+
+def csv_relative(path: Path, csv_path: Path) -> str:
+    """``path`` as the CSV's rows name it: relative to the CSV's directory with ``/``
+    separators (``plans/landing_pad__loop_on__1.plan.json``), absolute when no relative path
+    exists (another drive), so a row resumed from an earlier run whose ``--save-plans`` went
+    elsewhere still names its own file."""
+    try:
+        return Path(os.path.relpath(path.resolve(), csv_path.resolve().parent)).as_posix()
+    except ValueError:
+        return path.resolve().as_posix()
+
+
+def free_name(directory: Path, name: str) -> str:
+    """``name``, or ``<stem>.2.structure.json`` (``.3``, ...; the last two suffixes kept)
+    when a file of that name exists: a resumed partial job's structuring never overwrites
+    the record of the structuring the earlier conditions of its job planned from."""
+    if not (directory / name).exists():
+        return name
+    suffix = "".join(Path(name).suffixes[-2:])
+    stem = name.removesuffix(suffix)
+    n = 2
+    while (directory / f"{stem}.{n}{suffix}").exists():
+        n += 1
+    return f"{stem}.{n}{suffix}"
+
+
+def plan_file_name(brief_id: str, condition: str, repeat: int) -> str:
+    """``landing_pad__ultra__loop_on__2.plan.json`` (``landing_pad__loop_on__2.plan.json``
+    without an arm): the ``--save-plans`` file of one run, relative to the directory."""
+    return f"{file_safe(brief_id)}__{file_safe(condition)}__{repeat}.plan.json"
+
+
+def structure_file_name(brief_id: str, repeat: int) -> str:
+    """``landing_pad__2.structure.json``: the structuring every condition of a (brief, repeat)
+    job planned from."""
+    return f"{file_safe(brief_id)}__{repeat}.structure.json"
+
+
+def structure_record(brief_id: str, repeat: int, req: Requirements | None, step: LoopStep,
+                     latency_s: float) -> dict[str, Any]:
+    """What ``--save-plans`` keeps of a job's structuring: the requirements its conditions
+    planned from (None when the model failed, with the step's failure), the ``structure``
+    step's payload (its ``warnings``), its usage and the wall time of the call, so a volume
+    flag or a leaked dimension can be traced to the structuring after the run."""
+    return {
+        "brief": brief_id,
+        "repeat": repeat,
+        "requirements_sha": requirements_sha(req),
+        "requirements": None if req is None else req.model_dump(mode="json"),
+        "ok": step.ok,
+        "message": step.message,
+        "payload": step.payload,
+        "failure": None if step.failure is None else step.failure.model_dump(mode="json"),
+        "usage": None if step.usage is None else step.usage.model_dump(mode="json"),
+        "latency_s": round(latency_s, 3),
+    }
+
+
+def sort_rows(rows: Sequence[EvalRow], briefs: Sequence[ExampleBrief],
+              conditions: Sequence[str]) -> list[EvalRow]:
+    """Report order: brief x condition x repeat in this run's order; rows resumed from a CSV
+    whose brief or condition this run does not have (a brief since removed, an arm since
+    dropped) follow, by name."""
+    brief_rank = {b.id: i for i, b in enumerate(briefs)}
+    condition_rank = {c: i for i, c in enumerate(conditions)}
+    return sorted(rows, key=lambda r: (
+        brief_rank.get(r.brief, len(brief_rank)), r.brief,
+        condition_rank.get(r.condition, len(condition_rank)), r.condition, r.repeat))
 
 
 # --------------------------------------------------------------------------- eval markdown
@@ -961,7 +1172,7 @@ def failure_kinds(rows: Sequence[EvalRow]) -> str:
 
 def matrix_cell(rows: Sequence[EvalRow]) -> str:
     """One cell of the per-brief matrix: ``ok 76 h / 0 rep`` for a verified run (``ok 90 h /
-    1 rep scope!`` when its final graph carries a volume advisory: verified, not in scope),
+    1 rep scope!`` when it is verified but not in scope),
     ``fail energy`` for one that ended without a plan (the conflict families, else the
     failure kind); with repeats the share ``k/n`` follows the word and makespan / repairs are
     means over the verified runs, e.g. ``ok 2/3 76 h / 0.5 rep; fail 1/3 scope``."""
@@ -977,7 +1188,7 @@ def matrix_cell(rows: Sequence[EvalRow]) -> str:
         head = "ok" if n == 1 else f"ok {len(ok)}/{n}"
         cell = f"{head} {makespan} / {_num(statistics.fmean(r.repairs for r in ok))} rep"
         off = [r for r in ok if r.in_scope is False]
-        if off:   # verified, but a structure's planned m3 are far from its dimensions
+        if off:   # verified, but a structure's planned work is short of its dimensions
             cell += " scope!" if len(ok) == 1 else f" scope! {len(off)}/{len(ok)}"
         parts.append(cell)
     if failed:
@@ -986,11 +1197,20 @@ def matrix_cell(rows: Sequence[EvalRow]) -> str:
     return "; ".join(parts)
 
 
+def rejected_cell(s: ConditionSummary) -> str:
+    """``1/3``: the runs with a rejected task-graph / repair answer; ``1/3 (4 answers)`` when
+    the re-asks add up to more rejected answers than runs."""
+    cell = f"{s.rejected_runs}/{s.runs}"
+    if s.rejected_answers > s.rejected_runs:
+        cell += f" ({s.rejected_answers} answers)"
+    return cell
+
+
 def condition_table(summary: Sequence[ConditionSummary]) -> str:
-    """The per-condition markdown table of :func:`eval_markdown`."""
+    """The per-condition markdown table of :func:`eval_markdown`; new columns go last."""
     header = ["condition", "n", "feasible (95% CI)", "feasible in scope (95% CI)", "first try",
               "repairs", "makespan", "latency p50 / p95", "tokens in / out", "cost / run",
-              "cost total"]
+              "cost total", "rejected answers", "p50 cost"]
     rows = []
     for s in summary:
         rows.append([
@@ -1002,6 +1222,7 @@ def condition_table(summary: Sequence[ConditionSummary]) -> str:
             f"{s.latency_p50_s:.1f} s / {s.latency_p95_s:.1f} s",
             f"{s.mean_input_tokens:.0f} / {s.mean_output_tokens:.0f}",
             format_usd(s.mean_cost_usd), format_usd(s.total_cost_usd, decimals=2),
+            rejected_cell(s), format_usd(s.cost_p50_usd),
         ])
     return _md_table(header, rows)
 
@@ -1083,10 +1304,13 @@ def how_to_read(report: EvalReport) -> str:
                  "tokens appear in every row of the pair.")
     parts.append("`feasible` is the share of runs that ended with a CP-SAT-verified schedule, "
                  "with a Wilson 95 % interval; `feasible in scope` the share that is feasible "
-                 "AND whose final graph carries no `volume:<structure>` advisory (every "
-                 "structure's planned m3 within 70-150 % of what its dimensions imply; a plan "
-                 "that digs a third of the pad is feasible but not in scope, and "
-                 "`min_volume_share` in the rows says how far off); `first try` the share "
+                 "AND whose final graph plans every structure's volume (dug m3, hauled fill) "
+                 "and its compaction and sintering area (footprint x lifts) at 95 % or more of "
+                 "the smallest size the brief allows (the validator already rejects a volume "
+                 "under 70 %, so a plan that verified after trimming the work 15-25 % is "
+                 "feasible but not in scope; `min_volume_share` and `min_area_share` in the rows "
+                 "say how far off; an excess such as a berm hauled twice is counted in "
+                 "`volume_advisories`, not against the scope); `first try` the share "
                  "verified without a repair round; `repairs` the mean repair rounds per run; "
                  "`makespan` the mean over feasible runs; latency is wall time per run (p50 / "
                  "p95, model calls and solver included); tokens are per run; cost is per run at "
@@ -1095,6 +1319,28 @@ def how_to_read(report: EvalReport) -> str:
                  "verified run (with `k/n` when repeated), `ok ... scope!` when it is verified "
                  "but not in scope, and `fail <conflict families>` for a run that ended without "
                  "a verified plan.")
+    parts.append("`rejected answers` is the share of runs in which at least one task-graph or "
+                 "repair answer was rejected before any verdict (it failed the schema or the "
+                 "call failed: `schema` / `llm_error`, an answer cut off at max_tokens and "
+                 "re-asked among them; when the re-asks add up to more such answers than runs "
+                 "their number follows in parentheses) and `p50 cost` the median cost of a "
+                 "priced run, next to the mean in `cost / run`.")
+    if report.plans_dir:
+        parts.append(f"Every run's PlanResult is kept under `{report.plans_dir}` as "
+                     "`<brief>__<arm>__<loop>__<repeat>.plan.json` (`plan_path` in the rows, "
+                     "relative to the CSV's directory, so a row resumed from a run that kept "
+                     "its plans elsewhere names its own file: the JSON `POST /plan` returns, so "
+                     "`moonwright simulate` and `scripts/replan_eval.py` read it) and each "
+                     "(brief, repeat) job's structuring as `<brief>__<repeat>.structure.json` "
+                     "(`<brief>__<repeat>.2.structure.json` for the second structuring of a "
+                     "job `--resume` completed; its `requirements_sha` pairs it with the "
+                     "rows).")
+    if report.resumed_rows:
+        parts.append(f"{plural(report.resumed_rows, 'row')} come from an earlier run's CSV "
+                     "(`--resume`): the jobs they complete were not run again, a job with some "
+                     "conditions missing ran only those (structured anew, so its "
+                     "`requirements_sha` may differ), and every table counts old and new rows "
+                     "alike.")
     if any(r.kind for r in report.rows):
         parts.append("The per-kind table groups briefs by their designed kind (`--kinds`, or "
                      "`kinds.json` next to the briefs; `docs/eval-briefs.md`): A comfortable, "
@@ -1107,8 +1353,8 @@ def how_to_read(report: EvalReport) -> str:
 
 
 def eval_markdown(report: EvalReport) -> str:
-    """The results document of ``moonwright eval --markdown``: header, how to read, the
-    per-condition table and the per-brief matrix."""
+    """The results document of ``moonwright eval --markdown``: header (with the resumed-rows
+    note of a ``--resume`` run), how to read, the per-condition table and the per-brief matrix."""
     briefs = len({r.brief for r in report.rows})
     retries = ("the planner's own" if report.max_answer_retries is None
                else str(report.max_answer_retries))
@@ -1118,11 +1364,10 @@ def eval_markdown(report: EvalReport) -> str:
              f"`{report.briefs_dir}`; {len(report.rows)} run(s) on {report.workers} worker(s); "
              f"max_repairs {report.max_repairs}; feedback `{report.feedback}`; "
              f"max_answer_retries {retries}; thinking `{report.thinking}`.")
-    lines = [
-        title,
-        "",
-        setup,
-        "",
+    lines = [title, "", setup, ""]
+    if report.resumed_rows:
+        lines += [f"resumed: {plural(report.resumed_rows, 'row')} from a previous run", ""]
+    lines += [
         "## How to read",
         "",
         how_to_read(report),
@@ -1144,6 +1389,20 @@ def write_markdown(path: Path, report: EvalReport) -> str:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
     return text
+
+
+def token_budgets(client: object) -> str | None:
+    """The token budgets of the live client inside ``client`` (through its wrappers'
+    ``inner``), e.g. 'reasoning 32,768 tokens (x2 when cut, up to 65,536), direct 4,096';
+    None for an offline client."""
+    for _ in range(4):
+        budgets = getattr(client, "budgets", None)
+        if isinstance(budgets, str):
+            return budgets
+        client = getattr(client, "inner", None)
+        if client is None:
+            return None
+    return None
 
 
 def cmd_eval(args: argparse.Namespace) -> int:
@@ -1169,21 +1428,51 @@ def cmd_eval(args: argparse.Namespace) -> int:
     conditions = list(loop_of)
     llm_name = next(iter(clients.values())).name
     kinds = load_kinds(getattr(args, "kinds", None), args.briefs)
+    plans_dir: Path | None = getattr(args, "save_plans", None)
+    if plans_dir is not None:
+        plans_dir.mkdir(parents=True, exist_ok=True)
+    # --resume: the rows an earlier run left in the CSV stay; a (brief, repeat) job whose every
+    # condition is among them is skipped, one with some conditions missing runs only those
+    # (structured anew), and the summaries cover old and new rows alike
+    resume = bool(getattr(args, "resume", False)) and args.csv.is_file()
+    old_rows = resume_csv(args.csv) if resume else []
+    have = {(r.brief, r.condition, r.repeat) for r in old_rows}
     # one job per (brief, repeat): the brief is structured ONCE and every condition plans from
     # the same requirements, so the conditions are paired (same first graph's verdict for
     # loop off / on, same dimensions and operations for every model arm)
-    jobs: list[EvalJob] = [(brief, repeat) for brief in briefs
-                           for repeat in range(1, args.repeat + 1)]
+    jobs: list[EvalJob] = []
+    skipped = 0
+    for brief in briefs:
+        for repeat in range(1, args.repeat + 1):
+            missing = tuple(c for c in conditions if (brief.id, c, repeat) not in have)
+            if missing:
+                jobs.append((brief, repeat, missing))
+            else:
+                skipped += 1
     say(
         f"eval: {len(briefs)} brief(s) x {len(conditions)} condition(s) x {args.repeat} repeat(s), "
         f"llm={llm_name} workers={args.workers} feedback={args.feedback} thinking={thinking}"
         + (" arms=" + ",".join(f"{a}={m}" for a, m in arms.items()) if arms else "")
         + (f" kinds={len(kinds)}" if kinds else "")
+        + (f" save_plans={plans_dir}" if plans_dir is not None else "")
     )
+    budgets = dict.fromkeys(b for c in clients.values() if (b := token_budgets(c)))
+    for line in budgets:   # the live client's effective budgets (an old .env can pin them)
+        say(f"tokens: {line}")
+    if resume:
+        partial = sum(len(wanted) < len(conditions) for _brief, _repeat, wanted in jobs)
+        say(
+            f"resume: {plural(len(old_rows), 'row')} from a previous run in {args.csv}; "
+            f"{skipped} of {skipped + len(jobs)} job(s) already complete, skipped"
+            + (f"; {plural(partial, 'partial job')}: only the missing conditions run"
+               if partial else "")
+        )
+    elif getattr(args, "resume", False):
+        say(f"resume: no earlier rows at {args.csv}, starting afresh")
 
-    def run(brief: ExampleBrief, repeat: int) -> list[EvalRow]:
+    def run(brief: ExampleBrief, repeat: int, wanted: tuple[str, ...]) -> list[EvalRow]:
         planners: dict[str, tuple[GraphCapture, Planner]] = {}
-        for condition in conditions:
+        for condition in wanted:
             capture = GraphCapture(clients[condition])
             planners[condition] = (capture, Planner(
                 capture,
@@ -1195,12 +1484,18 @@ def cmd_eval(args: argparse.Namespace) -> int:
         t0 = time.perf_counter()
         # the structure role is the same model in every arm: ask it once, through the first
         # condition's planner (so a stubbed Planner is honoured)
-        req, step = planners[conditions[0]][1].structure(brief.text_markdown, brief_id=brief.id)
+        req, step = planners[wanted[0]][1].structure(brief.text_markdown, brief_id=brief.id)
         structure_s = time.perf_counter() - t0
         key = brief_key(brief.text_markdown, brief.id)
         sha = requirements_sha(req)
+        if plans_dir is not None:   # written now: a killed run keeps it
+            record = structure_record(brief.id, repeat, req, step, structure_s)
+            name = structure_file_name(brief.id, repeat)
+            if resume and len(wanted) < len(conditions):   # the earlier conditions' record stays
+                name = free_name(plans_dir, name)
+            (plans_dir / name).write_text(json.dumps(record, indent=1) + "\n", encoding="utf-8")
         rows: list[EvalRow] = []
-        for condition in conditions:
+        for condition in wanted:
             capture, planner = planners[condition]
             t1 = time.perf_counter()
             if req is None:
@@ -1208,16 +1503,21 @@ def cmd_eval(args: argparse.Namespace) -> int:
             else:
                 result = planner.plan_from_requirements(req, key=key)
                 result.steps.insert(0, step)
+            plan_path = ""
+            if plans_dir is not None:   # the PlanResult as POST /plan returns it
+                plan_file = plans_dir / plan_file_name(brief.id, condition, repeat)
+                write_json(plan_file, result)
+                plan_path = csv_relative(plan_file, args.csv)
             rows.append(eval_row(
                 brief.id, condition, repeat, result, structure_s + time.perf_counter() - t1,
                 first_graph=capture.graphs[0] if capture.graphs else None, thinking=thinking,
-                kind=kinds.get(brief.id, ""), sha=sha,
+                kind=kinds.get(brief.id, ""), sha=sha, plan_path=plan_path,
             ))
         return rows
 
-    rows = run_eval_jobs(jobs, run, workers=args.workers, csv_path=args.csv, report=report_row)
-    order = {(b.id, c): (i, j) for i, b in enumerate(briefs) for j, c in enumerate(conditions)}
-    rows.sort(key=lambda r: (*order[(r.brief, r.condition)], r.repeat))   # brief x cond x rep
+    new_rows = run_eval_jobs(jobs, run, workers=args.workers, csv_path=args.csv,
+                             report=report_row, append=resume)
+    rows = sort_rows([*old_rows, *new_rows], briefs, conditions)   # brief x cond x rep
     summary = summarise(rows)
     print(format_summary(summary))
     report = EvalReport(
@@ -1235,6 +1535,8 @@ def cmd_eval(args: argparse.Namespace) -> int:
         thinking=thinking,
         arms=arms or {},
         role_models={} if llm_name == "fixture" else dict(models_from_env()),
+        resumed_rows=len(old_rows),
+        plans_dir=None if plans_dir is None else str(plans_dir),
     )
     write_json(args.out, report)
     outputs = [str(args.out), str(args.csv)]
@@ -1367,6 +1669,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--out", type=Path, default=Path("eval.json"))
     p.add_argument("--csv", type=Path, default=Path("eval.csv"))
+    p.add_argument(
+        "--save-plans", type=Path, default=None, metavar="DIR",
+        help="keep every run's PlanResult as DIR/<brief>__<arm>__<loop>__<repeat>.plan.json "
+             "(plan_path in the rows) and each brief x repeat job's structuring as "
+             "DIR/<brief>__<repeat>.structure.json",
+    )
+    p.add_argument(
+        "--resume", action="store_true",
+        help="when --csv exists, keep its rows: skip the brief x repeat jobs it already holds "
+             "every condition of, append the new rows and summarise old and new together "
+             "(default: overwrite the CSV)",
+    )
     p.add_argument(
         "--markdown", type=Path, default=None, metavar="PATH",
         help="also write the results document: per-condition table, per-kind table, per-brief "

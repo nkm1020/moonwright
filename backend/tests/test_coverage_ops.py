@@ -437,7 +437,7 @@ def test_prompts_state_the_operations_and_coverage_rules() -> None:
     for text in ("operations", "closed", "sintered crest", "built from pad spoil", "key trench",
                  "signed off", "Never add an operation the brief does not ask for",
                  "never invented", "copy every number the brief",
-                 "trench_width_m and trench_depth_m", '"trench_width_m": 1.2',
+                 "trench_width_m and trench_depth_m", '"trench_width_m": 0.7',
                  "a stockpile described only by its position has none",
                  'a "Spoil berm" is spoil_berm (never stockpile)'):
         assert text in structure, text

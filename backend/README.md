@@ -14,7 +14,7 @@ See the repository root README for the full story and the limitations. Quick sta
     uv run moonwright plan examples/briefs/tight_battery.md --llm fixture --max-repairs 0   # loop off: the solver's advice
     uv run moonwright simulate out/landing_pad.plan.json --fail EX2@30 --llm fixture
     uv run moonwright montecarlo out/landing_pad.plan.json --runs 200 --seed 1 --out out/landing_pad.mc.json
-    uv run moonwright eval --briefs examples/briefs --llm fixture --out out/eval.json --csv out/eval.csv
+    uv run moonwright eval --briefs examples/briefs --llm fixture --out out/eval.json --csv out/eval.csv --save-plans out/plans
     uv run moonwright eval --briefs examples/briefs --llm fixture --models ultra,super --markdown out/eval.md
     uv run moonwright eval --briefs examples/eval --llm fixture --loop off --markdown out/eval_kinds.md   # per-kind table from examples/eval/kinds.json
     uv run python scripts/brief_budget.py fixtures/landing_pad/structure.json --graphs lazy
@@ -104,7 +104,9 @@ Every command answers `--help`; `--llm fixture|nebius|record` picks the model cl
   tasks are resolved exactly as the coverage check resolves them (`tags.serving_tasks`: id, type,
   label, zone, hauls placed in the zone), only whole plans are judged (a replan's remaining graph
   is the work left, not the structure), and `moonwright plan` prints the advisories under its
-  verdict line; `volume_shares` gives the eval its `min_volume_share`.
+  verdict line; `volume_shares` gives the eval its `min_volume_share`. (Phase 3e makes a
+  shortfall a validation conflict, credits m2 stripping, reads the brief's smallest size and
+  judges only what the brief states; see below.)
 * **Advice on failure** (`pipeline/relax.py`, `schemas.Suggestion`, `PlanResult.suggestions`).
   `suggest_relaxations(req, graph, failure, opts)` derives candidates from the verdict's conflict
   ids (extend_horizon on horizon / timing cores, raise_battery for `energy:<robot>` and the
@@ -130,8 +132,9 @@ Every command answers `--help`; `--llm fixture|nebius|record` picks the model cl
   task-graph and repair roles and names the conditions `<arm>/<loop>`; `--thinking on|off|auto`
   switches reasoning for those two roles; `--markdown PATH` writes the results document. Rows
   gain `cost_usd` (list prices in `llm/prices.py`, 0 offline, null for an unpriced model),
-  `volume_advisories` / `min_volume_share` / `in_scope` (verified with no volume advisory: the
-  "feasible in scope" rate next to "feasible"), `requirements_sha` and `kind`, and summaries
+  `volume_advisories` / `min_volume_share` / `in_scope` (the "feasible in scope" rate next to
+  "feasible"; since phase 3e: verified with every judged volume and area at 95 % or more of
+  the brief's, see below), `requirements_sha` and `kind`, and summaries
   p50/p95 latency, cost and the in-scope rate with its Wilson CI. Each brief is structured ONCE
   per repeat (`Planner.structure`) and every condition plans from the same requirements, so arms
   and loop settings are paired on one first-graph verdict; `--kinds PATH` (default: `kinds.json`
@@ -198,11 +201,149 @@ Every command answers `--help`; `--llm fixture|nebius|record` picks the model cl
   it redefined (`Replan refused: it redefined the running task T1; the previous plan stays in
   force.`).
 
+## Pipeline notes (phase 3e)
+
+The first live evaluation (22 briefs x Ultra / Super x 3, 132 runs, $9.9) verified 85 % and 91 %
+of the runs but only 45 % and 38 % in scope: the models satisfied the solver by shrinking the
+work, the volume advisory never reached the repair prompt, 78 of 190 Ultra reasoning calls were
+cut at 16,384 tokens, and the validator's energy check ignored the transit CP-SAT charges.
+
+* **Volume is a conflict** (`pipeline/validate.py: volume:<structure>`, `pipeline/rates.py:
+  volume_coverages`, `volume_shortfalls`). After coverage and before the capacity checks, every
+  dug shape (bowl, box, a berm's key trench) and every placed body (berm prism) whose structure
+  is not stockpile-like (`stockpile | spoil | pile | depot | dump | heap` in its type, `label`
+  or `name`; a berm, a spoil berm included, is never one) must be covered to at least
+  `VOLUME_LOW` (70 %) of the smallest volume the brief allows. Covered means the `m3` of the
+  structure's excavator digs on a dug shape, or its hauls on a placed one, plus the stripping
+  credit of excavator `m2` tasks on a dug shape: the areas summed, capped at the footprint of
+  the smallest size, times min(depth, `STRIP_DEPTH_M` = 0.2 m) (the rate table's m2 row now
+  reads "strip or grade a surface layer up to 0.2 m; deeper cuts are excavation in m3"; a
+  hauler's m2 counts nothing). The review made it judge only what the brief states and close
+  the credit's loopholes:
+  * the floor comes from `min_<dimension>_m` extras, which the structure prompt records for a
+    brief that allows a range or a reduction; a bowl or box whose walls slope (`rates.wall_slope`:
+    a `wall_slope` extra, the structure's own entry in the brief, a constraint; "8 m diameter,
+    2 m deep, with a 1:1 sloped wall") is judged between its size read at the rim (58.6 m3) and
+    at the floor (159.2 m3) instead of with vertical walls (100.5 m3, which rejected the pit
+    dug to its real volume); a key trench is judged only with its `trench_width_m` (the berm's
+    base width it used to take rejected tight_battery's 1.2 m trench as 30 % of an invented
+    4 m one); a berm with no base width holds at least its 1:1 section;
+  * an m2 pass after a dig of the shape earns no credit unless it is named a strip (a 12 m dig
+    plus a "Level pad base 314 m2" pass passed as 86 % of the 20 m pad), and below the stripped
+    layer only digs count, to 70 % of that layer (a strip of the whole kind-E pad plus a 1 m3
+    test pit read 113 % of its floor);
+  * spoil moved is no dig (`rates.rehandles`: blade, push, windrow, backfill ... in the name
+    without excavate / dig): it counts neither for nor against the shape;
+  * a placed body whose hauls wait (by `after`, transitively) for another structure's dig is
+    judged against the smaller of its own floor and that dig's: landing_pad's berm "built from
+    pad spoil" is covered by all 125.7 m3 of the bowl, not 42 % of its 300 m3 prism.
+
+  Detail: `S2 (borrow_strip): dimensions 100 x 6 x 0.6 m = 360 m3 of excavation; excavator
+  tasks cover 120 m3 (33 %): T3 600 m2 counts 120 m3 at 0.2 m` (the share rounded down, so a
+  69.96 % plan never reads 70 %; a floor reads `bowl 12-20 m across, 0.5 m deep = 56.5-157.1 m3
+  ... (44 % of the smallest size the brief allows)`, a berm `... = 300 m3 of fill, more than the
+  125.7 m3 of spoil S1 yields; hauler tasks cover 50 m3 (39 % of that spoil)`, a trench `its key
+  trench is 60 x 1.2 x 0.8 m = 57.6 m3 of excavation`); hint: `S2 (borrow_strip) plans 120 of
+  360 m3: plan the remaining 240 m3 of S2 as excavator tasks in m3 (split above 60 m3) instead
+  of shrinking the work; keep the m2 stripping only for the top 0.2 m.` (a berm without a
+  source: `..., each after the excavation its fill comes from (a borrow dig in m3 when no
+  structure's spoil supplies it), ...`). An excess above `VOLUME_HIGH` (150 %), judged on the
+  digs alone (a pad stripped and then dug in full is no excess, nor is spoil bladed into a
+  windrow), stays an advisory: `... total 600 m3 (200 %): hauled twice over` / `dug 1.5 times
+  over`; the fill of a stockpile-like structure is judged neither way.
+  `validate_graph(..., volume=None)` runs the check exactly when `coverage` is on (a whole
+  plan), `False` switches it off, `True` forces it; the planner passes `False` for a replan's
+  remaining graph and its repairs. Graphs without quantities and structures without a positive
+  volume are untouched.
+* **Validator transit** (`pipeline/validate.py: transit_allowances`). Both energy checks charge
+  every task the transit allowance CP-SAT reserves (the least over the robots of its type, so
+  the validator never demands more than the solver; the planner passes a replan's
+  `robot_positions`), equal to the solver's `budget_rows` figure to the milli-Wh on the
+  tight_battery fixture, and name it: `printer tasks need 4,037 Wh, about 38 Wh of it travel;
+  its 1 robot carries 4,000 Wh`, `T1 needs 4,006 Wh, about 11 Wh of it travel, but the largest
+  printer battery is 4,000 Wh`. One verdict per cause: a type's overrun that its oversized
+  tasks alone explain is reported as `energy_task:<task>` only, with the sentence `The fleet's 1
+  printer carries 4,000 Wh in all, so splitting T1 alone cannot fit it: keep the full work unless
+  the brief allows less.`; an overrun with a
+  cause of its own keeps `energy:<type>` beside them. Every figure goes through
+  `moonwright/text.py` (`wh`, and the new `qty` / `pct` for the volume sentences).
+* **What a repair is told** (`llm/prompts.py`, `pipeline/taskgraph.py`, `pipeline/loop.py`).
+  `generate_task_graph(advisories=...)` passes the advisories of the step that produced the
+  graph being repaired to `repair_messages(advisories=...)`, which renders them as an
+  `ADVISORIES` block between `FAILURE` and `CONTEXT` (an advisory whose id the verdict already
+  carries as a conflict is left out, except a `volume:` excess: a berm hauled twice over keeps
+  its note when its own key trench is the verdict's `volume:` shortfall), so a 200 % double haul
+  is cut in the same round as an energy verdict. `REPAIR_SYSTEM` says what each conflict id
+  needs (energy -> move or split quantities, `after` edges alone change no energy;
+  `energy_task` -> split, shares summing to the original, and when the type cannot carry the
+  work at all, keep it whole: the solver proves the shortfall and proposes a fix; horizon ->
+  parallelise; `scope` -> add the missing task of the right type; `volume` -> add the missing
+  m3, never shrink; a smaller quantity only where a `min_<dimension>_m` allows it, stated in the
+  notes). No rule tells a repair to trim: "trim or move it" verified kind-D briefs after a
+  silent 15-25 % cut. The shared `COVERAGE_RULES` state the volume contract the validator
+  checks, and the structure prompt's dimension examples are marked as other projects' numbers
+  (its trench example is 0.7 x 0.45 m, which no brief uses); it also asks for `lifts` and a
+  pit's `wall_slope` when the brief states them.
+* **Token policy** (`llm/tokenfactory.py`, module docstring "Token policy"). Reasoning calls
+  start at `THINKING_MAX_TOKENS` = 32,768 (`MOONWRIGHT_THINKING_MAX_TOKENS` overrides; a value
+  below the default is warned about once, since a `backend/.env` copied from the pre-3e
+  `.env.example` pins 16,384, and `moonwright eval` prints the effective budgets). On
+  `finish_reason == "length"` the next ask repeats the question with twice the budget
+  (`THINKING_MAX_TOKENS_CAP` = 65,536, timeout scaled with it), reasoning on; only a cut at the
+  cap is asked again with reasoning off at `MOONWRIGHT_MAX_TOKENS` with the compact-JSON note.
+  Any other failure keeps the old re-ask. The ask count per call is unchanged (two by default),
+  and the ladder spans the planner's re-ask of a rejected answer (the next call of the same
+  role, key and variant at the next attempt, in the same thread, starts on the rung the last
+  ask led to), so an always-cut prompt costs the same six asks as before but climbs [32,768,
+  65,536, 4,096 off, 8,192, 16,384, 32,768] instead of repeating [32,768, 4,096] three times;
+  the call log records each ask's `max_tokens` and `thinking`.
+* **Rejected answers** (`llm/tokenfactory.py` "Rejected answers", `llm/base.py:
+  answer_failure`). A call whose asks all failed raises with a `failure` written for a person:
+  hint `Nemotron 3 Ultra did not return a valid task graph after 2 asks: the answer was cut off
+  at 32,768 tokens, then failed the schema` (`valid requirements` for the structure stage),
+  details one line per ask (`ask 1: cut off at 32,768 tokens`, `ask 2: task T3: 'after' must
+  be a list`, item ids instead of pydantic paths and pydantic's wording, e.g. `'tasks' must not
+  be empty`, `'id' may use only letters, digits and _ . -`), conflicts `schema:json` (cut
+  off, not JSON, empty) / `schema:shape` (a schema violation); a request the SDK gave up on
+  reads `The Token Factory request to Nemotron 3 Ultra failed: APITimeoutError (Request timed
+  out.)` (`text.model_name` gives the short names). The task-graph and structure stages put
+  that failure on their step; a client without one (fixtures, tests) keeps its own hint and
+  details under the same two ids (`schemas.schema_conflict`; `schema:$` is gone).
+* **Eval: plans and resume** (`cli.py eval`). `--save-plans DIR` writes every run's PlanResult
+  as `DIR/<brief>__<arm>__<loop>__<repeat>.plan.json` (what `POST /plan` returns; `plan_path`,
+  relative to the CSV's directory so a resumed row keeps naming its own file whatever DIR the
+  next run uses, is the last CSV column) and each brief x repeat job's structuring as
+  `DIR/<brief>__<repeat>.structure.json`, both written the moment they exist (a partial job
+  completed by `--resume` writes `<brief>__<repeat>.2.structure.json`, never over the record
+  its earlier conditions planned from). `--resume` keeps the rows an earlier run left in
+  `--csv` (the last row per brief x condition x repeat wins; a last row cut off mid-append is
+  dropped from the file and its job runs again), skips the jobs it holds completely, runs only
+  the missing conditions of a partial job (structured anew), appends under one header and
+  summarises old and new rows together (`resumed_rows` in the JSON, a `resumed: N rows` line in
+  the markdown). Rows gain `rejected_answers` (task-graph / repair steps that ended `schema` or
+  `llm_error`) and `min_area_share`, the summary `rejected_runs`, `rejected_answers` and
+  `cost_p50_usd`.
+* **In scope** (`pipeline/rates.py: scope_gaps`, `area_coverages`, `cli.py: eval_row`). The
+  validator's 70 % is a conflict threshold, not a definition of done: a kind-D repair that
+  trimmed the borrow dig to 85 % or the two compaction lifts to 78 % verified and was counted
+  "feasible in scope". `in_scope` now needs every judged volume and every compaction /
+  sintering area (the floor's footprint x `lifts`; a berm's crest and a stockpile are not
+  judged) at `IN_SCOPE_SHARE` = 95 % or more; an excess (hauled twice over) is no gap.
+  `moonwright plan` prints the gaps under its verdict line and the eval prints `not in scope:
+  volume 85 %` per row.
+* **Brief budget** (`scripts/brief_budget.py`). Fines up to 0.2 m are stripped in m2 (the m2
+  row), deeper fines dug in m3; `min_<dimension>_m` keys reach the requirements (the
+  `low_battery_pad` registry entry records `min_diameter_m: 12`) and the budget notes the
+  volume floor; the `shrunk` graph variant plans every dig as stripping its footprint in m2
+  (the live re-scope), which the volume check now rejects (`low_battery_pad` included: the
+  strip of its 20 m pad no longer covers the 12 m floor), while every `lazy` / `split` graph
+  covers its volumes and is in scope (`docs/eval-briefs.md`).
+
 ## Evaluation flags
 
     uv run moonwright eval --briefs examples/eval --repeat 3 --loop both --models ultra,super --thinking auto \
-      --llm nebius --workers 3 --max-answer-retries 2 \
-      --out out/eval_live.json --csv out/eval_live.csv --markdown out/eval_live.md
+      --llm nebius --workers 3 --max-answer-retries 2 --save-plans out/eval_live_plans \
+      --out out/eval_live.json --csv out/eval_live.csv --markdown out/eval_live.md   # add --resume to continue
     uv run moonwright eval --briefs examples/eval --repeat 2 --loop on --feedback verdict --llm nebius
     uv run python scripts/replan_eval.py out/live/*.plan.json --llm nebius --all-tasks --sole-of-type solver \
       --max-escalations 10 --out out/replan_eval_live.json --markdown out/replan_eval_live.md
@@ -216,9 +357,11 @@ every condition from that requirements object) and flushes each row to the CSV a
 JSON report keeps brief x condition x repeat order); `--feedback core|verdict` is the ablation (the
 repair round gets the minimal infeasibility core with hints, or only the verdict kind);
 `--max-answer-retries 0..5` bounds schema / transport re-asks per round in both conditions
-(`--max-repairs` counts verdict rounds only). Rows record the models used, `answer_valid`,
-`first_try_feasible`, first/final duration and energy totals, `scope_drift_pct`, the volume
-advisories on the final graph (`volume_advisories`, `min_volume_share`, `in_scope`), the
+(`--max-repairs` counts verdict rounds only); `--save-plans DIR` keeps every run's plan and
+each job's structuring (`plan_path` in the rows, relative to the CSV), and `--resume` continues a
+killed run from its CSV, running only the missing brief x condition x repeat cells. Rows record the models used, `answer_valid`,
+`first_try_feasible`, first/final duration and energy totals, `scope_drift_pct`, the scope of
+the final graph (`volume_advisories`, `min_volume_share`, `min_area_share`, `in_scope`), the
 `requirements_sha` shared by a brief's conditions and the brief's `kind`; the summary adds a Wilson
 95 % CI on the feasible and the in-scope rate. `--models` runs one client per arm (shared by the workers)
 and keeps the bare `loop_off` / `loop_on` names when absent, so older reports still parse;
@@ -236,7 +379,8 @@ directly, recomputes the makespan from the entries and counts the violations the
 
 `NEBIUS_API_KEY`, `NEBIUS_BASE_URL` (the us-central1 endpoint is tried automatically on a 404),
 `MOONWRIGHT_MODEL_STRUCTURE|TASKGRAPH|REPAIR|EXPLAIN`, `MOONWRIGHT_THINKING` (`auto` | `off`),
-`MOONWRIGHT_MAX_TOKENS`, `MOONWRIGHT_THINKING_MAX_TOKENS`, `MOONWRIGHT_LLM_TIMEOUT_S`,
+`MOONWRIGHT_MAX_TOKENS` (4096), `MOONWRIGHT_THINKING_MAX_TOKENS` (32768, the first rung of the
+token ladder), `MOONWRIGHT_LLM_TIMEOUT_S`,
 `MOONWRIGHT_LLM`, `MOONWRIGHT_LLM_LOG` (one JSON line per Token Factory call in
 `out/llm_log.jsonl`: status, model, tokens, latency, request id; never prompt or answer text; `off`
 disables it), `MOONWRIGHT_CORS_ORIGINS` / `MOONWRIGHT_CORS_ORIGIN_REGEX` for a deployed UI. All are

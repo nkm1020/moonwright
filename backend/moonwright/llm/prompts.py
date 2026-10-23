@@ -16,6 +16,24 @@ for dimensions copied rather than guessed; the task-graph and repair prompts sha
 belongs to the receiving structure and its zone, inspections when the brief asks for them,
 spoil reuse, the split rule) so the validator's ``scope:<structure>`` check and the model
 read from the same page.
+
+Volume contract (phase 3e): the first live evaluation showed the models satisfying the solver
+by shrinking the work (a 20 m pad dug as a 12 m one, a 360 m3 borrow strip planned as 600 m2
+of stripping, a berm hauled twice) and copying the structure prompt's worked example into
+briefs that have no trench. So the structure prompt marks its dimension examples as other
+projects' numbers (the trench figures are ones no brief uses), records the smallest size a
+brief allows as ``min_<dimension>_m`` beside the full size, the compaction ``lifts`` and a
+pit's ``wall_slope`` when the brief states them (the volume check and the eval's area check
+read both), and gives no stockpile a size the brief does not state; :data:`COVERAGE_RULES` states what the validator's ``volume:<structure>``
+check measures (an excavator m2 task is a surface layer of at most 0.2 m, anything deeper is
+m3 for its full volume, every volume is hauled once, the planned m3 must match the dimensions,
+work is never shrunk to fit the fleet); the repair prompt says which edit each conflict kind
+needs (an energy verdict is never answered with edges alone) and :func:`repair_messages`
+renders the step's advisories under the verdict so a 200 % double haul is fixed too. No rule
+tells a repair to trim: an energy verdict the fleet cannot carry keeps the full work (seen in
+review: "trim or move it" verified kind-D briefs after a silent 15-25 % cut). Every
+prompt stays under the 5,500-character cap the tests hold it to (Ultra reads it with
+thinking on), so each addition here is paid for by a cut elsewhere.
 """
 
 from __future__ import annotations
@@ -26,8 +44,8 @@ from moonwright.pipeline.rates import RATE_TABLE_TEXT
 from moonwright.schemas import Failure, Requirements, Schedule, TaskGraph
 
 DOMAIN = """You are Moonwright, a construction-planning assistant for multi-robot crews on the
-lunar surface (south-pole landing sites). Robots work autonomously because Earth-Moon latency
-rules out teleoperation, so every plan must be executable without human correction.
+lunar surface. Robots work autonomously (Earth-Moon latency rules out teleoperation), so every
+plan must run without human correction.
 
 Robot types you may use: excavator (digs, grades), hauler (moves regolith), compactor (compacts
 pads and berms), printer (sinters/prints regolith surfaces), surveyor (surveys, inspects).
@@ -43,23 +61,29 @@ STRUCTURE_SYSTEM = DOMAIN + """
 Task: convert a natural-language construction brief into structured requirements.
 Rules:
 - Robots: copy the fleet exactly as the brief states it, every robot with its id, type and
-  battery (Wh); never add, drop or rename a robot. Invent ids (EX1, HL1, CP1, PR1, SV1) only
-  when the brief gives counts without ids. Default battery when unspecified: excavator 5000,
+  battery (Wh); never add, drop or rename a robot. Invent ids (EX1, HL1, ...) only when the
+  brief gives counts without ids. Default battery when unspecified: excavator 5000,
   hauler 3000, compactor 3500, printer 4000, surveyor 1500 Wh.
 - Structures: one entry per thing to build, with the id of its zone and EVERY dimension the
   brief gives, as numeric fields in metres (diameter_m, length_m, width_m, height_m, depth_m,
-  thickness_m; a key trench under a berm is trench_width_m and trench_depth_m; convert cm to
-  m). Examples: "20 m diameter, a bowl 0.4 m deep, then a 30 cm sintered surface" ->
-  "diameter_m": 20, "depth_m": 0.4, "thickness_m": 0.3; "a 60 m arc, 2.5 m high and 4 m wide
-  at the base, on a key trench 1.2 m wide and 0.8 m deep" -> "length_m": 60, "height_m": 2.5,
-  "width_m": 4, "trench_width_m": 1.2, "trench_depth_m": 0.8; "8 m by 8 m, 0.9 m deep" ->
-  "length_m": 8, "width_m": 8, "depth_m": 0.9. The planner sizes every task from these fields
-  and never sees the brief, so copy every number the brief states; a number the brief does
-  not state is never invented (leave that field out), and a structure the brief gives no
+  thickness_m; trench_width_m and trench_depth_m only when the brief states a key trench;
+  convert cm to m; lifts and wall_slope ("1:1") when stated). Examples from OTHER projects: "20 m diameter, a bowl 0.4 m deep, then a
+  30 cm sintered surface" -> "diameter_m": 20, "depth_m": 0.4, "thickness_m": 0.3; "a 60 m
+  arc, 2.5 m high and 4 m wide at the base, on a key trench 0.7 m wide and 0.45 m deep" ->
+  "length_m": 60, "height_m": 2.5, "width_m": 4, "trench_width_m": 0.7, "trench_depth_m":
+  0.45; the numbers above are illustrations, copy only the brief's. The planner sizes every
+  task from these fields and never sees the brief, so copy every number the brief states; a
+  number the brief does not state is never invented, and a structure the brief gives no
   numbers for gets no numeric field at all (a stockpile described only by its position has
-  none). Spell the type with the brief's own noun for the structure: a "Spoil berm" is
-  spoil_berm (never stockpile), a "Borrow strip" is borrow_strip, a stockpile is "stockpile"
-  (landing_pad, blast_berm, access_road, habitat_foundation, ...).
+  none: a stockpile or spoil pile gets a size only when the brief states one). Spell the type
+  with the brief's own noun for the structure: a "Spoil berm" is spoil_berm (never
+  stockpile), a "Borrow strip" is borrow_strip, a stockpile is "stockpile" (landing_pad,
+  blast_berm, access_road, ...).
+- Smaller sizes: when the brief gives a range or allows a reduction ("16-24 m", "may be
+  reduced to 11 m", "at least 7 m long"), the plain key holds the full size and
+  min_<dimension>_m beside it the smallest value allowed (min_diameter_m, min_depth_m,
+  min_length_m, min_width_m, min_height_m; "diameter_m": 24, "min_diameter_m": 16; "at
+  least 7 m" is 7 in both); never invent a minimum.
 - operations: per structure, a JSON array of the work the brief explicitly asks for on it,
   using only the words of the closed list survey, excavate, grade, haul, compact, sinter
   (inspection and staking are survey; stripping and levelling are grade). Example: a berm
@@ -72,30 +96,36 @@ Rules:
   for the stockpile or haul lane whenever hauling is implied. Zone centres must lie inside the
   grid (0 <= x < 40 and 0 <= y < 40 on the default grid), radius 3 to 6 cells, and centres at
   least 2 x radius apart so zones do not overlap. Put the depot on an edge of the grid, for
-  example [20, 2], away from every zone. Never place a zone outside the grid or give it a
-  radius that covers the site.
+  example [20, 2], away from every zone.
 - horizon_h: the deadline in hours (days x 24). If none is given use 336.
 - constraints: copy any explicit operational constraints as short sentences.
 Answer with ONE JSON object matching this schema, no prose:"""
 
 COVERAGE_RULES = """
-- Every structure of a known type needs its phases: landing pad = survey, excavate or grade (a
-  bowl is excavated in m3, a stripped pad graded in m2), compact and sinter (sinter only when
-  a printer exists); blast berm / protective berm = excavate or haul, then compact; access
-  road = grade and compact; habitat foundation = excavate and compact; any other structure
-  needs at least one task. On top of that, every operation listed in a structure's
-  `operations` needs a task tagged with that structure (the validator's scope:<structure>
-  rule; it checks by robot type, unit and the verbs in task names).
+- Every structure of a known type needs its phases: landing pad = survey, excavate or grade,
+  compact and sinter (sinter only when a printer exists); blast berm / protective berm =
+  excavate or haul, then compact; access road = grade and compact; habitat foundation =
+  excavate and compact; any other structure needs at least one task. On top of that, every
+  operation listed in a structure's `operations` needs a task tagged with that structure
+  (the validator's scope:<structure> rule).
 - A haul task's zone is the zone where the material is PLACED (the berm, the stockpile, the
   fill) and its structure is the receiving one. When structure B is built from structure A's
   spoil, B needs a haul task, and its quantity follows from B's volume, not from A's.
 - When the brief asks for inspection or sign-off, add one surveyor inspection task per
   structure as the last task of that structure (quantity = its area in m2, or null).
 - Split a structure's excavation, hauling or compaction over at least as many tasks as there
-  are robots of that type whenever its total is more than 60 m3 or more than 300 m2, so the
-  work spreads across the fleet and no task exceeds a battery. The parts SUM to the
-  structure's total, never repeat it: 300 m3 of berm fill on two haulers is 2 x 150 m3, each
-  part's basis stating its share ("300 m3 / 2 = 150 m3")."""
+  are robots of that type whenever its total is more than 60 m3 or more than 300 m2, so no
+  task exceeds a battery. The parts SUM to the structure's total, never repeat it: 300 m3 of
+  berm fill on two haulers is 2 x 150 m3, each part's basis stating its share ("300 m3 / 2 =
+  150 m3"). Haul each volume once (fill = the placed body's m3, spoil = the dug m3), never a
+  berm twice.
+- Volumes: an excavator m2 task is a surface layer at most 0.2 m thick (strip, grade; 15 cm
+  of fines over 10 x 10 m: strip 100 m2); a cut deeper than 0.2 m, a bowl, pit, trench or
+  borrow strip is excavation in m3 for its FULL volume from the dimensions. Planned m3 must
+  match the dimensions (under 70 % is rejected, over 150 % flagged); when the fleet cannot
+  carry the full volume, plan the full work anyway and say so in notes (the solver proves
+  it and proposes the fix), never shrink it; a min_<dimension>_m is the smaller size the
+  brief allows."""
 
 TASKGRAPH_SYSTEM = DOMAIN + """
 
@@ -103,59 +133,56 @@ Task: decompose the requirements into a task graph for the robots.
 Rules:
 - 6 to 24 tasks (more only when the split rule below needs them). Each task has: id (T1, T2,
   ...), name (start it with the phase verb: survey, strip/grade, excavate, haul, compact,
-  sinter/print, inspect), robot_type (must be a type that exists in requirements.robots),
-  quantity + unit + basis (the scope of the work, see below), duration_h and energy_wh (your
-  own estimate; they are recomputed), zone (a zone id from requirements.site.zones; tasks
-  that touch the same physical area share a zone), after (ids of tasks that must finish
-  before this one starts), structure (id of the structure it serves; set it on every task).
+  sinter/print, inspect), robot_type (a type in requirements.robots), quantity + unit + basis
+  (the scope, see below), duration_h and energy_wh (your estimate; recomputed), zone (an id
+  from requirements.site.zones; tasks on the same physical area share one), after (ids of
+  the tasks that must finish first), structure (the structure it serves; set it on every
+  task).
 - quantity and unit: m3 for excavation and hauling (volume moved; a trench is length x width
   x depth in m3, never m), m2 for strip, grade, compact, sinter and survey (area treated); m
   and ea (a cable run, a marker) only for surveyor tasks; null for a pure time task (an
-  inspection pass, a wait). Every excavator, hauler, compactor and printer task that moves,
+  inspection pass). Every excavator, hauler, compactor and printer task that moves,
   shapes or sinters regolith MUST state a positive quantity in a unit the rate table prices
-  for that robot type (m3 or m2); the validator rejects such a task without one, or counted
-  in m or ea (quantity:<task>), so it can never be sized by hand. basis says how the quantity
-  follows from the structure's dimensions, for example "pi*(10 m)^2*0.4 m = 126 m3" or
-  "60 m x 4 m = 240 m2".
-- duration_h and energy_wh are COMPUTED from quantity and unit by the rate table below
-  (duration_h = ceil(quantity / rate), energy_wh = quantity x Wh/unit); a task without a
-  quantity keeps your duration_h and is charged at least the base power. So plan SCOPE and
-  SPLITTING against the stated batteries: one task must fit one robot's battery, and the sum
-  of a robot's tasks must fit it too. Check with the table before answering.""" + COVERAGE_RULES + """
-- Realistic lunar earthworks order: survey -> excavate -> haul -> grade/compact -> print/sinter
-  -> inspect. Tasks run strictly one at a time per robot and one robot at a time per zone.
-- The whole plan must fit inside horizon_h; the critical path (sum of durations along the
-  longest precedence chain) must be well below the horizon.
+  for its type (m3 or m2) or the validator rejects it (quantity:<task>). basis says how the
+  quantity follows from the dimensions ("pi*(10 m)^2*0.4 m = 126 m3", "60 m x 4 m = 240 m2").
+- duration_h and energy_wh are COMPUTED from quantity and unit by the rate table below; a
+  task without a quantity keeps your duration_h and is charged at least the base power. So
+  plan SCOPE and SPLITTING against the stated batteries: one task must fit one robot's
+  battery, and the sum of a robot's tasks must fit it too. Check with the table before
+  answering.""" + COVERAGE_RULES + """
+- Order: survey -> excavate -> haul -> grade/compact -> print/sinter -> inspect. Tasks run one
+  at a time per robot and one robot at a time per zone.
+- The whole plan must fit inside horizon_h: keep the longest precedence chain well below it.
 """ + RATE_TABLE_BLOCK + """
 Answer with ONE JSON object matching this schema, no prose:"""
 
 REPAIR_SYSTEM = DOMAIN + """
 
-Task: the previous task graph was rejected by a deterministic validator / constraint solver.
-Fix the graph so the listed conflicts disappear while keeping the construction scope complete.
+Task: the validator / constraint solver rejected the previous task graph; fix it so the
+listed conflicts disappear with the construction scope complete.
 Rules:
-- Read the failure: conflict ids are machine-generated (energy:<robot>, energy:<type> (the
-  type's tasks exceed the sum of its batteries), energy_task:<task> (one task larger than any
-  battery of its type: split it), horizon, horizon_path:<chain> (the chain's durations alone
-  exceed the horizon: split or de-serialise it), precedence:<a>-><b>, zone:<zone>,
-  robot:<robot>, capability:<task>, quantity:<task>, scope:<structure>, cycle:...,
-  reference:..., missing:<task>, changed:<task>, locked:<task>). The hint and details say
-  what was measured.
 - duration_h and energy_wh are COMPUTED from each task's quantity and unit by the rate table
-  below; editing duration_h or energy_wh without changing the quantity changes nothing, and
-  dropping a task's quantity does not either (it keeps the one it had). A quantity:<task>
-  conflict means a physical task has no quantity, a quantity of 0 or a unit the table does not
-  price for its robot type: state the quantity in a priced unit.
-- Typical repairs: split a task's quantity over more tasks of the same robot type (the shares
-  summing to the original quantity), reassign work to another robot type that exists, use a
-  smaller quantity only if the brief allows it, remove a wrong precedence edge, break a cycle,
-  drop tasks that duplicate each other, use more zones so work can proceed in parallel.
-- Do NOT delete required work just to make the solver happy: a scope:<structure> conflict
-  means a phase, a listed operation or a whole structure went missing, and its hint names the
-  task to add (for example a printer task tagged with the structure). Keep ids stable where
-  possible.""" + COVERAGE_RULES + """
-- State every scope change in notes: a smaller quantity, a dropped or merged task, a changed
-  robot type, and why the brief allows it.
+  below: editing them without changing the quantity changes nothing, nor does dropping a
+  quantity (it keeps the one it had). The hint's figures are measured: keep them.
+- What each conflict id needs:
+  energy:<robot> / energy:<type> (tasks exceed the battery, or the type's batteries) -> move
+  or split quantities across robots of the type; `after` edges alone change no energy.
+  energy_task:<task> (larger than any battery of its type) -> split it over more tasks of
+  the same robot type, the shares summing to the original quantity. If the type cannot
+  carry the work at all, keep it whole: the solver proves the shortfall and proposes a fix.
+  horizon / horizon_path:<chain> / robot:<robot> (hours exceed the horizon) -> parallelise:
+  split across robots, shorter chains; never drop work.
+  zone:<zone> -> spread tasks over zones or sequence them. precedence:<a>-><b> / cycle:...
+  / reference:... -> fix the edge. capability:<task> -> a type the fleet has.
+  scope:<structure> -> a phase, a listed operation or a whole structure went missing: add the
+  missing task of the right robot type (the hint names it), never delete required work.
+  quantity:<task> (none, 0, or an unpriced unit for the type) -> state it in a priced unit.
+  volume:<structure> (planned m3 below the dimensions) -> add the missing m3 as excavator /
+  hauler tasks (the hint says how much), never shrink the work.
+  missing:<task> / changed:<task> / locked:<task> -> keep those tasks as they were.
+- Use a smaller quantity only where the brief allows it (a min_<dimension>_m) and state every
+  scope change in notes (a smaller quantity, a dropped or merged task, a changed robot type)
+  and why the brief allows it; keep ids stable.""" + COVERAGE_RULES + """
 """ + RATE_TABLE_BLOCK + """
 Answer with ONE JSON object (the full corrected task graph) matching this schema, no prose:"""
 
@@ -193,6 +220,13 @@ commentary, no reasoning text."""
 
 JSON_ONLY = ("Return only that JSON object itself: no markdown fences, no commentary, no "
              "reasoning text before or after it.")
+
+ADVISORIES_HEADER = (
+    "ADVISORIES (warnings on PREVIOUS TASK GRAPH, not conflicts; resolve them too when the "
+    "answer can: a volume percentage moves only when quantities change, so a 200 % haul is "
+    "cut to the body's m3 and a shortfall gets the missing m3; an estimate gap is informational, "
+    "the computed figures stand):"
+)
 
 
 def _schema_block(model: type) -> str:
@@ -236,10 +270,14 @@ def replan_messages(req: Requirements, prior: TaskGraph, context: str | None = N
 
 def repair_messages(
     req: Requirements, prior: TaskGraph, failure: Failure, context: str | None = None,
-    baseline: TaskGraph | None = None,
+    baseline: TaskGraph | None = None, advisories: list[str] | None = None,
 ) -> tuple[str, str]:
     """Repair prompt. ``baseline`` (a replan's remaining task graph) is included so the model
-    can restore a task it redefined (``changed:<task>``) from the definition that binds."""
+    can restore a task it redefined (``changed:<task>``) from the definition that binds.
+    ``advisories`` (the warnings the step that produced ``prior`` carried: a ``volume:<id>``
+    over 150 %, an ``estimate:<task>`` gap) are rendered as a bullet list under the FAILURE
+    block, before CONTEXT, with the instruction to resolve them when the answer can; None or
+    an empty list adds nothing, so FAILURE stays the last block of a context-free prompt."""
     system = REPAIR_SYSTEM + _schema_block(TaskGraph)
     user = "REQUIREMENTS:\n" + req.model_dump_json(indent=1, exclude={"source_brief"})
     if baseline is not None:
@@ -250,6 +288,8 @@ def repair_messages(
         "\n\nPREVIOUS TASK GRAPH:\n" + prior.model_dump_json(indent=1)
         + "\n\nFAILURE:\n" + failure.model_dump_json(indent=1)
     )
+    if advisories:
+        user += "\n\n" + ADVISORIES_HEADER + "\n" + "\n".join(f"- {a}" for a in advisories)
     if context:
         user += "\n\nCONTEXT:\n" + context
     return system, user

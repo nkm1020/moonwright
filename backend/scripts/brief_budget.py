@@ -22,8 +22,10 @@ with their dimensions and the fleet with its batteries, it computes what the rat
   the docs is the solver's verdict on a stated graph, not a guess: ``lazy`` (one task per
   phase per structure), ``split`` (the prompt's rule: physical work over 60 m3 / 300 m2 split
   into as many equal tasks as the type has robots), ``fine`` (every physical phase shared
-  that way whatever its size: the split a battery core asks for) and ``serial`` (lazy plus
-  every structure after the previous one, the serial planner's habit).
+  that way whatever its size: the split a battery core asks for), ``serial`` (lazy plus
+  every structure after the previous one, the serial planner's habit) and ``shrunk`` (lazy
+  with every dig in m3 planned as stripping its footprint in m2: the re-scope the live models
+  made to fit a battery, which the validator's ``volume:<structure>`` check now rejects).
 
 Inputs
 ------
@@ -49,7 +51,19 @@ Assumptions (every one printed with the budget, every number an assumption of th
   and ``height^2`` (1:1 slopes, base = 2 x height) when only the height is; its compaction
   area is ``length x base width x lifts``; a sintered crest is ``length x crest_width_m``
   (default 1.5 m). A pad or pit bowl is ``area x depth`` (vertical sides; a sloped wall is
-  not modelled). Fines are ``area x fines_depth_m`` when ``fines_depth_m`` is given.
+  not modelled here). These are the volumes ``moonwright.pipeline.rates.dims_volumes`` gives
+  the validator's ``volume:<structure>`` check, so a canonical graph covers what it measures:
+  where the check reads more than the script (a sloped wall the brief states, judged between
+  its rim and floor readings; a berm judged against the spoil its hauls wait for) the range
+  contains these figures, and a key trench without ``trench_width_m``, which the script prices
+  at the berm's base width, is not judged at all.
+* A layer no deeper than :data:`~moonwright.pipeline.rates.STRIP_DEPTH_M` (0.2 m: a pad's
+  ``fines_depth_m``, or a cut's ``depth_m``) is stripped over its footprint in m2, the rate
+  table's excavator m2 row ("a surface layer up to 0.2 m"), exactly as the volume check
+  credits an m2 task; deeper fines are excavated in m3 (``area x fines_depth_m``).
+* ``min_<dimension>_m`` keys (the smallest size a kind-E brief allows, as the structure stage
+  records them) are passed to the requirements, so the volume check's floor is the brief's;
+  the budget itself prices the full size and notes the floor (``--set`` prices a smaller one).
 * A haul belongs to the receiving structure and its zone (the coverage contract); its volume
   is the fill the structure needs, and it waits for the excavation of ``fill_from`` (default:
   the first other structure that excavates). A phase whose robot type is absent from the
@@ -79,7 +93,7 @@ from pathlib import Path
 from typing import Any
 
 from moonwright.geometry import place_zones
-from moonwright.pipeline.rates import apply_rates, rate_for
+from moonwright.pipeline.rates import STRIP_DEPTH_M, apply_rates, dims_volume, rate_for
 from moonwright.pipeline.schedule import SolveOptions, solve_schedule
 from moonwright.pipeline.validate import validate_graph
 from moonwright.schemas import (
@@ -93,6 +107,7 @@ from moonwright.schemas import (
     TaskGraph,
     Zone,
 )
+from moonwright.text import qty
 
 # ----------------------------------------------------------------------------- constants
 PHASES: tuple[str, ...] = ("survey", "strip", "excavate", "haul", "compact", "sinter", "inspect")
@@ -105,7 +120,7 @@ PHASE_UNIT: dict[str, str] = {
     "sinter": "m2", "inspect": "m2",
 }
 PHYSICAL: frozenset[str] = frozenset({"strip", "excavate", "haul", "compact", "sinter"})
-GRAPH_VARIANTS: tuple[str, ...] = ("lazy", "split", "fine", "serial")
+GRAPH_VARIANTS: tuple[str, ...] = ("lazy", "split", "fine", "serial", "shrunk")
 # the task-graph prompt's split rule: physical work above this is split into as many equal
 # tasks as the type has robots
 SPLIT_THRESHOLD: dict[str, float] = {"m3": 60.0, "m2": 300.0}
@@ -148,7 +163,8 @@ _KIND_WORDS: tuple[tuple[str, str], ...] = (
 )
 _DIM_KEYS = ("diameter_m", "length_m", "width_m", "height_m", "depth_m", "thickness_m",
              "trench_depth_m", "trench_width_m", "fines_depth_m", "crest_width_m", "area_m2",
-             "volume_m3", "fill_m3", "lifts")
+             "volume_m3", "fill_m3", "lifts", "min_diameter_m", "min_length_m", "min_width_m",
+             "min_height_m", "min_depth_m")
 
 
 # ----------------------------------------------------------------------------- brief registry
@@ -224,8 +240,8 @@ BRIEF_STRUCTURES: dict[str, list[dict[str, Any]]] = {
     ],
     "instrument_pad": [
         # "stripped of fines, levelled ... and compacted": the brief asks for grading, not a
-        # dig; the fines are still priced as excavation (area x fines_depth_m), as the
-        # validator's pad rule accepts excavate OR grade
+        # dig, and 15 cm of fines is a surface layer the excavator strips in m2 (the rate
+        # table's m2 row covers up to 0.2 m), which the validator's pad rule accepts
         {"id": "S1", "type": "instrument_pad", "length_m": 10, "width_m": 10,
          "fines_depth_m": 0.15, "operations": ["survey", "grade", "compact"]},
     ],
@@ -245,8 +261,10 @@ BRIEF_STRUCTURES: dict[str, list[dict[str, Any]]] = {
          "operations": ["grade", "compact", "survey"]},
     ],
     "low_battery_pad": [
+        # "any diameter between 12 m and 20 m that fits is acceptable": the floor the
+        # structure stage records as min_diameter_m
         {"id": "S1", "type": "landing_pad", "diameter_m": 20, "depth_m": 0.5,
-         "operations": ["survey", "excavate", "compact"]},
+         "min_diameter_m": 12, "operations": ["survey", "excavate", "compact"]},
         {"id": "S2", "type": "spoil_stockpile", "length_m": 12, "width_m": 8,
          "fill_from": "S1", "operations": ["haul"]},
     ],
@@ -339,6 +357,7 @@ class StructureBudget:
     phases: list[Phase]
     fill_from: list[str]
     notes: list[str] = field(default_factory=list)
+    area_m2: float | None = None      # the footprint (what a ``shrunk`` graph strips)
 
     @property
     def hours(self) -> int:
@@ -467,8 +486,8 @@ def wanted_phases(s: dict[str, Any], kind: str, fleet: set[str]) -> list[str]:
         want.update(OPERATION_PHASES.get(op, ()))
     if "survey" in (s.get("operations") or ()) and kind == "pad":
         want.add("survey")
-    if kind == "pad" and "strip" in want and _num(s, "fines_depth_m") is not None:
-        want.add("excavate")   # a pad's fines are dug, not bladed: priced as excavation below
+    if kind == "pad" and "strip" in want and _deep_fines(s):
+        want.add("excavate")   # fines deeper than the m2 row's surface layer are dug in m3
     for flag in FLAGS:
         if isinstance(s.get(flag), bool):
             (want.add if s[flag] else want.discard)(flag)
@@ -476,6 +495,13 @@ def wanted_phases(s: dict[str, Any], kind: str, fleet: set[str]) -> list[str]:
 
 
 RECEIVING_KINDS: frozenset[str] = frozenset({"berm", "stockpile", "fill"})
+
+
+def _deep_fines(s: dict[str, Any]) -> bool:
+    """Whether the structure's fines are deeper than the surface layer an excavator m2 task
+    strips (:data:`~moonwright.pipeline.rates.STRIP_DEPTH_M`), so they are dug in m3."""
+    fines = _num(s, "fines_depth_m")
+    return fines is not None and fines > STRIP_DEPTH_M
 
 
 def fill_sources(s: dict[str, Any]) -> list[str]:
@@ -519,13 +545,17 @@ def structure_budget(s: dict[str, Any], fleet: set[str], zone: str,
         if phase in ("survey", "inspect"):
             add(phase, area, area_basis)
         elif phase == "strip":
-            if kind == "pad" and _num(s, "fines_depth_m") is not None and area is not None:
-                # fines on a pad are dug, not bladed: counted as excavation below
+            fines = _num(s, "fines_depth_m")
+            if kind == "pad" and fines is not None and area is not None:
+                if _deep_fines(s):
+                    continue   # deeper than a surface layer: dug in m3 below
+                add("strip", area, f"{area_basis} (fines {fmt(fines)} m deep: a surface layer)")
+                excavated += area * fines
                 continue
             add("strip", area, area_basis)
         elif phase == "excavate":
             fines = _num(s, "fines_depth_m")
-            if fines is not None and area is not None:
+            if fines is not None and area is not None and _deep_fines(s):
                 add("excavate", area * fines, f"fines {area_basis} x {fmt(fines)} m")
                 excavated += area * fines
             if kind == "berm":
@@ -542,8 +572,17 @@ def structure_budget(s: dict[str, Any], fleet: set[str], zone: str,
                     notes.append("excavate: a berm needs trench_depth_m to size a key trench")
             else:
                 vol, basis = cut_volume(s, area, area_basis)
+                depth = _num(s, "depth_m")
+                shallow = (vol is not None and area is not None and depth is not None
+                           and _num(s, "volume_m3") is None and depth <= STRIP_DEPTH_M)
                 if vol is None and fines is None:
                     notes.append("excavate: no depth_m / volume_m3 to size the cut (skipped)")
+                elif shallow and any(p.phase == "strip" for p in phases):
+                    notes.append(f"excavate: {fmt(depth)} m is a surface layer, stripped above")
+                elif shallow:
+                    # no deeper than the m2 row's surface layer: stripped over the footprint
+                    add("strip", area, f"{area_basis} ({fmt(depth)} m deep: a surface layer)")
+                    excavated += vol
                 elif vol is not None:
                     add("excavate", vol, basis)
                     excavated += vol
@@ -575,7 +614,8 @@ def structure_budget(s: dict[str, Any], fleet: set[str], zone: str,
         if fill_from:
             notes.append(f"haul waits for the excavation of {fill_from[0]} (first structure "
                          "that excavates; set fill_from to change)")
-    return StructureBudget(str(s["id"]), str(s["type"]), kind, zone, phases, fill_from, notes)
+    return StructureBudget(str(s["id"]), str(s["type"]), kind, zone, phases, fill_from, notes,
+                           area_m2=area)
 
 
 # ----------------------------------------------------------------------------- budget
@@ -807,6 +847,14 @@ def compute_budget(spec: dict[str, Any], source: str = "spec") -> Budget:
     slack = horizon_h / lower - 1 if lower else math.inf
     verdict = _verdict(horizon_h, types, lower, serial_h, slack)
     req = _requirements(spec, specs, robots, horizon_h, zones)
+    for structure, budget in zip(req.structures, structures, strict=True):
+        shape = dims_volume(structure)
+        if shape is not None and shape.ranged:
+            budget.notes.append(
+                f"the brief allows {shape.how}: the validator's volume floor is "
+                f"{qty(shape.floor_m3)} of {qty(shape.m3)} m3 ({shape.floor_how}), 70 % of "
+                "which a plan must cover (95 % to count in scope); this budget prices the full "
+                "size")
     assumptions = [
         ("rate table: duration_h = ceil(quantity / rate), energy_wh = quantity x Wh/unit "
          "(moonwright.pipeline.rates; illustrative lunar-rated figures, not measurements)"),
@@ -893,7 +941,9 @@ def build_graph(budget: Budget, variant: str = "lazy") -> TaskGraph:
     """The canonical graph of a budget: ``lazy`` (one task per phase), ``split`` (physical
     phases above the prompt's threshold split into as many equal parts as the type has
     robots), ``fine`` (every physical phase split that way, whatever its size: the repair a
-    battery core asks for), ``serial`` (lazy, every structure after the previous one)."""
+    battery core asks for), ``serial`` (lazy, every structure after the previous one),
+    ``shrunk`` (lazy, every dig in m3 but a key trench planned as stripping the structure's
+    footprint in m2: the live models' re-scope, a ``volume:<structure>`` conflict now)."""
     robots_of = {t: b.robots for t, b in budget.types.items()}
     tasks: list[Task] = []
     last_of: dict[str, list[str]] = {}            # structure -> ids of its last phase
@@ -905,6 +955,11 @@ def build_graph(budget: Budget, variant: str = "lazy") -> TaskGraph:
         label = f"{s.id} {s.type.replace('_', ' ')}"
         for p in s.phases:
             n += 1
+            if (variant == "shrunk" and p.phase == "excavate" and p.unit == "m3"
+                    and s.area_m2 and not p.basis.startswith("key trench")):
+                p = Phase("strip", p.robot_type, "m2", round(s.area_m2, 1),
+                          f"footprint {fmt(s.area_m2)} m2 in place of the {fmt(p.quantity)} m3 dig",
+                          1, 0.0)
             parts = 1
             threshold = 0.0 if variant == "fine" else SPLIT_THRESHOLD.get(p.unit, math.inf)
             if variant in ("split", "fine") and p.phase in PHYSICAL and p.quantity > threshold:

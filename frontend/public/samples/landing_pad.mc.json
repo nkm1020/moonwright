@@ -24,11 +24,12 @@
   "lost_only:printer": 16,
   "replan_infeasible:energy": 6,
   "lost_only:printer,surveyor": 3,
-  "replan_infeasible:energy,energy_task": 3,
   "lost_only:compactor,printer": 2,
   "lost_only:compactor,surveyor": 2,
   "lost_only:excavator,printer": 2,
-  "lost_only:hauler": 2
+  "lost_only:hauler": 2,
+  "replan_infeasible:energy,energy_task": 2,
+  "replan_infeasible:energy_task": 1
  },
  "single_points_of_failure": [
   "compactor",
@@ -2662,7 +2663,7 @@
    "seed": 176,
    "completed": false,
    "within_horizon": false,
-   "outcome": "replan_infeasible:energy,energy_task",
+   "outcome": "replan_infeasible:energy_task",
    "finished_at_h": null,
    "events": 2,
    "replans": 2,
@@ -3034,5 +3035,5 @@
    ]
   }
  ],
- "elapsed_s": 1.97
+ "elapsed_s": 2.142
 }

@@ -14,7 +14,8 @@ from types import ModuleType
 
 import pytest
 
-from moonwright.pipeline.rates import RATED_TYPES, apply_rates
+from moonwright.pipeline.rates import RATED_TYPES, scope_gaps, volume_advisories, volume_shares
+from moonwright.pipeline.validate import validate_graph
 from moonwright.schemas import Requirements
 
 BACKEND = Path(__file__).resolve().parents[1]
@@ -115,18 +116,33 @@ def test_berm_volume_from_the_triangular_section_and_the_1_to_1_default(bb: Modu
     assert phases(bb, dict(keyed, trench_width_m=1.2, trench_depth_m=0.8))["excavate"].quantity == 57.6
 
 
-def test_apron_area_and_fines_are_priced_as_strip_and_excavation(bb: ModuleType) -> None:
+def test_apron_area_is_stripped_and_fines_by_their_depth(bb: ModuleType) -> None:
+    """The rate table's excavator m2 row is a surface layer up to 0.2 m (STRIP_DEPTH_M), the
+    same rule the validator's volume check credits: 15 cm of fines is stripped over the
+    footprint in m2, 30 cm is dug in m3, and so is a cut whose own depth_m is that shallow."""
     apron = {"id": "S3", "type": "approach_apron", "length_m": 30, "width_m": 8,
              "operations": ["grade"]}
     p = phases(bb, apron)
     assert list(p) == ["strip"]
     assert (p["strip"].quantity, p["strip"].unit, p["strip"].duration_h, p["strip"].energy_wh) == (
         240.0, "m2", 10, 1152.0)                                                    # 25 m2/h, 4.8 Wh/m2
+    fleet = {"excavator", "compactor", "surveyor"}
     pad = {"id": "S1", "type": "instrument_pad", "length_m": 10, "width_m": 10,
-           "fines_depth_m": 0.15, "operations": ["survey", "excavate", "compact"]}
-    q = phases(bb, pad, fleet={"excavator", "compactor", "surveyor"})
-    assert q["excavate"].quantity == 15.0 and q["excavate"].basis == "fines 10 m x 10 m x 0.15 m"
-    assert "haul" not in q and "sinter" not in q       # no hauler, no printer in that fleet
+           "fines_depth_m": 0.15, "operations": ["survey", "grade", "compact"]}
+    q = phases(bb, pad, fleet=fleet)
+    assert (q["strip"].quantity, q["strip"].unit, q["strip"].duration_h, q["strip"].energy_wh) == (
+        100.0, "m2", 4, 480.0)
+    assert q["strip"].basis == "10 m x 10 m (fines 0.15 m deep: a surface layer)"
+    assert "excavate" not in q and "haul" not in q and "sinter" not in q
+    deep = phases(bb, dict(pad, fines_depth_m=0.3), fleet=fleet)
+    assert deep["excavate"].quantity == 30.0 and deep["excavate"].basis == "fines 10 m x 10 m x 0.3 m"
+    assert "strip" not in deep
+    at_limit = phases(bb, dict(pad, fines_depth_m=0.2), fleet=fleet)
+    assert at_limit["strip"].quantity == 100.0 and "excavate" not in at_limit
+    shallow = {"id": "S1", "type": "borrow_pit", "length_m": 10, "width_m": 6, "depth_m": 0.15,
+               "operations": ["excavate"]}
+    r = phases(bb, shallow, fleet=fleet)
+    assert list(r) == ["strip"] and r["strip"].quantity == 60.0
 
 
 def test_phases_follow_operations_flags_and_the_fleet(bb: ModuleType) -> None:
@@ -278,6 +294,19 @@ def test_parse_brief_formats(bb: ModuleType) -> None:
         bb.parse_brief("**Fleet.** EX1 (excavator, 5000 Wh).")
 
 
+def test_the_kind_e_floor_reaches_the_requirements_and_the_notes(bb: ModuleType) -> None:
+    """low_battery_pad allows "any diameter between 12 m and 20 m": the registry records the
+    floor as the structure stage does (min_diameter_m), the requirements carry it to the
+    volume check, and the budget, which prices the full size, says where the floor is."""
+    budget = bb.compute_budget(bb.spec_from_brief(EVAL_DIR / "low_battery_pad.md"), "x")
+    pad = budget.requirements.structures[0]
+    assert pad.dims()["min_diameter_m"] == 12
+    assert ("S1: the brief allows bowl 12-20 m across, 0.5 m deep: the validator's volume floor "
+            "is 56.5 of 157.1 m3 (bowl 12 m across, 0.5 m deep), 70 % of which a plan must "
+            "cover (95 % to count in scope); this budget prices the full size") in budget.assumptions
+    assert budget.types["excavator"].need_wh == 2513.3          # the full 20 m bowl
+
+
 def test_overrides_edit_structures_robots_and_the_horizon(bb: ModuleType) -> None:
     s = bb.spec_from_brief(EVAL_DIR / "low_battery_pad.md")
     bb.apply_overrides(s, ["S1.diameter_m=16", "EX1.battery_wh=2000", "horizon_h=72",
@@ -365,15 +394,19 @@ def test_three_pads_in_order_fails_only_when_the_pads_are_chained(bb: ModuleType
 
 
 def test_relaxation_briefs_name_the_shortfall(bb: ModuleType) -> None:
+    # the 360 m3 borrow dig is one task larger than the single excavator's battery, which is
+    # also the whole pool's shortfall: one cause, one verdict (energy_task), whose hint says
+    # that splitting cannot fit it
     berm = outcome(bb, "small_fleet_long_berm", "lazy")
-    assert berm["stage"] == "validate" and "energy:excavator" in berm["conflicts"]
+    assert berm["stage"] == "validate" and berm["conflicts"] == ["energy_task:T4"]
     assert "5,760 Wh" in berm["hint"] and "5,000 Wh" in berm["hint"]
+    assert "The fleet's 1 excavator carries 5,000 Wh in all" in berm["hint"]
     pad = outcome(bb, "front_loaded_excavation", "split")
     assert pad["stage"] == "schedule" and set(pad["conflicts"]) == {"horizon", "zone:Z1"}
     assert "60 h horizon" in pad["hint"] and "Zone Z1 admits one robot at a time" in pad["hint"]
     # E: infeasible as written, feasible at the diameter the brief allows
     full = outcome(bb, "low_battery_pad", "lazy")
-    assert full["stage"] == "validate" and "energy:excavator" in full["conflicts"]
+    assert full["stage"] == "validate" and full["conflicts"] == ["energy_task:T2"]
     small = outcome(bb, "low_battery_pad", "lazy", **{"S1.diameter_m": "16"})
     assert small["ok"] and small["makespan_h"] <= 168
 
@@ -391,23 +424,51 @@ def test_kinds_json_names_every_brief_with_the_letter_of_its_designed_kind() -> 
     assert set(kinds.values()) == set("ABCDE")
 
 
-def test_instrument_pad_is_graded_not_dug_and_its_fines_are_still_priced(bb: ModuleType) -> None:
-    """The brief says "stripped of fines, levelled ... and compacted": the registry lists
-    grade, the fines stay priced as excavation (what the canonical "Strip fines" m3 task is),
-    and both that task and a prompt-following m2 strip pass the pad rule."""
+def test_instrument_pad_is_stripped_in_square_metres_and_passes_the_volume_check(
+        bb: ModuleType) -> None:
+    """The brief says "stripped of fines, levelled ... and compacted" over 15 cm of fines: the
+    registry lists grade and the fines are a surface layer stripped in m2 (the prompt's own
+    example). The live false positive of phase 3e: with the depth the structure stage records
+    (depth_m 0.15), the same strip covers 15 of 15 m3 and passes the volume check; the old
+    rule read it as 0 %."""
     (s,) = bb.BRIEF_STRUCTURES["instrument_pad"]
     assert s["operations"] == ["survey", "grade", "compact"]
     fleet = {"excavator", "compactor", "surveyor"}
-    assert bb.wanted_phases(s, "pad", fleet) == ["survey", "strip", "excavate", "compact", "inspect"]
+    assert bb.wanted_phases(s, "pad", fleet) == ["survey", "strip", "compact", "inspect"]
     p = phases(bb, s, fleet=fleet)
-    assert p["excavate"].quantity == 15.0 and p["excavate"].basis == "fines 10 m x 10 m x 0.15 m"
-    assert "strip" not in p
+    assert (p["strip"].quantity, p["strip"].unit) == (100.0, "m2") and "excavate" not in p
     budget = bb.compute_budget(bb.spec_from_brief(EVAL_DIR / "instrument_pad.md"), "x")
     g = bb.build_graph(budget, "lazy")
     assert [t.name[:5] for t in g.tasks] == ["Surve", "Strip", "Compa", "Inspe"]
     assert bb.evaluate_graph(budget.requirements, g, 5.0)["ok"]
-    in_m2 = g.model_copy(update={"tasks": [
-        t.model_copy(update={"quantity": 100.0, "unit": "m2"}) if t.name.startswith("Strip") else t
-        for t in g.tasks]})
-    grounded, _ = apply_rates(in_m2)
-    assert bb.evaluate_graph(budget.requirements, grounded, 5.0)["ok"]
+    live = budget.requirements.model_copy(update={"structures": [
+        st.model_copy(update={"depth_m": 0.15}) for st in budget.requirements.structures]})
+    assert validate_graph(live, g, coverage=True) is None
+    assert volume_shares(live, g) == {"S1": pytest.approx(1.0)}
+
+
+def test_canonical_graphs_cover_the_volumes_the_validator_measures(bb: ModuleType) -> None:
+    """Every brief's lazy and split graphs plan the volumes ``rates.dims_volumes`` measures (no
+    ``volume:`` conflict) and are in scope for the eval (no ``scope_gaps``: every judged
+    volume and compaction / sintering area at 95 % or more, with the brief's own text as a
+    live run has it, so a sloped pit wall is read too), while the ``shrunk`` graph, the live
+    re-scope that plans a dig as stripping in m2, is a volume conflict wherever a dig is
+    deeper than the 0.2 m layer it strips: the kind-D borrow strip is rejected before any
+    energy verdict."""
+    for path in sorted(EVAL_DIR.glob("*.md")):
+        budget = bb.compute_budget(bb.spec_from_brief(path), path.stem)
+        live = budget.requirements.model_copy(update={"source_brief": path.read_text()})
+        for variant in ("lazy", "split"):
+            graph = bb.build_graph(budget, variant)
+            failure = validate_graph(budget.requirements, graph, coverage=True)
+            volume = [c for c in (failure.conflicts if failure else []) if c.startswith("volume:")]
+            assert volume == [], (path.stem, variant, volume)
+            assert scope_gaps(live, graph) == [], (path.stem, variant)
+            assert volume_advisories(live, graph) == [], (path.stem, variant)
+    berm = outcome(bb, "small_fleet_long_berm", "shrunk")
+    assert berm["stage"] == "validate" and berm["conflicts"] == ["volume:S2"]
+    assert "plan the remaining 240 m3 of S2 as excavator tasks in m3" in berm["hint"]
+    # the E brief's 12 m floor is no longer covered by stripping the whole 20 m pad in m2: the
+    # credit stops at the floor's own footprint and the 0.3 m below it needs a dig
+    pad = outcome(bb, "low_battery_pad", "shrunk")
+    assert pad["conflicts"] == ["scope:S1", "volume:S1"]

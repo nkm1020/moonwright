@@ -5,15 +5,20 @@ A task's ``structure`` tag is free text the model fills with an id, a type, a la
 case, so every reader of it must resolve it the same way, or a graph the validator accepts
 escapes the volume check (seen in review: a pad tagged ``Landing pad S1`` or ``s1`` passed
 coverage and got no ``volume:S1`` advisory). This module is import-free of both readers, so
-``rates`` and ``validate`` can share it without a cycle.
+``rates`` and ``validate`` can share it without a cycle. The same goes for reading the brief:
+:func:`name_score` says how well a line names a structure (the coverage hints quote the
+structure's own entry with it) and :func:`entry_line` picks that entry (the volume check reads
+a pit's sloped walls from it).
 """
 
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 
 from moonwright.schemas import Structure, Task, TaskGraph
+
+WORDS = re.compile(r"[a-z0-9]+")   # the words of a lower-cased line or structure type
 
 
 def tag_names(tag: str, structure: Structure) -> bool:
@@ -61,3 +66,32 @@ def serving_tasks(structure: Structure, graph: TaskGraph,
     seen = {t.id for t in structure_tasks(structure, graph, structures)}
     seen |= {t.id for t in hauls_into(structure, graph)}
     return [t for t in graph.tasks if t.id in seen]
+
+
+def name_score(low: str, words: Collection[str], structure: Structure) -> tuple[int, int] | None:
+    """How well a brief line (lower-cased, with its word set) names ``structure``: each word
+    of its type counts once and the type's head word ("berm" of "blast_berm") twice, the
+    earlier the first mention the better; None when no word of the type occurs."""
+    type_words = list(dict.fromkeys(WORDS.findall(structure.type.lower())))
+    hits = [w for w in type_words if w in words]
+    if not hits:
+        return None
+    score = sum(2 if w == type_words[-1] else 1 for w in hits)
+    starts = [m.start() for w in hits if (m := re.search(rf"\b{re.escape(w)}\b", low)) is not None]
+    return score, -(min(starts) if starts else len(low))
+
+
+def entry_line(text: str | None, structure: Structure) -> str | None:
+    """The line of ``text`` (a brief) that names ``structure`` best by :func:`name_score`: its
+    own entry ("1. Storage pit: 8 m diameter, 2 m deep, ..."), which names it with more of
+    its type's words, or as many words earlier, than a site paragraph that mentions it in
+    passing. None without a brief or a line that names it."""
+    if not text:
+        return None
+    best: tuple[tuple[int, int], str] | None = None
+    for line in text.splitlines():
+        low = line.lower()
+        key = name_score(low, set(WORDS.findall(low)), structure)
+        if key is not None and (best is None or key > best[0]):
+            best = (key, line)
+    return best[1] if best else None
