@@ -1,0 +1,14 @@
+{
+  "name": "moonwright-video",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Renders the Moonwright demo video from storyboard.json: slides + UI capture (CDP screencast), macOS say narration, burned captions, ffmpeg assembly.",
+  "type": "module",
+  "scripts": {
+    "render": "./render.sh"
+  },
+  "devDependencies": {
+    "playwright": "1.62.1"
+  },
+  "packageManager": "pnpm@11.5.0"
+}

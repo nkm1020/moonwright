@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>caption</title>
+<link rel="stylesheet" href="/__video/fonts.css">
+<style>
+  /* Burned-in caption: bottom centre, inside the 90 % safe area (box bottom 50 CSS px = 62 px of
+     1080 above the frame edge), white on a translucent graphite box sized to the text. A scene
+     can move it to the bottom left or right (storyboard captionAlign) where the app is empty. */
+  html, body { margin: 0; width: 1536px; height: 864px; overflow: hidden; background: transparent; }
+  #cap { position: absolute; left: 50%; bottom: 50px; transform: translateX(-50%); display: none;
+    padding: 8px 18px 9px; border-radius: 10px; background: rgb(9 12 16 / 0.76);
+    box-shadow: 0 0 0 1px rgb(255 255 255 / 0.07), 0 8px 28px rgb(0 0 0 / 0.35);
+    color: #f4f7fa; font-family: Geist, "Helvetica Neue", Helvetica, Arial, sans-serif; font-weight: 500;
+    font-size: 25px; line-height: 1.38; letter-spacing: 0.002em; text-align: center; white-space: nowrap;
+    -webkit-font-smoothing: antialiased; }
+  #cap.on { display: block; }
+  #cap.left { left: 77px; transform: none; text-align: left; }
+  #cap.right { left: auto; right: 77px; transform: none; text-align: right; }
+</style>
+</head>
+<body>
+<div id="cap"></div>
+<script>
+  window.setCaption = (lines, align = "center") => {
+    const el = document.getElementById("cap");
+    if (!lines || !lines.length) { el.className = ""; el.textContent = ""; return; }
+    el.replaceChildren(...lines.flatMap((l, i) => (i ? [document.createElement("br"), l] : [l])));
+    el.className = align === "center" ? "on" : `on ${align}`;
+  };
+</script>
+</body>
+</html>

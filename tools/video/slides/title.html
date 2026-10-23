@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Moonwright · title</title>
+<link rel="stylesheet" href="/__video/fonts.css">
+<link rel="stylesheet" href="slides.css">
+<style>
+  .block { position: absolute; left: 128px; top: 214px; width: 760px; }
+  h1 { margin: 30px 0 0; font-size: 112px; line-height: 1; font-weight: 600; letter-spacing: -0.04em; }
+  .tag { margin: 30px 0 0; font-size: 40px; line-height: 1.2; font-weight: 500; letter-spacing: -0.02em; }
+  .tag .t-propose { color: var(--muted); }
+  .tag span { display: inline-block; }
+  .tag .t-prove { color: var(--fg); }
+  .stack { margin: 34px 0 0; font: 400 17px/1.5 var(--mono); color: var(--dim); }
+  .stack b { font-weight: 500; color: rgb(230 237 243 / 0.82); }
+  .site { position: absolute; left: 912px; top: 150px; width: 520px; height: 520px; }
+</style>
+</head>
+<body>
+<div class="stage">
+  <svg class="site rise" style="--d: .35s" viewBox="0 0 520 520" aria-hidden="true">
+    <defs>
+      <pattern id="minor" width="13" height="13" patternUnits="userSpaceOnUse"><path class="minor" d="M13 0H0V13" fill="none"/></pattern>
+      <pattern id="major" width="130" height="130" patternUnits="userSpaceOnUse"><path class="major" d="M130 0H0V130" fill="none"/></pattern>
+      <radialGradient id="fade" cx="50%" cy="50%" r="60%"><stop offset="55%" stop-color="#fff"/><stop offset="100%" stop-color="#000"/></radialGradient>
+      <mask id="vignette"><rect width="520" height="520" fill="url(#fade)"/></mask>
+    </defs>
+    <g mask="url(#vignette)">
+      <rect width="520" height="520" fill="url(#minor)"/>
+      <rect width="520" height="520" fill="url(#major)"/>
+      <rect class="frame" x="0.5" y="0.5" width="519" height="519"/>
+    </g>
+    <path class="path" d="M260 404 L260 352"/>
+    <path class="path" d="M212 300 Q 160 300 140 262"/>
+    <circle class="zone" cx="104" cy="234" r="52" fill="rgb(143 174 148 / .07)" stroke="rgb(143 174 148 / .5)"/>
+    <circle class="zone" cx="260" cy="286" r="65" fill="rgb(141 168 195 / .08)" stroke="rgb(141 168 195 / .55)"/>
+    <circle class="zone" cx="416" cy="234" r="39" fill="rgb(181 162 130 / .06)" stroke="rgb(181 162 130 / .45)"/>
+    <circle class="zone" cx="364" cy="390" r="39" fill="rgb(187 153 175 / .06)" stroke="rgb(187 153 175 / .45)"/>
+    <text class="zlabel" x="246" y="210">Z1</text><text class="zsub" x="270" y="210">S1 landing pad</text>
+    <text class="zlabel" x="90" y="170">Z2</text><text class="zsub" x="114" y="170">S2 berm</text>
+    <text class="zlabel" x="404" y="182">Z3</text>
+    <text class="zlabel" x="352" y="338">Z4</text>
+    <rect class="depot" x="253" y="409" width="14" height="14" transform="rotate(45 260 416)"/>
+    <text class="zsub" x="238" y="448">depot</text>
+    <g opacity=".85">
+      <rect x="244" y="270" width="12" height="12" rx="1.5" fill="#fb923c"/>
+      <rect x="98" y="228" width="12" height="12" rx="1.5" fill="#fb923c"/>
+      <path d="M286 296 l7 7 l-7 7 l-7 -7 z" fill="#a78bfa"/>
+      <path d="M258 304 l6 3.5 v7 l-6 3.5 l-6 -3.5 v-7 z" fill="#f472b6"/>
+      <circle cx="364" cy="390" r="6" fill="#34d399"/>
+      <g class="drift" style="--t: 7s; --dx: -46px; --dy: -30px"><path d="M196 318 l7 12 h-14 z" fill="#38bdf8"/></g>
+    </g>
+  </svg>
+  <div class="block">
+    <div class="eyebrow rise"><span class="rule"></span>Lunar construction · multi-robot planning</div>
+    <h1 class="rise" style="--d: .12s">Moonwright</h1>
+    <p class="tag"><span class="cue t-propose">Nemotron proposes the plan.</span><br><span class="cue t-prove">A solver proves it.</span></p>
+    <p class="stack rise" style="--d: .55s"><b>Nemotron</b> on <b>Nebius Token Factory</b> + <b>OR-Tools CP-SAT</b></p>
+  </div>
+</div>
+<script src="preview.js"></script>
+</body>
+</html>

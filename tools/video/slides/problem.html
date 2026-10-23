@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Moonwright · problem</title>
+<link rel="stylesheet" href="/__video/fonts.css">
+<link rel="stylesheet" href="slides.css">
+<style>
+  .block { position: absolute; left: 128px; top: 112px; width: 1180px; }
+  h2 { margin: 28px 0 0; max-width: 1060px; font-size: 52px; line-height: 1.12; font-weight: 600; letter-spacing: -0.03em; }
+  .sub { margin: 30px 0 0; font-size: 25px; line-height: 1.4; color: var(--muted); }
+  .rows { list-style: none; margin: 34px 0 0; padding: 0; display: grid; gap: 14px; }
+  .rows li { display: grid; grid-template-columns: 236px 1fr; align-items: center; gap: 28px;
+    padding: 18px 26px; border: 1px solid var(--line); border-radius: 14px; background: rgb(18 24 33 / 0.72); }
+  .chip { justify-self: start; display: inline-flex; align-items: baseline; gap: 10px; padding: 7px 12px; border-radius: 8px;
+    border: 1px solid rgb(239 68 68 / 0.38); background: rgb(239 68 68 / 0.09); color: #fca5a5; font: 500 17px/1 var(--mono); }
+  .chip i { font-style: normal; font-family: var(--sans); font-size: 14px; color: rgb(252 165 165 / 0.72); }
+  .rows span.what { font-size: 30px; line-height: 1.2; font-weight: 500; letter-spacing: -0.015em; }
+</style>
+</head>
+<body>
+<div class="stage">
+  <div class="block">
+    <div class="eyebrow rise"><span class="rule"></span>The problem</div>
+    <h2 class="rise" style="--d: .1s">A robot crew on the Moon can’t wait for Earth to catch a bad plan.</h2>
+    <p class="sub cue p-sub">Language models write plans that look right but quietly break what matters:</p>
+    <ul class="rows">
+      <li class="cue p-row-1"><span class="chip">energy:EX1 <i>battery</i></span><span class="what">A battery that runs dry mid-dig</span></li>
+      <li class="cue p-row-2"><span class="chip">zone:Z1 <i>safety</i></span><span class="what">Two robots in one blast zone</span></li>
+      <li class="cue p-row-3"><span class="chip">horizon <i>deadline</i></span><span class="what">A deadline no schedule can meet</span></li>
+    </ul>
+  </div>
+</div>
+<script src="preview.js"></script>
+</body>
+</html>
