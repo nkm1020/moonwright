@@ -2,14 +2,17 @@
 phase 3j (an operation the fleet cannot perform is dropped at the structure stage, a dug structure's haul is met by the hauls
 its digs feed, brief quotes come only from a structure's own entry, a smaller size the brief allows and a figure it gives only
 as a distance are read from the brief) and phase 3k (exact, order-dependent travel in CP-SAT; the validator and the hints use
-sound lower bounds). Same matrix as runs 1-3 (22 briefs x Ultra / Super x loop on x 3), 5 workers. Run 3, rescored with the
-final checks -> run 4, Ultra: verified 89 % -> 86 %, verified in scope 77 % -> 82 %, in scope with no supply or double-count
-conflict 74 % -> 82 %, first try 50 % -> 55 %. Super: verified 85 % -> 82 %, in scope 64 % -> 77 %. Kind E (low_battery_pad,
+sound lower bounds). Same matrix as runs 1-3 (22 briefs x Ultra / Super x loop on x 3), 5 workers. As the run scored itself, Ultra
+was 86 % verified and 82 % verified in scope. Phase 3l (an operation a structure's own entry states is restored when the
+structuring omitted it), merged after the run, takes one more plan out of scope: cable_trench ultra #2 never compacts the
+"compacted 10 cm bedding layer" its entry states. Run 3 -> run 4, both rescored with the final checks (eval.rescored.csv,
+commit a8f9419), Ultra: verified 89 % -> 86 %, verified in scope 77 % -> 80 %, in scope with no supply or double-count
+conflict 74 % -> 80 %, first try 50 % -> 55 %. Super: verified 85 % -> 82 %, in scope 61 % -> 76 %. Kind E (low_battery_pad,
 a smaller pad allowed): Ultra 2 of 3 runs in scope under the final checks in run 3 (0 of 3 as scored then) -> 3 of 3. Kind D
 (designed impossible): 7 of 9 Ultra runs ended without a plan, 5 of them with CP-SAT-proven advice; the other 2 verified only
 by trimming 10-40 % of the work, so neither is in scope (Super: 8 of 9 without a plan, 4 with advice). 326 requests, 0 errors,
 5 answers cut at the token limit (all Ultra repair calls, each asked again), $7.85. eval.rescored.csv adds the rescore
-columns (backend/scripts/rescore_eval.py, same code: no row changes). Every run's PlanResult is under plans/ (plan_path in
+columns (backend/scripts/rescore_eval.py at a8f9419: two rows leave scope, Ultra and Super cable_trench #2). Every run's PlanResult is under plans/ (plan_path in
 eval.csv is relative to this folder); calls.md is the Token Factory call log summary; replan/ is the replanning measurement
 below. -->
 

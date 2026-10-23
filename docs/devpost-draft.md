@@ -89,9 +89,9 @@ x 3 repeats x two model arms planning from the same requirements, 66 runs per ar
 plan in the repository (`docs/eval/`).
 
 - **Final pipeline (run 4).** Nemotron 3 Ultra ended with a CP-SAT-verified plan in 86 % of runs
-  (Wilson 95 % CI 76-93 %) and with the full work in scope in 82 % (71-89 %). 55 % verified on
+  (Wilson 95 % CI 76-93 %) and with the full work in scope in 80 % (69-88 %). 55 % verified on
   the first graph, so the repair loop, fed the solver's minimal core, added 31 points at 0.85
-  repair rounds per run. Nemotron 3 Super: 82 % verified, 77 % in scope, 45 % first try, at about
+  repair rounds per run. Nemotron 3 Super: 82 % verified, 76 % in scope, 45 % first try, at about
   a fifth of the cost ($0.02 against $0.10 per plan, mean; Ultra's median $0.05). Median wall
   time per plan with Ultra: 58 s. 326 requests, 0 errors.
 - **Honest failure.** On the three designed-impossible briefs, 7 of 9 Ultra runs ended without a
@@ -102,7 +102,7 @@ plan in the repository (`docs/eval/`).
   material was dug (17 of 56 verified Ultra plans; now a supply-order conflict, 0 of 57 in run
   4), run 3 slips of the structuring model (a smaller pad the brief allows read as the full one:
   that brief went from 0 of 3 to 3 of 3 in scope). Scored with the final checks, Ultra's
-  in-scope rate went 70 % -> 77 % -> 82 % over runs 2-4.
+  in-scope rate went 68 % -> 77 % -> 80 % over runs 2-4.
 - **Nemotron-written schedules.** Given the 21 verified task graphs of run 3, Nemotron 3 Ultra
   wrote schedules that all passed the same independent checker (0 violations in 21). CP-SAT with
   exact travel matched or beat every one and proved it optimal: shorter on 5, by up to 36 h.

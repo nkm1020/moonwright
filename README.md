@@ -106,8 +106,8 @@ final checks, so the columns are judged alike.
 | Nemotron 3 Ultra, 66 live runs each | Run 2 | Run 3 | Run 4 (final pipeline) |
 | --- | --- | --- | --- |
 | Ended with a CP-SAT-verified plan | 85 % | 89 % | 86 % (76-93 %) |
-| ... with the full work in scope | 70 % | 77 % | 82 % (71-89 %) |
-| ... and no haul before its material is dug | 50 % | 74 % | 82 % |
+| ... with the full work in scope | 68 % | 77 % | 80 % (69-88 %) |
+| ... and no haul before its material is dug | 48 % | 74 % | 80 % |
 | Verified on the first graph (no repair) | 62 % | 50 % | 55 % |
 | Reasoning answers cut at the token limit | 4 of 121 | 5 of 125 | 5 of 127 |
 | Cost per plan (median / mean) | $0.05 / $0.09 | $0.07 / $0.10 | $0.05 / $0.10 |
@@ -122,8 +122,9 @@ final checks, so the columns are judged alike.
   Ultra plans hauled material before it was dug, because CP-SAT schedules only the edges it is
   given; the supply-order check made that a conflict, and none of run 4's 57 verified plans does
   it. Run 3 exposed the structuring model's slips (a smaller pad the brief allows read as the full
-  one, a distance recorded as a diameter, operations the fleet cannot perform); the structure stage
-  now corrects them from the brief, and the re-scope brief went from 0 of 3 to 3 of 3 in scope.
+  one, a distance recorded as a diameter, operations the fleet cannot perform, a compaction the
+  brief asks for left out); the structure stage now corrects them from the brief, and the re-scope
+  brief went from 0 of 3 to 3 of 3 in scope.
 * **Optimal means optimal.** Given a verified task graph, Nemotron 3 Ultra writes a valid schedule
   itself (21 of 21 passed the same independent checker), but CP-SAT with exact travel matches or
   beats every one and proves it: shorter on 5, by up to 36 h. When no schedule exists, only the

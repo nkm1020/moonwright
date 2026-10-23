@@ -4,13 +4,15 @@ entry, and a berm without a stated base is judged on its least base. Same matrix
 loop on x 3), 5 workers. Run 2 -> run 3, Ultra: verified 85 % -> 89 %, verified in scope 74 % -> 76 %, first try 62 % -> 50 %
 (the supply check now rejects first graphs that haul before the dig; the repair loop recovers them, 50 % -> 89 %). Super: 77 %
 -> 85 % verified, 58 % -> 67 % in scope. 325 requests, 0 errors, 7 answers cut at the token limit, $8.23.
-eval.rescored.csv rescores every row with the checks of main at commit df5d79d (backend/scripts/rescore_eval.py): the lift
-fix ("a compacted 10 cm bedding layer" is one lift), square footprints Lightning recorded as diameters (habitat_foundation,
-instrument_pad, habitat_berm_tight_horizon dug 113 of 144 m3) and the double-count conflict. Ultra: verified in scope 74 %,
-71 % with no supply or double-count conflict (run 2 under the same checks: 48 %); 0 of 59 verified Ultra plans haul before
-their material is dug (run 2: 17 of 56). Super: 61 % and 59 %. Known after the run: Lightning misses a minimum the brief states
-outside the structure's entry (low_battery_pad's "any diameter between 12 m and 20 m"), so its re-scoped plans read out of
-scope. Every run's PlanResult is under plans/ (plan_path in eval.csv is relative to this folder); calls.md is the Token
+eval.rescored.csv rescores every row with the checks of the final pipeline (commit a8f9419,
+backend/scripts/rescore_eval.py): the lift fix ("a compacted 10 cm bedding layer" is one lift), square footprints Lightning
+recorded as diameters (habitat_foundation, instrument_pad, habitat_berm_tight_horizon dug 113 of 144 m3), the double-count
+conflict, the sizes the brief states (phase 3j: low_battery_pad's "any diameter between 12 m and 20 m", which Lightning had
+missed, so its re-scoped plans now read in scope) and the operations a structure's own entry states (phase 3l). Ultra:
+verified in scope 77 %, 74 % with no supply or double-count conflict (run 2 under the same checks: 68 % and 48 %); 0 of 59
+verified Ultra plans haul before their material is dug (run 2: 17 of 56). Super: 61 % and 59 %; its front_loaded_excavation
+#1 "verified" the designed-impossible brief only because Lightning dropped the pad's compaction, and phase 3l counts it out
+of scope. Every run's PlanResult is under plans/ (plan_path in eval.csv is relative to this folder); calls.md is the Token
 Factory call log summary. -->
 
 # Moonwright eval: 22 brief(s) x 2 condition(s) x 3 repeat(s)
