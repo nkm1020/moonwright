@@ -43,12 +43,12 @@ from moonwright.pipeline.rates import (
     IN_SCOPE_SHARE,
     apply_rates,
     area_shares,
-    scope_gaps,
     volume_advisories,
     volume_shares,
 )
 from moonwright.pipeline.relax import format_suggestions
 from moonwright.pipeline.schedule import check_schedule
+from moonwright.pipeline.validate import in_scope_gaps
 from moonwright.schemas import (
     Event,
     LoopStep,
@@ -198,10 +198,13 @@ def format_gantt(schedule: Schedule, req: Requirements) -> str:
 
 def plan_summary(result: PlanResult, out_path: Path) -> str:
     """The closing line(s): a verified plan names its makespan, and when the final graph is
-    not in scope (:func:`~moonwright.pipeline.rates.scope_gaps`: a structure's volume or
-    area of work under 95 % of what its dimensions give) or plans clearly more m3 than they
-    imply (the ``volume:<structure>`` excess advisories), those lines follow it, so
-    "verified" is never read as "built to the brief's size"."""
+    not in scope (:func:`~moonwright.pipeline.validate.in_scope_gaps`: a structure's volume or
+    area of work under 95 % of what its dimensions give, or an operation its entry in the
+    brief states that the structuring omitted and no task performs) or plans clearly more m3
+    than they imply (the ``volume:<structure>`` excess advisories), those lines follow it, so
+    "verified" is never read as "built to the brief's size". The header names the dimensions
+    for a volume or an area, the brief when a structure's entry states an operation no task
+    performs ('scope:<structure>')."""
     if result.success and result.schedule is not None:
         line = (
             f"verified plan: makespan {result.schedule.makespan_h}h of "
@@ -209,12 +212,15 @@ def plan_summary(result: PlanResult, out_path: Path) -> str:
         )
         scope: list[str] = []
         if result.task_graph is not None:
-            scope = scope_gaps(result.requirements, result.task_graph)
+            scope = in_scope_gaps(result.requirements, result.task_graph)
             scope += [a for a in volume_advisories(result.requirements, result.task_graph)
                       if a not in scope]
         if scope:
-            line += ("\nverified against the planning model; scope differs from the "
-                     "dimensions:\n" + "\n".join(f"  {a}" for a in scope))
+            # a restored operation left undone (a 'scope:' line, phase 3l) is the brief's, not
+            # the dimensions'; a volume or area shortfall or an excess keeps the old header
+            what = ("brief" if any(a.startswith("scope:") for a in scope) else "dimensions")
+            line += (f"\nverified against the planning model; scope differs from the {what}:\n"
+                     + "\n".join(f"  {a}" for a in scope))
         return line
     failure = result.failure
     why = "unknown failure"
@@ -452,9 +458,13 @@ class EvalRow(BaseModel):
     (:func:`~moonwright.pipeline.rates.area_shares`: footprint x lifts), None when nothing
     was judged (no dimensions, no quantities); ``in_scope`` is ``success`` with every judged
     volume and area at 95 % or more of the smallest size the brief allows
-    (:func:`~moonwright.pipeline.rates.scope_gaps`), the rate the eval reports as "feasible
-    in scope": an impossible brief "verified" by digging a third of the pad, or by trimming
-    the dig or the compaction lifts 15-25 %, is never a success in scope, while an excess
+    (:func:`~moonwright.pipeline.rates.scope_gaps`) and every operation its structures' own
+    entries in the brief state done (:func:`~moonwright.pipeline.validate.restored_gaps`,
+    phase 3l: the ones the structuring omitted; both in
+    :func:`~moonwright.pipeline.validate.in_scope_gaps`), the rate the eval reports as
+    "feasible in scope": an impossible brief "verified" by digging a third of the pad, by
+    trimming the dig or the compaction lifts 15-25 %, or by never compacting a pad its entry
+    says is compacted, is never a success in scope, while an excess
     (hauled twice over) is counted in ``volume_advisories`` but is no gap. ``requirements_sha``
     identifies the structured requirements the run planned from (the first 10 hex digits of
     the SHA-1 of their JSON): every condition of a brief and repeat shares one, which is
@@ -749,7 +759,7 @@ def eval_row(
               if result.task_graph is not None else {})
     areas = (area_shares(result.requirements, result.task_graph)
              if result.task_graph is not None else {})
-    gaps = (scope_gaps(result.requirements, result.task_graph)
+    gaps = (in_scope_gaps(result.requirements, result.task_graph)
             if result.task_graph is not None else [])
     rejected = sum(1 for s in graph_steps
                    if not s.ok and s.failure is not None and s.failure.kind in REJECTED_KINDS)
@@ -1053,11 +1063,13 @@ def run_eval_jobs(
 
 def scope_shortfall(row: EvalRow) -> str:
     """Why a verified row is not in scope, from its smallest shares: 'volume 85 %, area 78 %'
-    (each only when under the in-scope share)."""
+    (each only when under the in-scope share); 'scope differs from the brief' when neither is
+    (since phase 3l, an operation a structure's entry states that no task performs:
+    :func:`~moonwright.pipeline.validate.restored_gaps`)."""
     parts = [f"{name} {pct(share, floor=True)}"
              for name, share in (("volume", row.min_volume_share), ("area", row.min_area_share))
              if share is not None and share < IN_SCOPE_SHARE]
-    return ", ".join(parts) or "scope differs from the dimensions"
+    return ", ".join(parts) or "scope differs from the brief"
 
 
 def report_row(row: EvalRow) -> None:
@@ -1306,7 +1318,10 @@ def how_to_read(report: EvalReport) -> str:
                  "with a Wilson 95 % interval; `feasible in scope` the share that is feasible "
                  "AND whose final graph plans every structure's volume (dug m3, hauled fill) "
                  "and its compaction and sintering area (footprint x lifts) at 95 % or more of "
-                 "the smallest size the brief allows (the validator already rejects a volume "
+                 "the smallest size the brief allows, and every operation a structure's own "
+                 "entry in the brief states (phase 3l: one the structuring omitted is still "
+                 "asked; a plan that never compacts a pad its entry says is compacted is "
+                 "feasible but not in scope) (the validator already rejects a volume "
                  "under 70 %, so a plan that verified after trimming the work 15-25 % is "
                  "feasible but not in scope; `min_volume_share` and `min_area_share` in the rows "
                  "say how far off; an excess such as a berm hauled twice is counted in "

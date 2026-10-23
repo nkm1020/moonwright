@@ -535,8 +535,11 @@ class TestRescoreEval:
         assert list(rows[0]) == [*self.COLUMNS, "in_scope_before", "min_volume_share_before",
                                  "min_area_share_before", "supply_conflicts", "supply_hauls",
                                  "supply_advisories", "scope_gaps", "double_counts",
-                                 "double_structures", "footprint_changes", "size_changes"]
+                                 "double_structures", "footprint_changes", "size_changes",
+                                 "operations_restored"]
         ramp, habitat, unplanned, gone, cut, battery = rows
+        assert {r["operations_restored"] for r in rows} == {""}
+        assert "operations restored in 0 plan(s):" in printed
         assert (ramp["in_scope_before"], ramp["in_scope"]) == ("False", "True")
         assert (ramp["min_area_share_before"], ramp["min_area_share"]) == ("0.25", "1.0")
         assert (ramp["double_counts"], ramp["footprint_changes"]) == ("0", "")
@@ -557,6 +560,42 @@ class TestRescoreEval:
         assert (unplanned["in_scope"], unplanned["supply_conflicts"]) == ("False", "0")
         assert (gone["in_scope"], gone["min_area_share"]) == ("True", "1.0")
         assert (cut["in_scope"], cut["min_area_share"]) == ("False", "0.5")   # unreadable: kept
+
+    def test_names_the_restored_operations(self, tmp_path, capsys):
+        """Run 3's front_loaded_excavation super #1 (phase 3l): Lightning listed [excavate,
+        survey] on the pad, whose entry states "subgrade compacted and inspected", and Super
+        verified the plan at 60 h with no compactor task on it; the eval counted it in scope."""
+        import csv
+
+        from moonwright.schemas import Schedule
+
+        module = load_script("rescore_eval")
+        data = json.loads((Path(__file__).parent / "data" / "front_loaded_super_live.json")
+                          .read_text())
+        brief = (EXAMPLES_DIR.parent / "eval" / "front_loaded_excavation.md").read_text()
+        plan = PlanResult.model_validate({
+            "requirements": {**data["requirements"], "source_brief": brief},
+            "task_graph": data["task_graph"], "success": True,
+            "schedule": Schedule(entries=[], makespan_h=60, status="optimal")})
+        (tmp_path / "plans").mkdir()
+        (tmp_path / "plans" / "fl.plan.json").write_text(plan.model_dump_json())
+        (tmp_path / "eval.csv").write_text(
+            ",".join(self.COLUMNS) + "\nfront_loaded_excavation,super/loop_on,1,True,True,1.0,"
+            "1.0,plans/fl.plan.json\n")
+        out = tmp_path / "rescored.csv"
+        assert module.main([str(tmp_path), "--out", str(out)]) == 0
+        printed = capsys.readouterr().out
+        assert ("| `super/loop_on` | 1 | 1 (100%) | 1 (100%) -> 0 (0%) | 0 (0%) | 0 of 1 | "
+                "0 of 1 | 0 | 0 | 0 of 1 | 0 | 1 | 1 of 1 |") in printed
+        gap = ('scope:S1: its entry states compact ("subgrade compacted and inspected"), which '
+               "the structuring omitted, and no task compacts it")
+        assert f"front_loaded_excavation super/loop_on #1: True -> False ({gap})" in printed
+        assert "operations restored in 1 plan(s):" in printed
+        assert ("front_loaded_excavation super/loop_on #1: S1 compact (not done, in scope True "
+                "-> False)") in printed
+        [row] = list(csv.DictReader(out.open()))
+        assert (row["in_scope_before"], row["in_scope"]) == ("True", "False")
+        assert (row["operations_restored"], row["scope_gaps"]) == ("S1 compact", gap)
 
     def test_writes_next_to_the_input_by_default_and_needs_a_csv(self, tmp_path, capsys):
         module = load_script("rescore_eval")

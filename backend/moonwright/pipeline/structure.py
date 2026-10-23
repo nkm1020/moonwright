@@ -16,6 +16,27 @@ sees the brief, so what the requirements list is what it plans; the note keeps w
 warning said ("structure S2: operations sinter dropped: the fleet has no printer, so no
 sinter task will be required of it (add a printer and the operation again to plan it)").
 
+The opposite slip is corrected too (:func:`restore_operations`, phase 3l): an operation a
+structure's own entry states that the structuring omitted is written into the requirements
+(:func:`moonwright.pipeline.validate.restored_operations`, the entry read clause by clause by
+:func:`moonwright.pipeline.tags.entry_operations`: compacted, compaction, "compact the ...";
+inspected, staked, checked; excavated, dug; hauled, "built from"; sintered; grade never, a
+clause with a negation or a deferral never, nor the list or the item one heads, a word said of
+another structure never, a constraint shaped like an entry never, an operation the fleet cannot
+staff never) with an amber note ("structure S1: operations compact restored: its entry states
+"subgrade compacted and inspected""). In run 3
+Lightning typed front_loaded_excavation's pad ``excavator`` with operations [excavate, survey]
+in 1 of 3 structurings and ``pad`` with the same two in the others: the 28 h of pad compaction
+were never required, the one-robot-per-zone deadline no longer bit, and Super #1 "verified" the
+designed-impossible brief at 60 h, in scope. The type stays as recorded: retyping is not this
+stage's to do, and a garbled type has no kind rules (``validate.structure_kind``), so the
+operations its entry states are its whole contract. It runs after :func:`recover_operations`,
+which may read some of them out of malformed keys, and before :func:`correct_operations`, whose
+drop rule never meets a restored operation; 3j's softening rule counts the entry's own words
+as evidence (:func:`moonwright.pipeline.validate.unsupported_operations`), so the note that
+restores an operation is never followed by one that makes it optional again. The eval judges a
+saved plan against the same reading (:func:`moonwright.pipeline.validate.in_scope_gaps`).
+
 Two defences against a small model's malformed answers (seen live in phase 3c) run before the
 soft checks: :func:`recover_operations` salvages ``operations`` that strict JSON-schema
 decoding scrambled into extra keys (``"operations': [": "excavate"``, ``"operations excavate":
@@ -84,7 +105,12 @@ from moonwright.pipeline.rates import (
     with_judged_footprint,
     with_judged_lifts,
 )
-from moonwright.pipeline.validate import unstaffed_operations, unsupported_operations
+from moonwright.pipeline.validate import (
+    restored_operations,
+    unstaffed_operations,
+    unsupported_operations,
+    with_restored_operations,
+)
 from moonwright.schemas import LoopStep, Operation, Requirements
 from moonwright.text import an, join_and
 
@@ -162,6 +188,36 @@ def correct_operations(req: Requirements) -> list[str]:
             s.model_copy(update={"operations": [op for op in s.operations if op not in dropped]})
             if (dropped := {op for op, _ in unstaffed_operations(req, s)}) else s
             for s in req.structures]
+    return warnings
+
+
+def restore_warnings(req: Requirements) -> list[str]:
+    """One note per structure whose own entry in the brief states an operation it does not list
+    and a robot of the fleet can perform
+    (:func:`moonwright.pipeline.validate.restored_operations`): "structure S1: operations
+    compact restored: its entry states "subgrade compacted and inspected"", "structure BERM:
+    operations haul restored: its entry states "built from a borrow strip along its north
+    side"". Empty without a brief or when every structure lists what its entry states; never a
+    failure. Reads only (:func:`restore_operations` applies them)."""
+    out: list[str] = []
+    for s in req.structures:
+        restored = restored_operations(req, s)
+        if not restored:
+            continue
+        quotes = list(dict.fromkeys(f'"{quote}"' for _, quote in restored))
+        out.append(f"structure {s.id}: operations {join_and([op for op, _ in restored])} "
+                   f"restored: its entry states {join_and(quotes)}")
+    return out
+
+
+def restore_operations(req: Requirements) -> list[str]:
+    """Append to ``req`` every operation a structure's own entry states that the structuring
+    omitted (module docstring) and return the notes of :func:`restore_warnings` for the
+    structures changed; the coverage check and the requirements card then read the list the
+    planner plans from. Nothing changes without a brief."""
+    warnings = restore_warnings(req)
+    if warnings:
+        req.structures = with_restored_operations(req).structures
     return warnings
 
 
@@ -316,8 +372,8 @@ def structure_brief(client: LLMClient, brief: str, *, key: str) -> tuple[Require
             usage=getattr(e, "usage", None), failure=answer_failure(e),
         )
     req.source_brief = brief
-    warnings = [*recover_operations(req), *correct_operations(req), *site_warnings(req),
-                *correct_lifts(req), *correct_footprints(req)]
+    warnings = [*recover_operations(req), *restore_operations(req), *correct_operations(req),
+                *site_warnings(req), *correct_lifts(req), *correct_footprints(req)]
     placed = {s.id for s in req.structures if distance_figures(s, req)}
     warnings += [*correct_sizes(req), *dimension_warnings(req, placed)]
     return req, LoopStep(

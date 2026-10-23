@@ -11,7 +11,7 @@ and scope drift *per kind* instead of over a blur of easy briefs:
 | **A** comfortable | every robot type has 25 % or more battery to spare and even a fully serial plan fits the deadline | first graph feasible; measures coverage, precedence and tokens, not repairs |
 | **B** battery-split | the per-type Wh fits the fleet only when the work is spread across that type's robots | a one-task-per-phase graph is infeasible with an `energy:<robot>` core (or `energy_task:<task>` from the validator); the repair is to split |
 | **C** horizon-bound | the deadline fits only with parallel zones; a serial graph exceeds it | a serial graph fails `horizon_path` / `horizon`; the repair is to parallelise |
-| **D** impossible | energy short by 15-25 % or the horizon short by a third, with the scope fixed by the brief | a graph that shrinks the work below 70 % is a `volume:<structure>` conflict (phase 3e), and one that trims it 15-25 % verifies but is not *in scope* (95 % of every volume and compaction / sintering area); the full-scope graph exhausts the repairs and the advice path must name the shortfall (add a robot, extend the window, relax a rule) |
+| **D** impossible | energy short by 15-25 % or the horizon short by a third, with the scope fixed by the brief | a graph that shrinks the work below 70 % is a `volume:<structure>` conflict (phase 3e), and one that trims it 15-25 % verifies but is not *in scope* (95 % of every volume and compaction / sintering area, and every operation a structure's own entry states, phase 3l: run 3's Super #1 verified front_loaded_excavation at 60 h without the pad compaction its entry states); the full-scope graph exhausts the repairs and the advice path must name the shortfall (add a robot, extend the window, relax a rule) |
 | **E** scope reduction allowed | as D, but the brief allows a smaller scope | the repair re-scopes inside the allowed range (the structure stage records it as `min_<dimension>_m`, the floor of the volume check) and the plan verifies with visible scope drift |
 
 The margins below come from `backend/scripts/brief_budget.py`, which prices every structure's
@@ -174,6 +174,32 @@ the script's assumptions in mind:
   body its dimensions dig) is met by the hauls that wait for its digs, tagged with the berm
   they fill, while a mound, an earth bridge or a berm still needs its fill hauled onto it; and
   a coverage hint never quotes an entry its name or its figures give another structure.
+* **The structure stage restores an operation the entry states (phase 3l).** Lightning typed
+  `front_loaded_excavation`'s pad `excavator` with operations [excavate, survey] in run 3 #1
+  (`pad` with the same two in #2 and #3), dropping the compaction its entry states ("subgrade
+  compacted and inspected"): nothing required the 28 h of pad compaction, the one-robot-per-zone
+  deadline no longer bit, and Super #1 verified this kind-D brief at 60 h, in scope. The stage
+  now reads each structure's own entry clause by clause and appends what it states and the
+  structure omits (compacted, inspected, staked, checked, excavated, dug, hauled, "built from",
+  sintered; never grade, never a negated or deferred clause such as "Sintering is deferred to a
+  later sortie" or the list a negation heads, "No sintering, compaction or inspection this
+  sortie", never a word said of another structure, "placing starts once the pad subgrade is
+  compacted", never a constraint shaped like an entry, "- The pad is one work zone: ... the bowl
+  cannot be excavated as parallel sectors", never an operation the fleet cannot staff), with an
+  amber note; the eval judges a saved plan against the same reading, so a verified plan that
+  never performs a restored operation is out of scope. Over the 132 saved structurings of runs
+  2 and 3 it restores nine operations: the front_loaded pad's compaction (3),
+  `small_fleet_long_berm`'s berm haul "built from a borrow strip" (2),
+  `large_fleet_pad_berm_road`'s road compaction (typed `stockpile`), `solar_array_pad`'s
+  anchor-trench compaction, `habitat_berm_tight_horizon`'s berm inspection and
+  `habitat_foundation`'s trench excavation (typed `berm`). Rescored, four verified plans leave
+  their scope: run 3 front_loaded super #1, run 3 habitat_foundation super #2 (its trench never
+  dug) and run 2 large_fleet_pad_berm_road ultra and super #2 (its road never compacted). Run
+  4's 66 restore nine more (the front_loaded pad's compaction in all three, the
+  habitat_berm berm's inspection twice, `small_fleet_long_berm` #3's berm haul, compaction and
+  inspection, listed as [grade] alone, and `cable_trench` #2's "compacted 10 cm bedding layer"),
+  and two of its verified plans leave their scope: cable_trench #2 in both conditions, whose
+  bedding is never compacted.
 * **Bounds ignore transit.** CP-SAT adds the whole hours and the 0.5 Wh per grid cell of every
   leg a robot drives (since phase 3k exactly the legs of the order it picks; before it a
   transit allowance per task, which made several of these makespans 2-14 h longer), so a

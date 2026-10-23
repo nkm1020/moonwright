@@ -5,10 +5,12 @@ row's ``plan_path`` (relative to the CSV's directory). This script reads such a 
 (``eval.csv`` and the plans its rows name) and recomputes, per row, on the final task graph and
 the requirements the run planned from (their ``source_brief`` included):
 
-* ``in_scope`` (verified, and no :func:`moonwright.pipeline.rates.scope_gaps`),
-  ``min_volume_share`` and ``min_area_share``, the columns the eval writes, so a change to the
-  scope rules (phase 3g: the lift count the brief states, a placed body judged only on a base
-  width the brief states) can be read against a paid run without paying for it again;
+* ``in_scope`` (verified, and no :func:`moonwright.pipeline.validate.in_scope_gaps`: neither
+  :func:`moonwright.pipeline.rates.scope_gaps` nor, since phase 3l,
+  :func:`moonwright.pipeline.validate.restored_gaps`), ``min_volume_share`` and
+  ``min_area_share``, the columns the eval writes, so a change to the scope rules (phase 3g:
+  the lift count the brief states, a placed body judged only on a base width the brief states)
+  can be read against a paid run without paying for it again;
 * ``supply_conflicts``: the ``supply:<haul>`` conflicts the validator now gives the final graph
   (:func:`moonwright.pipeline.validate.validate_graph` with only the supply check on: a haul
   that waits for no source of material, or for too little while another dig could supply
@@ -29,21 +31,28 @@ the requirements the run planned from (their ``source_brief`` included):
   smaller size it allows anywhere, a figure its entry gives only as a distance;
   ``brief_sizes=False`` judges the sizes as recorded), as recorded -> as judged, with what
   was read (``S1 volume 0.707 -> 1.963 (min_diameter_m 12)``, ``S2 area 0.25 -> -
-  (diameter_m 30 dropped)``).
+  (diameter_m 30 dropped)``);
+* ``operations_restored`` (phase 3l): the operations a structure's own entry in the brief
+  states that the requirements the run planned from omit
+  (:func:`moonwright.pipeline.validate.restored_operations`), per structure (``S1 compact``,
+  ``BERM haul``); a verified plan none of whose tasks performs one is out of scope, its
+  ``scope:<structure>`` line in ``scope_gaps``.
 
 It prints one row per condition (runs, verified, verified in scope before -> after, of those
 the ones neither the supply check nor the double-count check rejects, verified plans the
 supply check would now reject, verified plans the double-count check would now reject, plans
 whose footprint judgment changed, plans whose size judgment changed, verified plans with a
-supply advisory), the rows whose ``in_scope`` changed, the verified plans the supply and the
-double-count checks reject and the plans whose footprint or size judgment changed, and
-writes ``eval.rescored.csv`` next to the input (``--out`` elsewhere): the input's columns
-with the three scope columns recomputed in place, then ``in_scope_before``,
-``min_volume_share_before``, ``min_area_share_before``, ``supply_conflicts``,
-``supply_hauls``, ``supply_advisories``, ``scope_gaps`` (the gap lines joined by `` | ``),
-``double_counts``, ``double_structures``, ``footprint_changes`` and ``size_changes``. A row
-without a readable plan (none named, the file gone, or a file that is not a PlanResult) keeps
-its values and is reported as ``no plan``.
+supply advisory, plans with a restored operation and the verified ones that do not perform
+it), the rows whose ``in_scope`` changed, the verified plans the supply and the double-count
+checks reject, the plans whose footprint or size judgment changed and the plans with a
+restored operation, and writes ``eval.rescored.csv`` next to the input (``--out``
+elsewhere): the input's columns with the three scope columns recomputed in place, then
+``in_scope_before``, ``min_volume_share_before``, ``min_area_share_before``,
+``supply_conflicts``, ``supply_hauls``, ``supply_advisories``, ``scope_gaps`` (the gap lines
+joined by `` | ``), ``double_counts``, ``double_structures``, ``footprint_changes``,
+``size_changes`` and ``operations_restored``. A row without a readable plan (none named, the
+file gone, or a file that is not a PlanResult) keeps its values and is reported as ``no
+plan``.
 
 Usage (from backend/)::
 
@@ -67,27 +76,33 @@ from moonwright.pipeline.rates import (
     area_shares,
     distance_figures,
     footprint,
-    scope_gaps,
     stated_minimums,
     volume_double_counts,
     volume_shares,
     with_judged_footprint,
 )
-from moonwright.pipeline.validate import supply_advisories, validate_graph
+from moonwright.pipeline.validate import (
+    in_scope_gaps,
+    restored_operations,
+    supply_advisories,
+    validate_graph,
+)
 from moonwright.schemas import PlanResult, Requirements, TaskGraph
 from moonwright.text import pct, qty
 
 RESCORED = ("in_scope", "min_volume_share", "min_area_share")
 ADDED = ("in_scope_before", "min_volume_share_before", "min_area_share_before",
          "supply_conflicts", "supply_hauls", "supply_advisories", "scope_gaps",
-         "double_counts", "double_structures", "footprint_changes", "size_changes")
+         "double_counts", "double_structures", "footprint_changes", "size_changes",
+         "operations_restored")
 
 
 @dataclass
 class Rescored:
     """One row: the input values (``row``), the recomputed ones, the supply verdicts, the
-    double counts (``S2 560 of 280 m3 (200 %)``), the footprint and the size changes; ``plan``
-    is False when the row names no readable plan (its values are kept)."""
+    double counts (``S2 560 of 280 m3 (200 %)``), the footprint and the size changes, the
+    restored operations (``S1 compact``) and whether a verified plan leaves one undone;
+    ``plan`` is False when the row names no readable plan (its values are kept)."""
 
     row: dict[str, str]
     plan: bool
@@ -102,6 +117,8 @@ class Rescored:
     doubles: list[str] = field(default_factory=list)
     footprints: list[str] = field(default_factory=list)
     sizes: list[str] = field(default_factory=list)
+    restored: list[str] = field(default_factory=list)
+    undone: bool = False   # a restored operation no task of the final graph performs
 
     def out(self) -> dict[str, Any]:
         """The CSV row: the input columns, the three scope columns recomputed, the added ones."""
@@ -120,6 +137,7 @@ class Rescored:
         row["double_structures"] = " | ".join(self.doubles)
         row["footprint_changes"] = " | ".join(self.footprints)
         row["size_changes"] = " | ".join(self.sizes)
+        row["operations_restored"] = " | ".join(self.restored)
         return row
 
 
@@ -211,10 +229,12 @@ def rescore_row(row: dict[str, str], base: Path) -> Rescored:
         return Rescored(row=row, plan=False, success=success, in_scope_before=before,
                         in_scope=before)
     graph, req = result.task_graph, result.requirements
+    restored = [f"{s.id} {', '.join(op for op, _ in ops)}" for s in req.structures
+                if (ops := restored_operations(req, s))]
     if graph is None:
         return Rescored(row=row, plan=True, success=result.success, in_scope_before=before,
-                        in_scope=False)
-    gaps = scope_gaps(req, graph)
+                        in_scope=False, restored=restored)
+    gaps = in_scope_gaps(req, graph)
     volumes, areas = volume_shares(req, graph), area_shares(req, graph)
     failure = validate_graph(req, graph, coverage=False, volume=False, supply=True)
     hauls = [c.removeprefix("supply:") for c in (failure.conflicts if failure else [])
@@ -228,7 +248,8 @@ def rescore_row(row: dict[str, str], base: Path) -> Rescored:
         doubles=[f"{c.structure.id}{' key trench' if c.shape.kind == 'trench' else ''} "
                  f"{qty(c.excess_m3)} of {qty(c.largest_m3 or c.shape.m3)} m3 "
                  f"({pct(c.share_largest)})" for c in volume_double_counts(req, graph)],
-        footprints=_footprint_changes(req, graph), sizes=_size_changes(req, graph))
+        footprints=_footprint_changes(req, graph), sizes=_size_changes(req, graph),
+        restored=restored, undone=any(g.startswith("scope:") for g in gaps))
 
 
 def rescore(csv_path: Path) -> tuple[list[str], list[Rescored]]:
@@ -246,12 +267,13 @@ def _count(n: int, total: int) -> str:
 
 def summary(rows: Sequence[Rescored]) -> list[str]:
     """The per-condition table (markdown), then the in-scope flips, the supply and the
-    double-count rejects and the footprint and size changes."""
+    double-count rejects, the footprint and size changes and the restored operations."""
     lines = [("| condition | runs | verified | verified in scope, before -> after | "
               "in scope after, no supply or double-count conflict | verified, rejected by "
               "supply | verified, rejected by double count | footprint judgment changed | "
-              "size judgment changed | verified, supply advisory | no plan |"),
-             "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
+              "size judgment changed | verified, supply advisory | no plan | operations "
+              "restored | verified, restored operation not done |"),
+             "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
     conditions = list(dict.fromkeys(r.row.get("condition", "") for r in rows))
     for cond in conditions:
         group = [r for r in rows if r.row.get("condition", "") == cond]
@@ -267,7 +289,9 @@ def summary(rows: Sequence[Rescored]) -> list[str]:
                      f"{_count(after, n)} | {_count(clean, n)} | {rejected} of {len(ok)} | "
                      f"{doubled} of {len(ok)} | {sum(bool(r.footprints) for r in group)} | "
                      f"{sum(bool(r.sizes) for r in group)} | {advised} of {len(ok)} | "
-                     f"{sum(not r.plan for r in group)} |")
+                     f"{sum(not r.plan for r in group)} | "
+                     f"{sum(bool(r.restored) for r in group)} | "
+                     f"{sum(r.undone for r in ok)} of {len(ok)} |")
     flips = [r for r in rows if r.plan and r.in_scope_before is not None
              and r.in_scope != r.in_scope_before]
     lines.append("")
@@ -295,6 +319,14 @@ def summary(rows: Sequence[Rescored]) -> list[str]:
                      if r.in_scope_before is not None and r.in_scope != r.in_scope_before
                      else "")
             lines.append(f"  {_name(r)}: {'; '.join(getattr(r, attr))}{scope}")
+    restored_rows = [r for r in rows if r.restored]
+    lines.append("")
+    lines.append(f"operations restored in {len(restored_rows)} plan(s):")
+    for r in restored_rows:
+        verdict = ("not done" if r.undone else "done") if r.success else "not verified"
+        scope = (f", in scope {r.in_scope_before} -> {r.in_scope}"
+                 if r.in_scope_before is not None and r.in_scope != r.in_scope_before else "")
+        lines.append(f"  {_name(r)}: {'; '.join(r.restored)} ({verdict}{scope})")
     return lines
 
 
