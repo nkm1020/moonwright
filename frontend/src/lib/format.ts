@@ -302,14 +302,18 @@ export function fmtSignedPct(pct: number | null | undefined, digits = 1): string
 /** estimate: the rate model overrode the model's hours / Wh of a task; ungrounded: no task
  *  states a quantity; volume (phase 3c): a structure's planned m3 clearly differ from what its
  *  dimensions imply (a re-scope to make visible, amber, label "scope differs from dimensions");
- *  other: any sentence the console does not know. */
-export type AdvisoryKind = "estimate" | "ungrounded" | "volume" | "other";
+ *  supply (phase 3g): a body's hauls move more m3 than the digs before them remove (the
+ *  `supply:<structure>` balance note, often the brief's own arithmetic; the conflict of the
+ *  same prefix, `supply:<haul>`, is a haul that waits for no dig or for too little); other:
+ *  any sentence the console does not know. */
+export type AdvisoryKind = "estimate" | "ungrounded" | "volume" | "supply" | "other";
 
 /** Chip label per advisory kind, in sentence case (notes, not error codes). */
 export const ADVISORY_KIND_LABELS: Record<AdvisoryKind, string> = {
   estimate: "estimate",
   ungrounded: "no quantities",
   volume: "scope differs from dimensions",
+  supply: "hauled more than dug",
   other: "advisory",
 };
 
@@ -319,7 +323,8 @@ export interface Advisory {
   kind: "estimate" | "ungrounded" | "other";
   /** the full classification: "volume" tells a scope-vs-dimensions warning apart */
   category: AdvisoryKind;
-  /** the task an estimate advisory is about, the structure a volume advisory is about */
+  /** the task an estimate advisory is about, the structure a volume or supply advisory is
+   *  about */
   task: string | null;
   text: string;
   raw: string;
@@ -332,7 +337,11 @@ export interface Advisory {
  *  x 0.6 m) but its excavation tasks (T3 600 m2 counts 120 m3 at 0.2 m) total only 120 m3
  *  (33 %)", or an excess "... total 600 m3 (200 %): hauled twice over") -> {category: "volume",
  *  kind: "other", task: "S2", text: "its dimensions give 360 m³ (100 × 6 × 0.6 m) but its
- *  excavation tasks (T3 600 m² counts 120 m³ at 0.2 m) total only 120 m³ (33%)"}. */
+ *  excavation tasks (T3 600 m² counts 120 m³ at 0.2 m) total only 120 m³ (33%)"}; a supply
+ *  line (phase 3g: "supply:S2: its hauls (T5 150 m3, T6 150 m3) move 300 m3, more than the
+ *  125.7 m3 the digs before them remove (S1 landing pad: T3, T4)") -> {category: "supply",
+ *  kind: "other", task: "S2", text: "its hauls (T5 150 m³, T6 150 m³) move 300 m³, more than
+ *  the 125.7 m³ the digs before them remove (S1 landing pad: T3, T4)"}. */
 export function parseAdvisory(raw: string): Advisory {
   const est = /^estimate:([^:\s]+):\s*([\s\S]*)$/.exec(raw);
   if (est) return { kind: "estimate", category: "estimate", task: est[1], text: tidyNumbers(humanizeFields(est[2].trim())), raw };
@@ -340,6 +349,8 @@ export function parseAdvisory(raw: string): Advisory {
   if (ung) return { kind: "ungrounded", category: "ungrounded", task: null, text: humanizeFields(ung[1].trim()), raw };
   const vol = /^volume:([^:\s]+):\s*([\s\S]*)$/.exec(raw);
   if (vol) return { kind: "other", category: "volume", task: vol[1], text: humanizeVolume(vol[2].trim()), raw };
+  const sup = /^supply:([^:\s]+):\s*([\s\S]*)$/.exec(raw);
+  if (sup) return { kind: "other", category: "supply", task: sup[1], text: humanizeVolume(sup[2].trim()), raw };
   return { kind: "other", category: "other", task: null, text: tidyNumbers(humanizeFields(raw)), raw };
 }
 

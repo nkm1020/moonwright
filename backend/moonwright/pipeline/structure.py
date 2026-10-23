@@ -15,6 +15,18 @@ decoding scrambled into extra keys (``"operations': [": "excavate"``, ``"operati
 [...]``) and reports it, and :func:`dimension_warnings` flags a structure without a single
 numeric dimension, because the task-graph model sizes every task from those fields and never
 sees the brief.
+
+A recorded compaction lift count the brief does not state is corrected (:func:`correct_lifts`,
+phase 3g): Lightning wrote crater_ramp's "in four 10 m segments" as ``lifts: 4`` and
+access_road's "a 20 cm compacted lift" as ``lifts: 0.2``, and left small_fleet_long_berm's
+"placed and compacted in two lifts" unrecorded; the task-graph model never sees the brief, so
+it compacted the ramp four times over and the berm once. The structure stage now writes the
+count the structure's own entry states into the requirements
+(:func:`moonwright.pipeline.rates.with_judged_lifts`; the entry read whole, a recorded count
+kept when the entry names lifts without a count we can read) and says so in a warning the
+requirements card shows in amber ("structure S1: lifts 4 -> 1: the brief's entry for S1 states
+no lift count we can read"), so the planner plans the count the eval's area check judges
+(:func:`moonwright.pipeline.rates.lifts`).
 """
 
 from __future__ import annotations
@@ -26,6 +38,7 @@ from typing import get_args
 
 from moonwright.llm.base import LLMClient, LLMError, answer_failure
 from moonwright.llm.prompts import structure_messages
+from moonwright.pipeline.rates import lift_note, with_judged_lifts
 from moonwright.pipeline.validate import unstaffed_operations, unsupported_operations
 from moonwright.schemas import LoopStep, Operation, Requirements
 
@@ -125,6 +138,26 @@ def dimension_warnings(req: Requirements) -> list[str]:
             for s in req.structures if not s.dims()]
 
 
+def lift_warnings(req: Requirements) -> list[str]:
+    """One warning per structure whose recorded compaction lifts the brief corrects
+    (:func:`moonwright.pipeline.rates.lift_note`): "structure S1: lifts 4 -> 1: the brief's
+    entry for S1 states no lift count we can read", "structure BERM: lifts none -> 2: the
+    brief's entry for BERM states 2 compaction lifts". Empty without a brief or when every
+    count stands; never a failure. Reads only (:func:`correct_lifts` applies them)."""
+    return [f"structure {s.id}: {note}" for s in req.structures
+            if (note := lift_note(s, req)) is not None]
+
+
+def correct_lifts(req: Requirements) -> list[str]:
+    """Write the lift count each structure's entry in the brief states into ``req``
+    (:func:`moonwright.pipeline.rates.with_judged_lifts`) and return the warnings of
+    :func:`lift_warnings` for the corrections made; nothing changes without a brief."""
+    warnings = lift_warnings(req)
+    if warnings:
+        req.structures = [with_judged_lifts(s, req) for s in req.structures]
+    return warnings
+
+
 def _operation_words(value: object) -> list[str]:
     if isinstance(value, str):
         return [w for w in _WORDS.findall(value.lower()) if w in _OPERATION_SET]
@@ -156,7 +189,8 @@ def structure_brief(client: LLMClient, brief: str, *, key: str) -> tuple[Require
             usage=getattr(e, "usage", None), failure=answer_failure(e),
         )
     req.source_brief = brief
-    warnings = [*recover_operations(req), *site_warnings(req), *dimension_warnings(req)]
+    warnings = [*recover_operations(req), *site_warnings(req), *correct_lifts(req),
+                *dimension_warnings(req)]
     return req, LoopStep(
         stage="structure", ok=True, duration_s=time.perf_counter() - t0, usage=usage,
         message=f"{len(req.structures)} structures, {len(req.robots)} robots, horizon {req.horizon_h}h",

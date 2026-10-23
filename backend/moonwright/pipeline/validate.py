@@ -2,7 +2,7 @@
 
 Contract (see conflict id formats in schemas.py):
 
-    validate_graph(req, graph, previous=None, *, coverage=False, volume=None,
+    validate_graph(req, graph, previous=None, *, coverage=False, volume=None, supply=None,
                    robot_positions=None) -> Failure | None
 
 Checks, in this order, collecting *all* conflicts of the kinds below before returning:
@@ -14,6 +14,8 @@ Checks, in this order, collecting *all* conflicts of the kinds below before retu
   structure coverage (coverage=True only, see below) ...... scope:<structure_id>
   planned volume short of the dimensions (whole plans
     only, see below) ...................................... volume:<structure_id>
+  a haul that waits for no dig, or for too little while
+    another dig could supply it (whole plans only, below) . supply:<task_id>
   task energy + transit > max battery of its type ......... energy_task:<task_id>
   critical path (longest duration chain) > horizon_h ...... horizon_path:<a>-><b>->...
   per robot type: ceil(total duration / #robots) > horizon  horizon   (hint names the type)
@@ -72,6 +74,58 @@ judges a *whole* plan: the remaining graph of a replan has its finished work gon
 switches it off even then (the advisory alone) and ``volume=True`` forces it without
 coverage. Graphs without quantities (the hand-made fixtures) and structures without a
 positive volume are untouched.
+
+Supply order (``supply:<task_id>``, whole plans only)
+----------------------------------------------------
+CP-SAT schedules only the edges it is given, so a haul that waits for no excavation can start
+before its material exists. Seen live (run 2, phase 3e): a horizon core made the repair drop
+the berm hauls' edges to the pit and borrow digs, and the verified schedule hauled 280 m3 of
+berm fill from hour 7 while the first dig ended at hour 13. A *haul* is a hauler task in m3
+(:func:`moonwright.pipeline.rates.is_haul`); it places its material in the zone it names (the
+coverage contract), so its *target* is the structure of that zone (the one its tag names when
+several share it), or a *pile* when the target is stockpile-like or no structure claims the
+zone. Its *sources* are the tasks that make material: every *dig* (an excavator task in m3
+that is no rehandle, :func:`~moonwright.pipeline.rates.is_dig`: spoil bladed, pushed,
+windrowed or backfilled was dug by another task), and an m2 *strip* or grade
+(:func:`~moonwright.pipeline.rates.is_strip`) where its spoil can be what the haul moves: for a
+haul into the strip's own structure (a haul lane's grading moved along the lane), into a pile
+(road grading spoil to a stockpile, strip spoil to a dump zone), or in a graph that digs
+nothing in m3 (a berm "built from the hardstand's strip spoil"); a berm built from pit spoil is
+not supplied by the haul lane's grading (seen live: propellant_pit_and_berm's berm hauls waited
+for the lane alone and ran before the pit was dug). A source makes available its m3, a strip
+its area x 0.2 m (:func:`~moonwright.pipeline.rates.supply_m3`). A graph without any source
+hauls material from outside the plan and is not judged. Otherwise a haul is ``supply:<haul>``
+when
+
+* it waits (through its ``after`` edges, transitively, through any task) for no source: ``T7
+  hauls 280 m3 for S2 (plume berm) but waits for no excavation, so it could start before any
+  material is dug``, the hint naming every source that does not wait for it, grouped by
+  structure (``make T7 and T8 wait for the digs that supply them (S1 foundation pit: T3, T4;
+  S3 borrow strip: T5, T6)``); or
+* it is no pile's haul and moves, with the hauls into its target before it, more than
+  :data:`SUPPLY_SLACK` (1.25: dug regolith swells by about a quarter) of what its sources make
+  available plus :data:`SUPPLY_SLACK_M3`, while a dig in m3 that neither precedes nor waits
+  for it could supply the rest (the review's key-trench loophole: a 300 m3 berm haul that
+  waits for its own 15 m3 key-trench cut alone while the pad is dug beside it): ``T7 hauls
+  300 m3 for S2 (blast berm) but the digs before it remove only 15 m3 (S2 blast berm: T6), so
+  it could start before all of its material is dug``, the hint ``make T7 wait for more of the
+  digs that supply it (S1 landing pad: T2, T3)``. A second surface strip is never asked for.
+
+Sources are grouped by structure, at most four structures and four ids each: for a haul into a
+placed body (a berm, a mound) the other structures first and its own (a key trench) last,
+otherwise its own first, then requirements order. The hint closes with how to keep a
+deadline: ``a haul part may wait for only the dig parts that remove what it moves, so split
+hauls to keep both chains short.`` Ids follow the hauls' order in the graph. Like volume it
+judges a whole plan (a replan's remaining graph has its digs finished): ``supply=None`` (the
+default) runs it exactly when the volume check runs, so the planner's ``volume=whole``
+switches both, ``False`` / ``True`` override it. It runs after volume and before energy. When
+every source a body's hauls can wait for already comes before them and they still move more
+than those make available (landing_pad's 300 m3 berm prism "built from pad spoil" after
+125.7 m3 of bowl: the brief's own arithmetic), the plan stands and
+:func:`supply_advisories` notes it per structure (``supply:S2: its hauls (T5 150 m3, T6 150
+m3) move 300 m3, more than the 125.7 m3 the digs before them remove (S1 landing pad: T3,
+T4)``), summed per target so chained and parallel parts read the same; never for a pile, nor
+for a structure one of whose hauls is in conflict.
 
 Quantities (``quantity:<task_id>``)
 -----------------------------------
@@ -158,7 +212,8 @@ required id the graph dropped and, with ``baseline`` (the remaining graph the mo
 Implementation notes
 --------------------
 * The result is deterministic: conflict groups appear in the order of the checks above and
-  conflict ids are sorted alphabetically within a group. ``Failure.details[i]`` is a short
+  conflict ids are sorted alphabetically within a group, except ``supply:<task_id>``, which
+  follows the hauls' order in the graph (T9 before T10, as the hint names them). ``Failure.details[i]`` is a short
   factual line about ``Failure.conflicts[i]`` (same length, same order).
 * Precedence checks run on the id-level graph: ``p in t.after`` is the edge ``p -> t``. A
   duplicated task id merges the ``after`` lists of its copies and keeps the longest duration;
@@ -189,12 +244,25 @@ from moonwright.pipeline.rates import (
     SPLIT_ABOVE_M3,
     STRIP_DEPTH_M,
     VolumeCoverage,
+    ancestors,
+    dims_volume,
+    is_dig,
+    is_haul,
+    is_strip,
     rate_for,
     rated_units,
     scoped,
+    stockpile_like,
+    supply_m3,
     volume_shortfalls,
 )
-from moonwright.pipeline.tags import hauls_into, name_score, structure_tasks, tag_names
+from moonwright.pipeline.tags import (
+    brief_lines,
+    hauls_into,
+    name_score,
+    structure_tasks,
+    tag_names,
+)
 from moonwright.schemas import (
     MWH_PER_WH,
     Failure,
@@ -213,9 +281,10 @@ from moonwright.text import wh as _wh
 from moonwright.text import whole_wh as _whole_wh
 
 __all__ = [   # tag_names / structure_tasks live in ``tags`` and stay importable from here
-    "brief_evidence", "check_scope", "covered_phases", "hauls_into", "missing_operations",
-    "missing_phases", "needs_quantity", "performs", "required_phases", "structure_kind",
-    "structure_tasks", "tag_names", "task_changes", "task_phases", "transit_allowances",
+    "SUPPLY_SLACK", "SUPPLY_SLACK_M3", "Supply", "brief_evidence", "check_scope",
+    "covered_phases", "hauls_into", "missing_operations", "missing_phases", "needs_quantity",
+    "performs", "required_phases", "structure_kind", "structure_tasks", "supply_advisories",
+    "supply_report", "tag_names", "task_changes", "task_phases", "transit_allowances",
     "unstaffed_operations", "unsupported_operations", "validate_graph",
 ]
 
@@ -224,6 +293,7 @@ Positions = Mapping[str, tuple[float, float]]
 
 def validate_graph(req: Requirements, graph: TaskGraph, previous: TaskGraph | None = None,
                    *, coverage: bool = False, volume: bool | None = None,
+                   supply: bool | None = None,
                    robot_positions: Positions | None = None) -> Failure | None:
     """Run every check and return a ``validation`` Failure, or None when the graph is clean.
 
@@ -235,8 +305,10 @@ def validate_graph(req: Requirements, graph: TaskGraph, previous: TaskGraph | No
     (``volume:<structure_id>``), which judges a whole plan the same way: ``None`` (the
     default) runs it exactly when ``coverage`` is on, so a replan checked with
     ``coverage=False`` never sees it, ``False`` switches it off even on a whole plan (the
-    task-graph stage's advisory alone) and ``True`` forces it without coverage.
-    ``robot_positions`` places the robots for the transit the energy checks charge (robot id
+    task-graph stage's advisory alone) and ``True`` forces it without coverage. ``supply`` is
+    the supply-order check (``supply:<task_id>``, a haul that waits for no source, or for too
+    little while another dig could supply it), a whole-plan judgment too: ``None`` (the default) follows the volume check's switch as resolved above,
+    ``False`` / ``True`` override it. ``robot_positions`` places the robots for the transit the energy checks charge (robot id
     -> grid cell, what a replan passes the solver as ``SolveOptions.robot_positions``); the
     depot for everyone without it. ``previous`` is the graph a repair answered (if any): a
     structure it served that ``graph`` no longer serves is reported with the tasks that went
@@ -246,6 +318,8 @@ def validate_graph(req: Requirements, graph: TaskGraph, previous: TaskGraph | No
     cycles = _check_cycles(prec)
     transit = transit_allowances(req, graph, robot_positions)
     pools = _energy_pools(req, graph, transit)
+    volume_on = coverage if volume is None else volume
+    supply_on = volume_on if supply is None else supply
     groups = [
         _check_duplicates(req, graph),
         _check_references(graph),
@@ -253,7 +327,8 @@ def validate_graph(req: Requirements, graph: TaskGraph, previous: TaskGraph | No
         _check_capability(req, graph),
         _check_quantity(graph, previous),
         _check_coverage(req, graph, previous) if coverage else None,
-        _check_volume(req, graph) if (coverage if volume is None else volume) else None,
+        _check_volume(req, graph) if volume_on else None,
+        _check_supply(req, graph) if supply_on else None,
         _check_task_energy(graph, transit, pools),
         None if cycles else _check_critical_path(prec, req.horizon_h),
         _check_type_horizon(req, graph),
@@ -662,7 +737,8 @@ def _check_critical_path(prec: _Precedence, horizon_h: int) -> _Group | None:
         details=[f"{chain} takes {hours} h in sequence; horizon is {horizon_h} h"],
         hint=f"The critical path {chain} alone takes {hours} h, longer than the {horizon_h} h "
         "horizon; shorten or split tasks on this chain, or drop unnecessary 'after' edges so "
-        "more work runs in parallel.",
+        "more work runs in parallel (never a dig-to-haul edge: split the hauls per dig part "
+        "instead).",
     )
 
 
@@ -792,6 +868,303 @@ def _check_volume(req: Requirements, graph: TaskGraph) -> _Group | None:
                   hint=" ".join(sentences))
 
 
+# ----------------------------------------------------------------------------- supply
+SUPPLY_SLACK = 1.25      # a haul may move this multiple of the m3 its sources make available
+SUPPLY_SLACK_M3 = 1.0    # (dug regolith swells by about a quarter when loosened), plus this
+_SUPPLY_GROUPS = 4       # structures a supply sentence names ...
+_SUPPLY_IDS = 4          # ... and task ids per structure (or per list of hauls)
+_SUPPLY_TAIL = ("; a haul part may wait for only the dig parts that remove what it moves, so "
+                "split hauls to keep both chains short.")
+
+DigGroups = tuple[tuple[str, tuple[str, ...]], ...]
+
+
+@dataclass(frozen=True)
+class Supply:
+    """What one haul of a graph waits for (:func:`supply_report`; module docstring, "Supply
+    order").
+
+    ``haul`` is the hauler task. ``target`` names where it places its material
+    (:func:`_haul_target`: 'S2 (plume berm)', 'zone Z3' for a zone no structure claims) and
+    ``key`` is that structure's id or that zone, the group of the balance advisory; ``pile``
+    is True for a stockpile-like structure or an unclaimed zone, whose fill is never judged
+    for balance (as the volume check never judges it). ``digs`` are the sources among its
+    transitive predecessors (graph order): every dig in m3, and an m2 strip when it can feed
+    this haul (:func:`_feeds`); ``hauls`` the hauls into the same target among them.
+    ``dug_by`` groups ``digs`` by structure and ``feeders`` the sources that neither come
+    before it nor wait for it (they could still supply it), grouped the same way: for a haul
+    into a placed body the other structures first, its own (a key trench) last, otherwise its
+    own first, then requirements order, then sources no structure claims under their tag (or
+    'untagged'). ``more`` are the digs in m3 among the feeders: the bulk sources a haul that
+    moves more than its sources make available should wait for too (a second surface strip
+    is never asked for: a berm "built from the hardstand's strip spoil" that holds more than
+    the strip yields is the brief's own arithmetic).
+    """
+
+    haul: Task
+    target: str
+    key: str
+    pile: bool
+    digs: tuple[Task, ...]
+    hauls: tuple[Task, ...]
+    dug_by: DigGroups
+    feeders: DigGroups
+    more: DigGroups = ()
+
+    @property
+    def waits_for_no_dig(self) -> bool:
+        """The first ``supply:<haul>`` case: no source among its predecessors."""
+        return not self.digs
+
+    @property
+    def hauled_m3(self) -> float:
+        """The m3 this haul and the hauls into its target before it move."""
+        return (self.haul.quantity or 0.0) + sum(h.quantity or 0.0 for h in self.hauls)
+
+    @property
+    def dug_m3(self) -> float:
+        """The m3 its sources make available (:func:`~moonwright.pipeline.rates.supply_m3`:
+        a dig's m3, a strip's area x 0.2 m)."""
+        return sum(supply_m3(d) for d in self.digs)
+
+    @property
+    def over(self) -> bool:
+        """Whether it and the hauls into its target before it move more than
+        :data:`SUPPLY_SLACK` (plus :data:`SUPPLY_SLACK_M3`) of what its sources make
+        available; never for a pile, nor for a haul that waits for no source."""
+        return (bool(self.digs) and not self.pile
+                and self.hauled_m3 > self.dug_m3 * SUPPLY_SLACK + SUPPLY_SLACK_M3)
+
+    @property
+    def short(self) -> bool:
+        """The second ``supply:<haul>`` case: :attr:`over` while a dig in m3 that neither
+        comes before it nor waits for it could supply the rest (:attr:`more`: a 300 m3 berm
+        haul that waits for its own 15 m3 key trench alone while the pad is dug beside it)."""
+        return self.over and bool(self.more)
+
+    @property
+    def unsupplied(self) -> bool:
+        """Whether the haul is a ``supply:<haul>`` conflict."""
+        return self.waits_for_no_dig or self.short
+
+
+def _owner(req: Requirements, task: Task) -> Structure | None:
+    """The structure a source serves for a supply sentence: the first its tag names
+    (:func:`tag_names`), else the first whose zone it is in."""
+    if task.structure:
+        for s in req.structures:
+            if tag_names(task.structure, s):
+                return s
+    return next((s for s in req.structures if s.zone is not None and s.zone == task.zone), None)
+
+
+def _haul_target(req: Requirements, haul: Task) -> Structure | None:
+    """The structure a haul places its material in, read from its zone first as the coverage
+    contract states it ("a haul task's zone is the zone where the material is PLACED";
+    :func:`moonwright.pipeline.tags.hauls_into`): the structure whose zone it is in, the one
+    its tag names when several share that zone; None when no structure claims the zone (a
+    stockpile or dump the requirements do not list: "Haul strip spoil to stockpile")."""
+    here = [s for s in req.structures if s.zone is not None and s.zone == haul.zone]
+    if haul.structure:
+        named = [s for s in here if tag_names(haul.structure, s)]
+        if named:
+            return named[0]
+    return here[0] if here else None
+
+
+def _type_words(structure: Structure) -> str:
+    """'foundation_pit' -> 'foundation pit'."""
+    return " ".join(structure.type.replace("_", " ").split()).lower()
+
+
+def _placed_body(structure: Structure | None) -> bool:
+    """Whether a haul's target is a placed body (a berm, a mound): its own excavation is a
+    key trench, never the source of its fill."""
+    if structure is None:
+        return False
+    shape = dims_volume(structure)
+    return structure_kind(structure.type) == "berm" or (shape is not None and shape.phase == "haul")
+
+
+def _dig_groups(req: Requirements, digs: Sequence[Task], owners: Mapping[str, Structure | None],
+                own: Structure | None, placed: bool) -> DigGroups:
+    """``digs`` grouped by the structure each serves ('S1 foundation pit'): ``own`` (the
+    haul's target) first, or last for a placed body (its own dig is a key trench), the other
+    structures in requirements order, then unclaimed sources under their tag (or 'untagged')
+    in graph order; ids in graph order within a group, without repeats."""
+    index = {s.id: i for i, s in enumerate(req.structures)}
+    ranked: dict[str, tuple[tuple[int, int], list[str]]] = {}
+    for n, d in enumerate(digs):
+        s = owners.get(d.id)
+        if s is None:
+            label, rank = (d.structure or "untagged"), (3, n)
+        else:
+            label = f"{s.id} {_type_words(s)}"
+            mine = own is not None and s.id == own.id
+            rank = ((2 if placed else 0), 0) if mine else (1, index[s.id])
+        entry = ranked.setdefault(label, (rank, []))
+        if d.id not in entry[1]:
+            entry[1].append(d.id)
+    ordered = sorted(ranked.items(), key=lambda kv: kv[1][0])
+    return tuple((label, tuple(ids)) for label, (_, ids) in ordered)
+
+
+def _ids_text(ids: Sequence[str]) -> str:
+    """'T3, T4', 'T3, T4, T5, T6 and 2 more' (at most :data:`_SUPPLY_IDS` named)."""
+    shown = list(ids[:_SUPPLY_IDS])
+    more = len(ids) - len(shown)
+    return ", ".join(shown) + (f" and {more} more" if more else "")
+
+
+def _groups_text(groups: DigGroups) -> str:
+    """'S1 foundation pit: T3, T4; S3 borrow strip: T5, T6' (at most :data:`_SUPPLY_GROUPS`
+    structures named, then 'digs of 2 more structures')."""
+    parts = [f"{label}: {_ids_text(ids)}" for label, ids in groups[:_SUPPLY_GROUPS]]
+    rest = len(groups) - _SUPPLY_GROUPS
+    if rest > 0:
+        parts.append(f"digs of {_plural(rest, 'more structure')}")
+    return "; ".join(parts)
+
+
+def _sources_text(groups: DigGroups, digs: Sequence[Task]) -> str:
+    """:func:`_groups_text`, with '; an m2 strip counts 0.2 m' when a strip is among them."""
+    strips = any(is_strip(d) for d in digs)
+    return _groups_text(groups) + (f"; an m2 strip counts {qty(STRIP_DEPTH_M)} m" if strips else "")
+
+
+def _feeds(source: Task, target: Structure | None, pile: bool, no_m3: bool,
+           owners: Mapping[str, Structure | None]) -> bool:
+    """Whether ``source`` can supply a haul into ``target``: a dig in m3 always; an m2 strip
+    when it serves the target itself (a haul lane's grading spoil moved along the lane), when
+    the haul fills a pile (road grading spoil to a stockpile, strip spoil to a dump zone) or
+    when the graph digs nothing in m3 (a berm "built from the hardstand's strip spoil"). A
+    berm built from pit spoil is not supplied by the haul lane's grading."""
+    if is_dig(source):
+        return True
+    if not is_strip(source):
+        return False
+    if no_m3 or pile:
+        return True
+    owner = owners.get(source.id)
+    return target is not None and owner is not None and owner.id == target.id
+
+
+def supply_report(req: Requirements, graph: TaskGraph) -> list[Supply]:
+    """One :class:`Supply` per haul of ``graph`` (:func:`~moonwright.pipeline.rates.is_haul`,
+    graph order), or [] when the graph has no source at all (no
+    :func:`~moonwright.pipeline.rates.is_dig` nor :func:`~moonwright.pipeline.rates.is_strip`
+    task): its hauls carry material from outside the plan, which is not judged. Predecessors
+    are transitive ``after`` edges through any task
+    (:func:`~moonwright.pipeline.rates.ancestors`; an unknown id is skipped, a cycle
+    tolerated: both are reported by their own checks)."""
+    pool = list({t.id: t for t in graph.tasks if is_dig(t) or is_strip(t)}.values())
+    if not pool:
+        return []
+    no_m3 = not any(is_dig(t) for t in pool)
+    before = ancestors(graph)
+    owners = {t.id: _owner(req, t) for t in pool}
+    hauls = list({t.id: t for t in graph.tasks if is_haul(t)}.values())
+    targets = {h.id: _haul_target(req, h) for h in hauls}
+    keys = {h.id: (targets[h.id].id if targets[h.id] is not None else h.zone) for h in hauls}
+    out: list[Supply] = []
+    for h in hauls:
+        target = targets[h.id]
+        pile = target is None or stockpile_like(target)
+        placed = _placed_body(target)
+        mine = before.get(h.id, set()) - {h.id}
+        sources = [t for t in pool if t.id != h.id and _feeds(t, target, pile, no_m3, owners)]
+        digs = tuple(t for t in sources if t.id in mine)
+        feeders = [t for t in sources if t.id not in mine and h.id not in before.get(t.id, set())]
+        out.append(Supply(
+            haul=h,
+            target=(f"{target.id} ({_type_words(target)})" if target is not None
+                    else f"zone {h.zone}"),
+            key=keys[h.id],
+            pile=pile,
+            digs=digs,
+            hauls=tuple(t for t in hauls if t.id in mine and keys[t.id] == keys[h.id]),
+            dug_by=_dig_groups(req, digs, owners, target, placed),
+            feeders=_dig_groups(req, feeders, owners, target, placed),
+            more=_dig_groups(req, [t for t in feeders if is_dig(t)], owners, target, placed),
+        ))
+    return out
+
+
+def supply_advisories(req: Requirements, graph: TaskGraph) -> list[str]:
+    """``supply:<structure>: ...`` for every structure whose hauls together move more than the
+    sources before them make available (beyond :data:`SUPPLY_SLACK` plus
+    :data:`SUPPLY_SLACK_M3`), summed per target rather than along precedence chains, so the
+    same parts read the same chained or in parallel: ``supply:S2: its hauls (T5 150 m3, T6 150
+    m3) move 300 m3, more than the 125.7 m3 the digs before them remove (S1 landing pad: T3,
+    T4)``. Often the brief's own arithmetic (a berm "built from pad spoil" whose prism holds
+    more than the pad yields: landing_pad's 300 m3 after 125.7 m3 of bowl), so a note for the
+    trace and the repair prompt, whose header says to keep the body's m3 and only wait for
+    more of the digs that feed it; never a conflict. Not for a pile (a stockpile-like
+    structure or an unclaimed zone: whatever is hauled there) nor for a structure one of
+    whose hauls is a ``supply:<haul>`` conflict (the verdict says it). Meant for a whole
+    plan, like the conflict: the task-graph stage does not call it on a replan's remaining
+    graph."""
+    report = supply_report(req, graph)
+    if not report:
+        return []
+    groups: dict[str, list[Supply]] = {}
+    for s in report:
+        groups.setdefault(s.key, []).append(s)
+    order = {t.id: i for i, t in reversed(list(enumerate(graph.tasks)))}
+    out: list[str] = []
+    for key, group in groups.items():
+        if group[0].pile or any(s.unsupplied for s in group):
+            continue
+        digs = sorted({d.id: d for s in group for d in s.digs}.values(), key=lambda d: order[d.id])
+        owners = {d.id: _owner(req, d) for d in digs}
+        hauled = sum(s.haul.quantity or 0.0 for s in group)
+        dug = sum(supply_m3(d) for d in digs)
+        if hauled <= dug * SUPPLY_SLACK + SUPPLY_SLACK_M3:
+            continue
+        target = _haul_target(req, group[0].haul)
+        listing = _ids_text([f"{s.haul.id} {qty(s.haul.quantity or 0.0)} m3" for s in group])
+        sources = _sources_text(_dig_groups(req, digs, owners, target, _placed_body(target)), digs)
+        out.append(f"supply:{key}: its hauls ({listing}) move {qty(hauled)} m3, more than the "
+                   f"{qty(dug)} m3 the digs before them remove ({sources})")
+    return out
+
+
+def _check_supply(req: Requirements, graph: TaskGraph) -> _Group | None:
+    gaps = [s for s in supply_report(req, graph) if s.unsupplied]   # graph order
+    if not gaps:
+        return None
+    details = []
+    shared: dict[tuple[bool, DigGroups], list[str]] = {}   # hauls the same digs could feed
+    for s in gaps:
+        h = s.haul
+        where = f" to {s.target}" if s.target.startswith("zone ") else f" for {s.target}"
+        if s.waits_for_no_dig:
+            details.append(f"{h.id} hauls {qty(h.quantity or 0.0)} m3{where} but waits for no "
+                           "excavation, so it could start before any material is dug")
+        else:
+            chain = (f", {qty(s.hauled_m3)} m3 with the hauls before it "
+                     f"({_ids_text([t.id for t in s.hauls])})," if s.hauls else "")
+            details.append(f"{h.id} hauls {qty(h.quantity or 0.0)} m3{where}{chain} but the digs "
+                           f"before it remove only {qty(s.dug_m3)} m3 "
+                           f"({_sources_text(s.dug_by, s.digs)}), so it could start before all "
+                           "of its material is dug")
+        shared.setdefault((s.waits_for_no_dig, s.feeders if s.waits_for_no_dig else s.more),
+                          []).append(h.id)
+    clauses = []
+    for (none, feeders), hauls in shared.items():
+        it = "it" if len(hauls) == 1 else "them"
+        if none:
+            where = (f" ({_groups_text(feeders)})" if feeders
+                     else f" (every dig waits for {it} now: put the digs first)")
+            clauses.append(f"make {_join_and(hauls)} wait for the digs that supply {it}{where}")
+        else:
+            clauses.append(f"make {_join_and(hauls)} wait for more of the digs that supply {it} "
+                           f"({_groups_text(feeders)})")
+    return _Group(
+        ids=[f"supply:{s.haul.id}" for s in gaps],
+        details=details,
+        hint="A haul cannot start before its material is dug: " + "; ".join(clauses) + _SUPPLY_TAIL,
+    )
 
 
 # ----------------------------------------------------------------------------- quantities
@@ -1075,7 +1448,7 @@ def brief_evidence(brief: str | None, phase: str, structure: Structure,
 
     rivals = [s for s in others if s.id != structure.id]
     best: tuple[tuple[int, int], str] | None = None
-    for line in brief.splitlines():
+    for line in brief_lines(brief):   # a hard-wrapped entry reads whole
         low = line.lower()
         words = set(_WORDS.findall(low))
         key = _names(low, words, structure)

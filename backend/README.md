@@ -339,6 +339,85 @@ cut at 16,384 tokens, and the validator's energy check ignored the transit CP-SA
   strip of its 20 m pad no longer covers the 12 m floor), while every `lazy` / `split` graph
   covers its volumes and is in scope (`docs/eval-briefs.md`).
 
+## Pipeline notes (phase 3g)
+
+Live run 2 showed CP-SAT verifying plans that haul before anything is dug (it schedules only the
+edges it is given), and an in-scope metric that read the structuring model's slips as the brief.
+
+* **Supply order is a conflict** (`pipeline/validate.py: supply:<haul>`, `supply_report`). A haul
+  is a hauler task in m3 (`rates.is_haul`); its target is the structure of the zone it names (the
+  coverage contract: a haul's zone is where the material is placed), or a pile (a stockpile-like
+  structure, a zone no structure claims). Its sources are every dig in m3 that is no rehandle
+  (`rates.is_dig`) and an m2 strip or grade (`rates.is_strip`) where its spoil can be what the
+  haul moves: into the strip's own structure (a haul lane's grading), into a pile, or in a graph
+  that digs nothing in m3 (a berm "built from the hardstand's strip spoil"); a strip makes at
+  most 0.2 m of its area available (`rates.supply_m3`). A graph without any source is not judged.
+  A haul is the conflict when it waits (transitively, through any task) for no source (`T7 hauls
+  280 m3 for S2 (plume berm) but waits for no excavation, so it could start before any material
+  is dug`; hint `make T7 and T8 wait for the digs that supply them (S1 foundation pit: T3, T4; S3
+  borrow strip: T5, T6)`), or, into a designed body, when it moves with the hauls into that body
+  before it more than 1.25 x (+1 m3) what its sources make available while a dig in m3 that
+  neither precedes nor waits for it could supply the rest (a 300 m3 berm haul after its own 15 m3
+  key-trench cut: `make T7 wait for more of the digs that supply it (S1 landing pad: T2, T3)`).
+  Sources are grouped by structure, a placed body's own dig (its key trench) last; ids follow the
+  graph. The hint closes with `a haul part may wait for only the dig parts that remove what it
+  moves, so split hauls to keep both chains short.`, and the horizon_path hint now says never to
+  drop a dig-to-haul edge. After volume, before energy; whole plans only:
+  `validate_graph(..., supply=None)` follows the volume switch (`True` / `False` override).
+* **Supply balance is an advisory** (`validate.supply_advisories`, on the task-graph / repair
+  step of a whole plan): when every source already precedes a body's hauls and they still move
+  more than those make available, the plan stands and the note says so once per structure,
+  summed per target (chained and parallel parts read the same; a rehandle through a stockpile
+  is not counted twice; a pile is never judged): `supply:S2: its hauls (T5 150 m3, T6 150 m3)
+  move 300 m3, more than the 125.7 m3 the digs before them remove (S1 landing pad: T3, T4)`.
+  Usually the brief's own arithmetic (a berm prism larger than its source's spoil), so the
+  repair prompt's ADVISORIES header says a supply note keeps the body's m3 and is answered only
+  by waiting for more of the digs that feed it, never by a cut or an invented dig.
+* **Prompts** (`llm/prompts.py`). Task graph: "Every haul waits (`after`) for the dig that
+  produces its material." Repair, `supply:<haul>`: add `after` edges from the digs that supply
+  it; to hold a deadline split hauls so each part waits only for the dig part feeding it and dig
+  separate sources on separate excavators in parallel; never delete a dig-to-haul edge to
+  shorten a chain. Structure: `lifts` is the number of compaction layers, only when the brief
+  states a count. Paid for inside the 5,500-character caps.
+* **Lifts are corrected to the brief** (`rates.lifts`, `stated_lifts`, `with_judged_lifts`,
+  `structure.correct_lifts`). The count is the one the structure's own entry states (`tags.entry_line`
+  over `tags.brief_lines`, so a hard-wrapped entry reads whole; headings skipped): "in three
+  lifts", "two compaction lifts", "compacted in 2 layers" (layers only where something is
+  compacted, never "sintered in two layers" nor "a two-layer shield"), the smaller count of a
+  range ("2-3 lifts" -> 2), "in three 30-cm lifts", "lifts: 3"; an entry that names lifts
+  without a readable count keeps a recorded count of 1 to 10; otherwise 1. The structure stage
+  writes that count into the requirements (the task-graph model never sees the brief) and says
+  so in an amber note: `structure S1: lifts 4 -> 1: the brief's entry for S1 states no lift
+  count we can read` (crater_ramp's "four 10 m segments"), `lifts 0.2 -> 1` (access_road's "a
+  20 cm compacted lift"), `lifts none -> 2` (small_fleet_long_berm). Without a brief, or a type
+  no line names, the recorded count stands.
+* **Placed bodies in "in scope"** (`rates.base_width_stated`, `_work_area`). A berm is judged for
+  compaction on the base width the brief states (its entry, or the line that states its recorded
+  length and height: Lightning typed depleted_excavators' dust berm "borrow_strip"), else on the
+  least base it can have, as wide as it is high (length x height): access_road's "20 m long, 1.5
+  m high" berm is 30 m2, not the 60 m2 of the 1:1 guess, and a 10 m2 pass over a 40 m x 2 m berm
+  is still a gap. Volume judgments are unchanged.
+* **Brief budget** (`scripts/brief_budget.py`). A haul waits for its sources' digs or strips
+  wherever the registry lists them, `serial` chains sources first (`fill_order`), and the
+  phase-order bound (`LB`) reads them in that order (small_fleet_long_berm 60 -> 112 h,
+  shielding_mound 28 -> 52 h). `LB` bounds plans that keep each phase whole, as the canonical
+  graphs do; a plan that pipelines dig and haul parts can finish below it. road_and_pad's
+  windrows ("grading spoil pushed") are an excavator m2 pass, not a haul. Every eval brief's
+  lazy / split / fine / serial / shrunk graph passes the supply check.
+* **Rescoring a saved eval** (`scripts/rescore_eval.py DIR [--out CSV]`): `in_scope`,
+  `min_volume_share`, `min_area_share` and the supply verdicts recomputed from every row's saved
+  plan with the current code (no model call; an unreadable plan counts as none); a per-condition
+  table, the rows that changed, and `eval.rescored.csv`. Run 2:
+
+  | condition | verified | verified in scope, before -> after | of those, supply clean | verified, rejected by supply | verified, supply note |
+  | --- | --- | --- | --- | --- | --- |
+  | `ultra/loop_on` | 56 of 66 | 49 -> 52 | 36 | 17 of 56 | 10 of 56 |
+  | `super/loop_on` | 51 of 66 | 38 -> 45 | 31 | 14 of 51 | 4 of 51 |
+
+  The in-scope gains are crater_ramp (lifts), access_road's berm (30 m2), one_surveyor's and
+  two_pads' width-less berms compacted over at least length x height; no `min_volume_share`
+  moved.
+
 ## Evaluation flags
 
     uv run moonwright eval --briefs examples/eval --repeat 3 --loop both --models ultra,super --thinking auto \
@@ -351,6 +430,7 @@ cut at 16,384 tokens, and the validator's energy check ignored the transit CP-SA
       --markdown out/llm_log_report.md --out out/llm_log_report.json
     uv run python scripts/brief_budget.py --all examples/eval --graphs lazy,split --markdown
     uv run python scripts/llm_schedule_check.py out/landing_pad.plan.json --repeat 3 --out out/direct.json
+    uv run python scripts/rescore_eval.py ../docs/eval/2026-10-23-live-eval-run2 --out out/run2.rescored.csv
 
 `--workers N` runs brief x repeat jobs on a thread pool (a job structures its brief once and runs
 every condition from that requirements object) and flushes each row to the CSV as it completes (the

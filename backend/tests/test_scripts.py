@@ -409,3 +409,101 @@ def test_simulate_prints_replan_advice_in_absolute_hours(landing_pad_plan, tmp_p
     assert final["payload"]["time_base"] == "relative"
     assert final["payload"]["suggestions_time_base"] == "absolute"
     assert final["payload"]["suggestions"] == [s]
+
+
+# --------------------------------------------------------------------------- rescore_eval.py
+class TestRescoreEval:
+    """``rescore_eval.py`` on a tiny synthetic eval directory: a crater ramp verified with each
+    10 m segment compacted once (out of scope under the recorded "lifts: 4", in scope under
+    the brief), the live habitat plan whose berm hauls wait for no dig, a run that kept no plan,
+    a row whose plan file is gone and one whose plan file is cut short."""
+
+    COLUMNS = ("brief", "condition", "repeat", "success", "in_scope", "min_volume_share",
+               "min_area_share", "plan_path")
+
+    @staticmethod
+    def ramp_plan() -> PlanResult:
+        from moonwright.schemas import Requirements, TaskGraph
+
+        brief = (EXAMPLES_DIR.parent / "eval" / "crater_ramp.md").read_text()
+        req = Requirements.model_validate({
+            "structures": [{"id": "S1", "type": "access_ramp", "zone": "Z1", "length_m": 40,
+                            "width_m": 5, "depth_m": 1.2, "lifts": 4}],
+            "robots": [{"id": "EX1", "type": "excavator", "battery_wh": 5000},
+                       {"id": "CP1", "type": "compactor", "battery_wh": 3500}],
+            "horizon_h": 192, "source_brief": brief})
+        tasks = [{"id": "D1", "name": "Excavate ramp", "robot_type": "excavator",
+                  "duration_h": 35, "energy_wh": 3840, "zone": "Z1", "structure": "S1",
+                  "quantity": 240, "unit": "m3"}]
+        tasks += [{"id": f"C{i}", "name": f"Compact segment {i}", "robot_type": "compactor",
+                   "duration_h": 2, "energy_wh": 200, "zone": "Z1", "structure": "S1",
+                   "quantity": 50, "unit": "m2", "after": ["D1"]} for i in range(1, 5)]
+        return PlanResult(requirements=req, task_graph=TaskGraph.model_validate({"tasks": tasks}),
+                          success=True)
+
+    @staticmethod
+    def habitat_plan() -> PlanResult:
+        data = json.loads((Path(__file__).parent / "data" / "habitat_berm_live_plan.json")
+                          .read_text())
+        return PlanResult.model_validate({"requirements": data["requirements"],
+                                          "task_graph": data["task_graph"], "success": True})
+
+    def eval_dir(self, tmp_path: Path) -> Path:
+        plans = tmp_path / "plans"
+        plans.mkdir(parents=True)
+        (plans / "ramp.plan.json").write_text(self.ramp_plan().model_dump_json())
+        (plans / "habitat.plan.json").write_text(self.habitat_plan().model_dump_json())
+        (plans / "cut.plan.json").write_text(self.habitat_plan().model_dump_json()[:500])
+        rows = [
+            ["crater_ramp", "ultra/loop_on", "1", "True", "False", "1.0", "0.25",
+             "plans/ramp.plan.json"],
+            ["habitat_berm_tight_horizon", "ultra/loop_on", "1", "True", "True", "1.0", "1.0",
+             "plans/habitat.plan.json"],
+            ["crater_ramp", "super/loop_on", "1", "False", "False", "", "", ""],
+            ["habitat_berm_tight_horizon", "super/loop_on", "1", "True", "True", "1.0", "1.0",
+             "plans/gone.plan.json"],
+            ["habitat_berm_tight_horizon", "super/loop_on", "2", "True", "False", "1.0", "0.5",
+             "plans/cut.plan.json"],
+        ]
+        lines = [",".join(self.COLUMNS)] + [",".join(r) for r in rows]
+        (tmp_path / "eval.csv").write_text("\n".join(lines) + "\n")
+        return tmp_path
+
+    def test_rescores_scope_and_supply_per_condition(self, tmp_path, capsys):
+        import csv
+
+        module = load_script("rescore_eval")
+        source = self.eval_dir(tmp_path / "run")
+        out = tmp_path / "elsewhere" / "rescored.csv"
+        assert module.main([str(source), "--out", str(out)]) == 0
+        printed = capsys.readouterr().out
+        assert ("| `ultra/loop_on` | 2 | 2 (100%) | 1 (50%) -> 2 (100%) | 1 (50%) | 1 of 2 | "
+                "0 of 2 | 0 |") in printed
+        assert ("| `super/loop_on` | 3 | 2 (67%) | 1 (33%) -> 1 (33%) | 1 (33%) | 0 of 2 | "
+                "0 of 2 | 3 |") in printed
+        assert "in_scope changed in 1 row(s):" in printed
+        assert "crater_ramp ultra/loop_on #1: False -> True (min_area_share 0.25 -> 1.0)" in printed
+        assert "verified plans the supply check rejects: 1" in printed
+        assert "habitat_berm_tight_horizon ultra/loop_on #1: supply:T7, supply:T8" in printed
+        assert not (source / "eval.rescored.csv").exists()
+        rows = list(csv.DictReader(out.open()))
+        assert list(rows[0]) == [*self.COLUMNS, "in_scope_before", "min_volume_share_before",
+                                 "min_area_share_before", "supply_conflicts", "supply_hauls",
+                                 "supply_advisories", "scope_gaps"]
+        ramp, habitat, unplanned, gone, cut = rows
+        assert (ramp["in_scope_before"], ramp["in_scope"]) == ("False", "True")
+        assert (ramp["min_area_share_before"], ramp["min_area_share"]) == ("0.25", "1.0")
+        assert (habitat["supply_conflicts"], habitat["supply_hauls"]) == ("2", "T7 T8")
+        assert habitat["in_scope"] == "True" and habitat["scope_gaps"] == ""
+        # rows without a readable plan keep their values
+        assert (unplanned["in_scope"], unplanned["supply_conflicts"]) == ("False", "0")
+        assert (gone["in_scope"], gone["min_area_share"]) == ("True", "1.0")
+        assert (cut["in_scope"], cut["min_area_share"]) == ("False", "0.5")   # unreadable: kept
+
+    def test_writes_next_to_the_input_by_default_and_needs_a_csv(self, tmp_path, capsys):
+        module = load_script("rescore_eval")
+        source = self.eval_dir(tmp_path / "run")
+        assert module.main([str(source / "eval.csv")]) == 0
+        assert (source / "eval.rescored.csv").is_file()
+        assert module.main([str(tmp_path / "nowhere")]) == 2
+        assert "no eval CSV" in capsys.readouterr().err

@@ -1,7 +1,9 @@
 """Tests for the phase-3e prompt contract (``moonwright.llm.prompts``): the structure prompt's
 example hygiene and ``min_<dimension>_m`` rule, the volume rules the task-graph and repair
 prompts share with the validator, the repair prompt's per-conflict edits, the advisories
-section of :func:`repair_messages`, and a length snapshot so a later edit sees its growth."""
+section of :func:`repair_messages`, and a length snapshot so a later edit sees its growth.
+Phase 3g adds the supply-order rule of the task-graph prompt, the repair prompt's
+``supply:<haul>`` edit and the structure prompt's definition of ``lifts``."""
 
 from __future__ import annotations
 
@@ -30,9 +32,10 @@ BRIEFS = sorted((EXAMPLES / "briefs").glob("*.md")) + sorted((EXAMPLES / "eval")
 # phase-3d lengths (chars); every phase-3e prompt stays within about 10 % of them and under
 # the 5,500-character cap test_coverage_ops holds the three planning prompts to
 PHASE_3D = {"STRUCTURE_SYSTEM": 3601, "TASKGRAPH_SYSTEM": 5219, "REPAIR_SYSTEM": 4989}
-# the snapshot: prompt text without the rate table (which ``rates.py`` owns), +-2 %
-SNAPSHOT = {"STRUCTURE_SYSTEM": 3953, "COVERAGE_RULES": 1974, "TASKGRAPH_SYSTEM": 4493,
-            "REPAIR_SYSTEM": 4616}
+# the snapshot: prompt text without the rate table (which ``rates.py`` owns), +-2 %; phase 3g
+# paid for its rules (supply order, the supply edit, lifts) with cuts, so the totals barely move
+SNAPSHOT = {"STRUCTURE_SYSTEM": 3949, "COVERAGE_RULES": 1937, "TASKGRAPH_SYSTEM": 4455,
+            "REPAIR_SYSTEM": 4605}
 
 REQ = Requirements(
     site=Site(zones=[Zone(id="Z1", center=(10, 10)), Zone(id="Z2", center=(30, 10))]),
@@ -105,12 +108,23 @@ def test_structure_prompt_records_the_smallest_size_the_brief_allows():
     assert "the plain key holds the full size and min_<dimension>_m beside it" in text
     assert '"diameter_m": 24, "min_diameter_m": 16' in text
     assert "never invent a minimum" in text
-    # the compaction lifts and a pit's wall slope, which the volume check and the eval's area
-    # check read (a 1:1 sloped pit priced with vertical walls rejected the right dig)
-    assert 'lifts and wall_slope ("1:1") when stated' in text
+    # a pit's wall slope, which the volume check reads (a 1:1 sloped pit priced with vertical
+    # walls rejected the right dig); the lifts have a rule of their own (below)
+    assert 'wall_slope ("1:1") when stated' in text
     # stockpiles and spoil piles: explicit now, the phase-3c sentence kept for its tests
     assert "a stockpile described only by its position has none" in text
     assert "a stockpile or spoil pile gets a size only when the brief states one" in text
+
+
+def test_structure_prompt_defines_lifts_as_a_stated_count_of_compaction_layers() -> None:
+    """Lightning recorded crater_ramp's "in four 10 m segments" as 4 lifts and access_road's
+    "a 20 cm compacted lift" as 0.2; the eval's area check now reads the brief's own count, and
+    the prompt says what a lift count is."""
+    text = flat(STRUCTURE_SYSTEM)
+    assert ("lifts: the number of compaction layers, only when the brief states a count "
+            '("in three lifts" -> 3); segments along the length are not lifts, and a thickness '
+            '("a 20 cm lift") is not a count.') in text
+    assert "lifts and wall_slope" not in text
 
 
 # ----------------------------------------------------------------------------- volumes
@@ -142,6 +156,8 @@ def test_taskgraph_prompt_keeps_its_pricing_rule_and_shape():
     assert "Check with the table before answering" in text
     assert "Order: survey -> excavate -> haul -> grade/compact -> print/sinter -> inspect" in text
     assert "pi*(10 m)^2*0.4 m = 126 m3" in TASKGRAPH_SYSTEM and RATE_TABLE_TEXT in TASKGRAPH_SYSTEM
+    # phase 3g: the supply order the validator's supply:<haul> check holds a whole plan to
+    assert "Every haul waits (`after`) for the dig that produces its material." in text
     system, user = taskgraph_messages(REQ)
     assert system.startswith(TASKGRAPH_SYSTEM) and system.endswith(JSON_ONLY)
     assert user.startswith("REQUIREMENTS:\n")
@@ -170,6 +186,7 @@ REPAIR_EDITS = [
     ("volume:<structure>",
      ("add the missing m3 as excavator / hauler tasks (the hint says how much), never shrink "
       "the work")),
+    ("supply:<haul>", "add `after` edges from the digs that supply it"),
     ("missing:<task> / changed:<task> / locked:<task>", "keep those tasks as they were"),
 ]
 
@@ -185,9 +202,17 @@ def test_repair_prompt_says_what_each_conflict_kind_needs():
     # every id a repair can be handed stays an unbroken token of the raw prompt
     for cid in ("energy:<robot>", "energy:<type>", "energy_task:<task>", "horizon_path:<chain>",
                 "robot:<robot>", "zone:<zone>", "precedence:<a>-><b>", "capability:<task>",
-                "scope:<structure>", "quantity:<task>", "volume:<structure>", "missing:<task>",
-                "changed:<task>", "locked:<task>"):
+                "scope:<structure>", "quantity:<task>", "volume:<structure>", "supply:<haul>",
+                "missing:<task>", "changed:<task>", "locked:<task>"):
         assert cid in REPAIR_SYSTEM, cid
+    # phase 3g: how a supply verdict keeps a deadline without losing the order (live, the
+    # repair answering a horizon core deleted the berm hauls' edges to their digs)
+    supply = text[text.index("supply:<haul>"):text.index("missing:<task>")]
+    for part in ("to hold a deadline",
+                 "split hauls so each part waits only for the dig part feeding it",
+                 "dig separate sources on separate excavators in parallel",
+                 "never delete a dig-to-haul edge to shorten a chain"):
+        assert part in supply, part
     # the honest tone: measured figures are kept, a cut needs the brief's permission, and no
     # conflict kind is answered with a trim
     assert "The hint's figures are measured: keep them" in text

@@ -22,7 +22,7 @@ import type {
   Task,
   VerificationReceipt as ReceiptData,
 } from "@/lib/types";
-import { lastReceipt, scheduleReceipt, taskGraphPayload } from "@/lib/types";
+import { conflictPrefix, lastReceipt, scheduleReceipt, taskGraphPayload } from "@/lib/types";
 import {
   API_BASE,
   ApiError,
@@ -723,6 +723,16 @@ function retryGuidance(plan: PlanResult): { note: string; next: string } {
     return {
       note: "Edit the requirements or the brief, then plan again: the core above names the budget that does not fit.",
       next: "edit the requirements or the brief, then plan again.",
+    };
+  }
+  const conflicts = plan.failure?.conflicts ?? [];
+  if (conflicts.length > 0 && conflicts.every((c) => conflictPrefix(c) === "supply")) {
+    // phase 3g: the order of the work, not its scope: no edit of the requirements fixes it
+    return {
+      note: `Plan again: the verdict above names hauls that must wait for the digs that feed them${
+        plan.repairs === 0 ? "; with repair rounds on, Nemotron adds those edges itself" : ""
+      }.`,
+      next: "plan again for a graph that hauls after its digs.",
     };
   }
   return {

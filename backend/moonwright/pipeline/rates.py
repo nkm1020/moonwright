@@ -91,7 +91,29 @@ of phase 3e made exact:
 The eval's "in scope" is stricter than the conflict: every judged volume and every area of
 compaction and sintering (:func:`area_coverages`: footprint x :func:`lifts`) at
 :data:`IN_SCOPE_SHARE` or more (:func:`scope_gaps`), so a plan that verified after trimming
-the work 15-25 % is a re-scope, not a success in scope; an excess is no gap.
+the work 15-25 % is a re-scope, not a success in scope; an excess is no gap. Phase 3g made the
+area judge only what the brief states, as the volume does: the lift count is the one the
+structure's own entry in the brief states (:func:`lifts`, :func:`stated_lifts`: "in three
+lifts", "two compaction lifts", "compacted in 2 layers", the smaller of a range; the entry
+read whole when hard-wrapped; a recorded count kept when the entry names lifts without a
+count we can read), never "four 10 m segments" nor "a 20 cm compacted lift" (Lightning
+recorded both as lifts, 4 and 0.2, and a correct crater ramp read 25 %), and the structure
+stage writes that count into the requirements (:func:`with_judged_lifts`), so the planner
+compacts what the eval judges. A placed body is judged on the base width the brief states
+(:func:`base_width_stated`: its entry, or the line that states its length and height), never
+on the 1:1 section the volume check assumes nor on a width the structure stage copied from
+elsewhere; without one, on the least base it can have, as wide as it is high (length x
+height), so a sliver of compaction on a width-less berm is still a gap.
+
+Supply (phase 3g)
+-----------------
+:func:`is_dig` (an excavator task in m3 that is no :func:`rehandles`), :func:`is_strip` (one in
+m2: a surface layer, a source for the hauls it can feed), :func:`supply_m3` (what a source
+makes available: a dig's m3, a strip's area x :data:`STRIP_DEPTH_M`) and :func:`is_haul` (a
+hauler task in m3), with :func:`ancestors` (every task's transitive ``after``), are what the
+validator's ``supply:<haul>`` check and its balance advisory read
+(``moonwright.pipeline.validate``, "Supply order"): a haul waits for the digs that produce
+its material.
 
 Calibration
 -----------
@@ -111,7 +133,7 @@ import re
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 
-from moonwright.pipeline.tags import WORDS, entry_line, name_score, serving_tasks
+from moonwright.pipeline.tags import WORDS, brief_lines, entry_line, name_score, serving_tasks
 from moonwright.schemas import (
     MAX_DURATION_H,
     MAX_ENERGY_WH,
@@ -122,7 +144,7 @@ from moonwright.schemas import (
     Unit,
     to_mwh,
 )
-from moonwright.text import join_and, pct, qty
+from moonwright.text import join_and, pct, plural, qty
 
 ADVISORY_THRESHOLD = 0.5   # relative deviation of the model's estimate that earns an advisory
 VOLUME_LOW = 0.7           # volume:<structure> when the planned m3 are below this share of the
@@ -342,6 +364,38 @@ _WALL_RATIO_MAX = 4.0      # a ratio up to 4:1 reads as a wall slope without the
 #                            a flatter one ("graded at 1:50") is a surface gradient
 _LIFT_KEYS = ("lifts", "lift_count", "compaction_lifts")
 _MAX_LIFTS = 10
+_COUNT_WORDS = {"one": 1, "single": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
+                "seven": 7, "eight": 8, "nine": 9, "ten": 10}
+_COUNT = r"(?:\d+|" + "|".join(_COUNT_WORDS) + r")"
+# a count of compaction layers the brief states: "in three lifts", "three compacted lifts",
+# "two compaction lifts", "in one lift", "two 15 cm lifts", "in three 30-cm lifts", "a two-lift
+# berm", "compacted in 2 layers". The count stands right before the noun (a thickness and a
+# few adjectives may sit between), so "a 20 cm compacted lift" (a thickness, no count) and "in
+# four 10 m segments" (no lift) state none; a decimal ("0.2") is never a count, and a range
+# ("2-3 lifts", "3 to 4 lifts") states its smaller count, the smallest size the brief allows.
+# "layer(s)" is a count of lifts only in a clause that compacts and never in one that sinters
+# or prints ("sintered in two layers" is the printer's work), nor as a hyphenated compound
+# ("a two-layer regolith shield")
+_LIFT_COUNT_RE = re.compile(
+    rf"(?<![\w.])(?P<n>{_COUNT})(?!\.\d)"
+    rf"(?:\s*(?:-|\u2013|to|or)\s*(?P<m>{_COUNT})(?!\.\d))?"
+    r"(?:[\s-]+\d+(?:\.\d+)?[\s-]*(?:cm|mm|m)\b)?"
+    r"(?:[\s-]+(?:compacted|compaction|full|separate|successive|equal|even|horizontal|thin"
+    r"|uniform|individual|distinct|placed|fill|regolith|loose|bedding|base))*"
+    r"(?P<sep>[\s-]+)(?P<noun>lifts?|layers?)\b",
+    re.IGNORECASE)
+_LIFTS_KEY_RE = re.compile(rf"\blifts?\s*[:=]\s*(?P<n>{_COUNT})(?![\w.])", re.IGNORECASE)  # "lifts: 3"
+_LIFT_MENTION_RE = re.compile(r"\b(?:lifts?|layers?)\b", re.IGNORECASE)
+_COMPACTS_RE = re.compile(r"\b(?:compact|tamp|roll|consolidat)", re.IGNORECASE)
+_SURFACES_RE = re.compile(r"\b(?:sinter|print|melt|pav|fus)", re.IGNORECASE)
+_LIFT_CLAUSE_SPLIT = re.compile(r"\.(?=\s|$)|[;,()]")   # keeps "0.5 m" whole
+# a placed body's base width as its entry states it: a figure in a clause that says width or
+# base ("4 m wide at the base", "4 m at the base", "a base 3.5 m wide"), never the clause of a
+# key trench or a crest ("on a key trench 1.2 m wide", "the crest sintered 1 m wide")
+_WIDTH_CLAUSE_SPLIT = re.compile(r"\.(?=\s|$)|[,;()]|\band\b")
+_WIDTH_WORD_RE = re.compile(r"\b(?:wide|width|base|broad|across)\b", re.IGNORECASE)
+_NOT_BASE_RE = re.compile(r"\b(?:trench|crest|key)\b", re.IGNORECASE)
+_FIGURE_RE = re.compile(r"(?<![\d.])(\d+(?:\.\d+)?)\s*(cm|m)\b", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -874,7 +928,7 @@ class VolumeCoverage:
         return text
 
 
-def _ancestors(graph: TaskGraph) -> dict[str, set[str]]:
+def ancestors(graph: TaskGraph) -> dict[str, set[str]]:
     """Every task's transitive predecessors by its ``after`` edges (an unknown id is
     skipped and a cycle tolerated: the validator reports both on its own)."""
     parents = {t.id: list(t.after) for t in graph.tasks}
@@ -910,6 +964,38 @@ def _digs(task: Task | None) -> bool:
     return task is not None and task.robot_type == "excavator" and not rehandles(task)
 
 
+def is_dig(task: Task) -> bool:
+    """Whether a task digs out material a haul can carry: an excavator task with a positive
+    quantity in m3 that is no :func:`rehandles` (spoil bladed, pushed or backfilled was dug
+    by another task). The supply check's dig, a source for every haul."""
+    return task.unit == "m3" and (task.quantity or 0.0) > 0 and _digs(task)
+
+
+def is_strip(task: Task) -> bool:
+    """Whether a task strips or grades a surface layer off: an excavator task with a positive
+    quantity in m2 that is no :func:`rehandles` (the rate table's "strip or grade a surface
+    layer up to 0.2 m"). The supply check counts its spoil only for the hauls it can feed:
+    those into its own structure or into a pile, or any haul of a graph that digs nothing
+    in m3 (``moonwright.pipeline.validate``, "Supply order")."""
+    return task.unit == "m2" and (task.quantity or 0.0) > 0 and _digs(task)
+
+
+def supply_m3(task: Task) -> float:
+    """The m3 a source makes available to the hauls after it: a dig's quantity, a strip's
+    area x :data:`STRIP_DEPTH_M` (the most the rate table's m2 row removes, so a 144 m2 strip
+    yields at most 28.8 m3); 0 for any other task."""
+    if is_dig(task):
+        return task.quantity or 0.0
+    if is_strip(task):
+        return (task.quantity or 0.0) * STRIP_DEPTH_M
+    return 0.0
+
+
+def is_haul(task: Task) -> bool:
+    """Whether a task hauls material: a hauler task with a positive quantity in m3."""
+    return task.robot_type == "hauler" and task.unit == "m3" and (task.quantity or 0.0) > 0
+
+
 def volume_coverages(req: Requirements, graph: TaskGraph) -> list[VolumeCoverage]:
     """One :class:`VolumeCoverage` per structure and shape (:func:`dims_volumes`, read with
     the brief and the constraints of ``req``) that has at least one task of the shape's robot
@@ -930,7 +1016,7 @@ def volume_coverages(req: Requirements, graph: TaskGraph) -> list[VolumeCoverage
     for sid, tasks in served.items():
         for t in tasks:
             serves.setdefault(t.id, set()).add(sid)
-    before = _ancestors(graph)
+    before = ancestors(graph)
     by_id = {t.id: t for t in graph.tasks}
     dug = {sid for sid, found in shapes.items() if any(x.phase == "excavation" for x in found)}
     out: list[VolumeCoverage] = []
@@ -1064,47 +1150,216 @@ class AreaCoverage:
         return self.area_m2 / self.need_m2
 
 
-def lifts(structure: Structure) -> int:
-    """How many lifts the brief compacts the structure in: a ``lifts`` (``lift_count``,
-    ``compaction_lifts``) extra of 1 to 10, else 1."""
+def _count_of(word: str) -> int:
+    low = word.lower()
+    return _COUNT_WORDS[low] if low in _COUNT_WORDS else int(low)
+
+
+def _clause_lifts(clause: str) -> int | None:
+    """The lift count one clause states (:data:`_LIFT_COUNT_RE`, then "lifts: 3"), or None."""
+    for m in _LIFT_COUNT_RE.finditer(clause):
+        if m["noun"].lower().startswith("layer") and (
+                "-" in m["sep"] or not _COMPACTS_RE.search(clause)
+                or _SURFACES_RE.search(clause)):
+            continue   # a two-layer compound, or layers nothing compacts (a sintered surface)
+        n = _count_of(m["n"])
+        return min(n, _count_of(m["m"])) if m["m"] else n
+    key = _LIFTS_KEY_RE.search(clause)
+    return _count_of(key["n"]) if key else None
+
+
+def stated_lifts(line: str | None) -> int | None:
+    """The count of compaction lifts a brief line states (:data:`_LIFT_COUNT_RE`: digits or
+    one to ten before "lift(s)", or before "layer(s)" in a clause that compacts; the smaller
+    of a range), the first one when it states several; None when it states none or a count
+    outside 1 to 10."""
+    for clause in _LIFT_CLAUSE_SPLIT.split(line or ""):
+        n = _clause_lifts(clause)
+        if n is not None:
+            return n if 1 <= n <= _MAX_LIFTS else None
+    return None
+
+
+def recorded_lifts(structure: Structure) -> tuple[str, float] | None:
+    """``(key, value)`` of the first numeric ``lifts`` / ``lift_count`` / ``compaction_lifts``
+    extra the structure stage recorded, whatever its value (``("lifts", 0.2)`` for "a 20 cm
+    compacted lift"); None when none is numeric."""
+    extras = structure.model_extra or {}
+    for key in _LIFT_KEYS:
+        v = extras.get(key)
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            return key, float(v)
+    return None
+
+
+def _recorded_count(structure: Structure) -> int | None:
+    """The first ``lifts`` / ``lift_count`` / ``compaction_lifts`` extra of 1 to 10, rounded;
+    None without one."""
     extras = structure.model_extra or {}
     for key in _LIFT_KEYS:
         v = extras.get(key)
         if isinstance(v, (int, float)) and not isinstance(v, bool) and 1 <= v <= _MAX_LIFTS:
             return round(v)
+    return None
+
+
+def lifts(structure: Structure, req: Requirements | None = None) -> int:
+    """How many lifts the brief compacts the structure in. With the brief known
+    (``req.source_brief``) and the structure's own entry found in it
+    (:func:`~moonwright.pipeline.tags.entry_line`, read whole even when hard-wrapped), the
+    count that entry states (:func:`stated_lifts`); when it names lifts or layers without a
+    count we can read ("placed in 50 cm lifts, three in all"), a recorded count of 1 to 10
+    stands; otherwise 1: a recorded ``lifts`` the entry gives no ground for is not accepted
+    (seen live: crater_ramp's "in four 10 m segments" recorded as 4 lifts read a correct plan
+    as 25 % of its compaction, and access_road's "a 20 cm compacted lift" as 0.2). Without the
+    brief or an entry (older requirements, hand-made ones, a type no line of the brief names)
+    a ``lifts`` (``lift_count``, ``compaction_lifts``) extra of 1 to 10, else 1. The structure
+    stage writes this count into the requirements (:func:`with_judged_lifts`), so the planner
+    plans the count the eval judges."""
+    recorded = _recorded_count(structure)
+    line = entry_line(req.source_brief, structure) if req is not None and req.source_brief else None
+    if line is None:
+        return recorded or 1
+    stated = stated_lifts(line)
+    if stated is not None:
+        return stated
+    if recorded is not None and _LIFT_MENTION_RE.search(line):
+        return recorded
     return 1
 
 
-def _work_area(structure: Structure, req: Requirements | None) -> tuple[float, bool] | None:
-    """``(m2, placed)``: the area compaction and sintering treat on the smallest size the
-    brief allows (an ``area_m2`` extra; the floor of a dug bowl or box, the bottom when its
-    walls slope; a berm's base; a flat ``length_m`` x ``width_m`` or ``diameter_m`` surface)
-    and whether it is a placed body; None when the dimensions give none."""
+def lift_note(structure: Structure, req: Requirements) -> str | None:
+    """The correction of a structure's recorded lift count to the one compaction is planned
+    and judged with (:func:`lifts`), as the structure stage's warning reads it: "lifts 4 -> 1:
+    the brief's entry for S1 states no lift count we can read", "lifts 3 -> 2: the brief's
+    entry for S1 states 2 compaction lifts", "lifts none -> 2: the brief's entry for BERM
+    states 2 compaction lifts"; None when the record stands (it agrees, or nothing is recorded
+    and the brief states no count above one) or the brief or the structure's entry in it is
+    unknown."""
+    line = entry_line(req.source_brief, structure) if req.source_brief else None
+    if line is None:
+        return None
+    n = lifts(structure, req)
+    stated = stated_lifts(line)
+    recorded = recorded_lifts(structure)
+    entry = f"the brief's entry for {structure.id}"
+    why = (f"{entry} states {plural(stated, 'compaction lift')}" if stated is not None
+           else f"{entry} states no lift count we can read")
+    if recorded is None:
+        return f"lifts none -> {n}: {why}" if n > 1 else None
+    key, value = recorded
+    return None if value == n else f"{key} {qty(value)} -> {n}: {why}"
+
+
+def with_judged_lifts(structure: Structure, req: Requirements) -> Structure:
+    """The structure with the lift count of :func:`lift_note` written in: ``lifts`` set to the
+    count the brief's entry states (an explicit 1 too, "in one lift"), or every recorded lift
+    key dropped when the entry states none (one lift, the default); the structure itself when
+    the record stands."""
+    if lift_note(structure, req) is None:
+        return structure
+    data = {k: v for k, v in structure.model_dump().items() if k not in _LIFT_KEYS}
+    n = lifts(structure, req)
+    if n > 1 or stated_lifts(entry_line(req.source_brief, structure)) is not None:
+        data["lifts"] = n
+    return Structure.model_validate(data)
+
+
+def _figures_m(line: str) -> list[float]:
+    """Every length figure of a line in metres ("1.2 m", "30 cm")."""
+    return [float(m[1]) / (100 if m[2].lower() == "cm" else 1) for m in _FIGURE_RE.finditer(line)]
+
+
+def _states_size(line: str, structure: Structure) -> bool:
+    """Whether a brief line states every length and height figure the structure records: its
+    entry under another name (Lightning typed depleted_excavators' dust berm "borrow_strip",
+    whose words pick the borrow pit's entry)."""
+    d = structure.dims()
+    wanted = [d[k] for k in ("length_m", "height_m") if d.get(k, 0.0) > 0]
+    figures = _figures_m(line)
+    return bool(wanted) and all(any(math.isclose(f, w, abs_tol=1e-6) for f in figures)
+                                for w in wanted)
+
+
+def _width_in(line: str, width: float) -> bool:
+    """Whether ``line`` states ``width`` as a width or a base, outside a key trench's or a
+    crest's clause."""
+    for clause in _WIDTH_CLAUSE_SPLIT.split(line):
+        if not _WIDTH_WORD_RE.search(clause) or _NOT_BASE_RE.search(clause):
+            continue
+        if any(math.isclose(f, width, abs_tol=1e-6) for f in _figures_m(clause)):
+            return True
+    return False
+
+
+def base_width_stated(structure: Structure, req: Requirements | None = None) -> bool:
+    """Whether a placed body's base width is a number the brief gives: a positive
+    ``width_m`` is recorded and, with the brief known, the structure's own entry states that
+    figure as a width or a base (:data:`_WIDTH_WORD_RE`; "2.5 m high and 4 m wide at the
+    base", "4 m at the base"), outside a key trench's or a crest's clause; when the entry
+    does not, a line that states the structure's recorded length and height does (its entry
+    under a type whose words pick another line). A berm without one holds the 1:1 section the
+    volume check assumes, a guess, and a width the structure stage copied from elsewhere
+    (propellant_pit_and_berm's berm "30 m arc ... 2.5 m high" recorded 4 m wide, the
+    structure prompt's example) is one too: compaction is then judged on the least base the
+    body can have (:func:`_work_area`). Without the brief a recorded ``width_m`` counts as
+    stated."""
+    width = structure.dims().get("width_m", 0.0)
+    if width <= 0:
+        return False
+    if req is None or not req.source_brief:
+        return True
+    entry = entry_line(req.source_brief, structure)
+    if entry is not None and _width_in(entry, width):
+        return True
+    return any(_width_in(line, width) for line in brief_lines(req.source_brief)
+               if line != entry and _states_size(line, structure))
+
+
+def _work_area(structure: Structure, req: Requirements | None) -> tuple[float, bool, str] | None:
+    """``(m2, placed, basis)``: the area compaction and sintering treat on the smallest size
+    the brief allows (an ``area_m2`` extra; the floor of a dug bowl or box, the bottom when
+    its walls slope; a berm's base when the brief states its width, :func:`base_width_stated`,
+    else the least base it can have, as wide as it is high (side slopes of 63 degrees or
+    less): length x height, ``basis`` saying so; a flat ``length_m`` x ``width_m`` or
+    ``diameter_m`` surface), whether it is a placed body, and how the area was read ('' for
+    a stated size); None when the dimensions give none."""
     d = structure.dims()
     if d.get("area_m2", 0.0) > 0:
-        return d["area_m2"], False
+        return d["area_m2"], False, ""
     shapes = dims_volumes(structure, req)
     body = shapes[0] if shapes and shapes[0].kind != "trench" else None
     if body is not None:
-        return (body.floor_area_m2, body.phase == "haul") if body.floor_area_m2 > 0 else None
+        if body.phase == "haul" and not base_width_stated(structure, req):
+            # no base the brief states (the 1:1 section is a guess, a copied width too): the
+            # least base the body can have is as wide as it is high (access_road's berm "20 m
+            # long, 1.5 m high": 30 m2; a 10 m2 pass over a 40 m x 2 m berm is no compaction)
+            area = _least(d, "length_m") * _least(d, "height_m")
+            return (area, True, "a base as wide as it is high") if area > 0 else None
+        return ((body.floor_area_m2, body.phase == "haul", "") if body.floor_area_m2 > 0
+                else None)
     if "depth_m" in d or "height_m" in d:
         return None   # a body whose numbers form no positive volume
     lo = {k: _least(d, k) for k in _MIN_KEYS if k in d}
     if {"length_m", "width_m"} <= lo.keys() and lo["length_m"] > 0 and lo["width_m"] > 0:
-        return lo["length_m"] * lo["width_m"], False
+        return lo["length_m"] * lo["width_m"], False, ""
     if lo.get("diameter_m", 0.0) > 0:
-        return math.pi * (lo["diameter_m"] / 2) ** 2, False
+        return math.pi * (lo["diameter_m"] / 2) ** 2, False, ""
     return None
 
 
 def area_coverages(req: Requirements, graph: TaskGraph) -> list[AreaCoverage]:
     """One :class:`AreaCoverage` per structure and area-work robot type (compactor, printer)
     with at least one task of that type with a quantity: the m2 its tasks plan against the
-    structure's work area (:func:`_work_area`), times its :func:`lifts` for compaction. A
-    placed body's sintering (a berm's crest, whose width no dimension gives) and the fill of
-    a stockpile-like structure are not judged. The eval's scope test only
-    (:func:`scope_gaps`), never a validation conflict: seen in review, a kind-D brief whose
-    two compaction lifts the repair trimmed by 22 % verified "in scope"."""
+    structure's work area (:func:`_work_area`), times its :func:`lifts` for compaction (the
+    count the brief states, read with ``req``). A placed body whose base width the brief does
+    not state is judged on the least base it can have, as wide as it is high
+    (:func:`_work_area`, :func:`base_width_stated`: access_road's berm "20 m long, 1.5 m high"
+    read 33-50 % of a 1:1 base the brief never gave, and is 30 m2 now; a 10 m2 pass over a
+    40 m x 2 m berm is still a gap). A placed body's sintering (a berm's crest, whose width no
+    dimension gives) and the fill of a stockpile-like structure are not judged. The eval's scope test only (:func:`scope_gaps`), never a validation conflict:
+    seen in review, a kind-D brief whose two compaction lifts the repair trimmed by 22 %
+    verified "in scope"."""
     out: list[AreaCoverage] = []
     for s in req.structures:
         if stockpile_like(s):
@@ -1112,7 +1367,7 @@ def area_coverages(req: Requirements, graph: TaskGraph) -> list[AreaCoverage]:
         work = _work_area(s, req)
         if work is None:
             continue
-        area, placed = work
+        area, placed, basis = work
         served = serving_tasks(s, graph, req.structures)
         for robot in ("compactor", "printer"):
             if robot == "printer" and placed:
@@ -1120,8 +1375,9 @@ def area_coverages(req: Requirements, graph: TaskGraph) -> list[AreaCoverage]:
             typed = tuple(t for t in served if t.robot_type == robot and t.quantity is not None)
             if not typed:
                 continue
-            n = lifts(s) if robot == "compactor" else 1
-            how = f"{qty(area)} m2" + (f" x {n} lifts" if n > 1 else "")
+            n = lifts(s, req) if robot == "compactor" else 1
+            how = (f"{qty(area)} m2" + (f" at {basis}" if basis else "")
+                   + (f" x {n} lifts" if n > 1 else ""))
             planned = sum(t.quantity or 0.0 for t in typed if t.unit == "m2")
             out.append(AreaCoverage(structure=s, robot=robot, tasks=typed, area_m2=planned,
                                     need_m2=area * n, how=how))

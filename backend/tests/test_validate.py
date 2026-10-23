@@ -736,7 +736,7 @@ def test_berm_road_and_foundation_phases() -> None:
     r = site_req(*FLEET, structures=(("S1", "blast_berm"), ("S2", "access_road"),
                                      ("S3", "habitat_foundation")))
     berm_haul = task("B1", type_="hauler", name="Haul spoil to berm line", unit="m3",
-                     quantity=90, zone="Z1", structure="S1")
+                     quantity=32, zone="Z1", structure="S1", after=("F1",))   # the pit's spoil
     berm_dig = task("B2", name="Cut berm key trench", unit="m3", quantity=30, zone="Z1",
                     structure="S1")
     berm_compact = task("B3", type_="compactor", name="Shape and compact berm", unit="m2",
@@ -829,7 +829,7 @@ def test_task_phases_combine_robot_type_unit_and_name() -> None:
 def test_repair_that_drops_a_structure_names_the_lost_tasks() -> None:
     r = site_req(*FLEET, structures=(("S1", "landing_pad"), ("S2", "blast_berm")))
     berm = [task("B1", type_="hauler", name="Haul spoil to berm", unit="m3", quantity=90,
-                 zone="Z2", structure="S2"),
+                 zone="Z2", structure="S2", after=("T2",)),
             task("B2", type_="compactor", name="Compact berm", unit="m2", quantity=240,
                  zone="Z2", structure="S2")]
     before = graph(*pad_tasks(), *berm)
@@ -929,7 +929,7 @@ def test_physical_tasks_need_a_priced_quantity_once_the_graph_states_any() -> No
 def test_structure_tags_resolve_leniently() -> None:
     r = site_req(*FLEET, structures=(("S1", "landing_pad"), ("S2", "blast_berm")))
     berm = [task("B1", type_="hauler", name="Haul spoil to berm", unit="m3", quantity=90,
-                 zone="Z2", structure="S2"),
+                 zone="Z2", structure="S2", after=("T2",)),
             task("B2", type_="compactor", name="Compact berm", unit="m2", quantity=240,
                  zone="Z2", structure="S2")]
     for pad_tag, berm_tag in (("s1", "s2"), ("landing_pad", "blast_berm"),

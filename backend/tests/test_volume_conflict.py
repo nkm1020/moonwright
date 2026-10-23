@@ -151,7 +151,8 @@ def test_a_key_trench_and_a_berm_are_judged_separately_under_one_id() -> None:
             "width_m": 3, "trench_width_m": 1.2, "trench_depth_m": 0.8}
     g = TaskGraph(tasks=[task("T13", "excavator", 5, "m3", "S2", "Z2", "Cut key trench"),
                          task("T14", "excavator", 5, "m3", "S2", "Z2", "Cut key trench"),
-                         task("T7", "hauler", 50, "m3", "S2", "Z2", "Haul fill to berm")])
+                         after(task("T7", "hauler", 50, "m3", "S2", "Z2", "Haul fill to berm"),
+                               "T13", "T14")])
     failure = must_fail(reqs(berm), g)
     assert failure.conflicts == ["volume:S2"]
     assert failure.details == [
@@ -203,7 +204,7 @@ def test_graphs_without_quantities_and_structures_without_a_volume_are_untouched
              zone="Z3", structure="S3")])
     assert validate_graph(r, plain, coverage=True) is None
     quantified = TaskGraph(tasks=[
-        task("T1", "excavator", 126, "m3"), task("T2", "hauler", 5, "m3", "S2", "Z2"),
+        task("T1", "excavator", 126, "m3"), after(task("T2", "hauler", 5, "m3", "S2", "Z2"), "T1"),
         task("T3", "excavator", 10, "m2", "S3", "Z3")])
     assert validate_graph(r, quantified, coverage=True) is None
 
@@ -314,10 +315,12 @@ def test_a_key_trench_without_a_stated_width_is_not_judged() -> None:
     token = g.model_copy(update={"tasks": [
         t.model_copy(update={"quantity": 10.0}) if t.id == "T4" else t for t in g.tasks]})
     failure = must_fail(stated, token)
-    assert failure.conflicts == ["volume:S2"]
-    assert failure.details == [
-        ("S2 (blast_berm): its key trench is 60 x 1.2 x 0.5 m = 36 m3 of excavation; excavator "
-         "tasks cover 10 m3 (27 %): T4 10 m3")]
+    # the token cut also leaves the first 150 m3 haul part with 104.25 m3 dug before it while
+    # the other bowl half is dug beside it: the supply check's second verdict (phase 3g)
+    assert failure.conflicts == ["volume:S2", "supply:T5"]
+    assert failure.details[0] == (
+        "S2 (blast_berm): its key trench is 60 x 1.2 x 0.5 m = 36 m3 of excavation; excavator "
+        "tasks cover 10 m3 (27 %): T4 10 m3")
 
 
 def test_sloped_walls_the_brief_states_are_judged_between_the_rim_and_the_floor() -> None:
@@ -497,9 +500,11 @@ def test_a_berm_built_from_another_structures_spoil_is_judged_against_that_spoil
         ("volume:S2: its dimensions give 300 m3 (60 m long, 2.5 m high, 4 m wide at the base, "
          "triangular section) but its haul tasks (T4 50 m3) total only 50 m3 (39 % of the "
          "125.7 m3 of spoil S1 yields)")]
-    # hauls that wait for no dig are judged against the prism, and told where fill comes from
+    # hauls that wait for no dig are judged against the prism, and told where fill comes from;
+    # since phase 3g they are also the supply check's verdict (after volume, one per haul)
     loose = TaskGraph(tasks=[*digs, *(h.model_copy(update={"after": []}) for h in hauls)])
     failure = validate_graph(req, loose, volume=True)
-    assert failure is not None and failure.conflicts == ["volume:S2"]
+    assert failure is not None
+    assert failure.conflicts == ["volume:S2", "supply:T4", "supply:T5"]
     assert "plans 125.7 of 300 m3" in failure.hint
     assert "each after the excavation its fill comes from" in failure.hint

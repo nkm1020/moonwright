@@ -11,9 +11,12 @@ with their dimensions and the fleet with its batteries, it computes what the rat
 * per robot type, the Wh needed against the fleet's Wh (margin %), the hours needed per robot
   against the horizon (a lower bound), and whether the canonical one-task-per-phase graph can
   be packed into the robots' batteries at all (exact bin packing);
-* per zone, the serial hours (one robot per zone), and the critical-path lower bound of the
-  canonical phase order with the fill dependency (a berm's haul waits for its source's
-  excavation);
+* per zone, the serial hours (one robot per zone), and the critical path of the canonical
+  phase order with the fill dependency (a berm's haul waits for its source's whole
+  excavation, a strip in m2 included); the largest of the three is the *phase-order bound*
+  (``LB``): a lower bound for a plan that keeps each phase whole, as the canonical graphs do,
+  but not for one that pipelines dig and haul parts (a haul part after the dig part that
+  feeds it, the supply verdict's advice), which can finish below it;
 * a verdict: "comfortable" / "needs a careful split (per-type Wh fits only if work is balanced
   within X %)" / "horizon-bound (deadline fits only with parallel zones)" / "infeasible without
   relaxation (energy short by Y Wh / horizon short by Z h)";
@@ -68,7 +71,7 @@ Assumptions (every one printed with the budget, every number an assumption of th
   is the fill the structure needs, and it waits for the excavation of ``fill_from`` (default:
   the first other structure that excavates). A phase whose robot type is absent from the
   fleet is dropped, as the validator drops it.
-* The lower bounds ignore transit and resource contention beyond one robot per zone; the
+* The bounds ignore transit and resource contention beyond one robot per zone; the
   ``--graphs`` solve is the number to trust.
 
 Usage (from backend/)::
@@ -83,6 +86,7 @@ Usage (from backend/)::
 from __future__ import annotations
 
 import argparse
+import itertools
 import json
 import math
 import re
@@ -135,7 +139,7 @@ ZONE_RADIUS = 4
 
 # verdict thresholds
 ENERGY_COMFORT = 0.25     # every multi-robot type keeps at least this margin -> comfortable
-HORIZON_COMFORT = 0.25    # horizon / lower bound - 1 at least this -> comfortable
+HORIZON_COMFORT = 0.25    # horizon / phase-order bound - 1 at least this -> comfortable
 TIGHT_SINGLE = 0.10       # a single-robot type above 90 % of its battery is flagged, not judged
 MAX_EXACT_PACK_ITEMS = 18
 
@@ -290,8 +294,12 @@ BRIEF_STRUCTURES: dict[str, list[dict[str, Any]]] = {
          "operations": ["grade", "compact"]},
         {"id": "S2", "type": "maintenance_pad", "diameter_m": 15, "depth_m": 0.3,
          "thickness_m": 0.2, "operations": ["survey", "excavate", "compact", "sinter"]},
-        {"id": "S3", "type": "shoulder_windrows", "length_m": 200, "width_m": 1,
-         "fill_m3": 100, "fill_from": "S1", "operations": ["haul", "compact"]},
+        # "grading spoil pushed into continuous windrows on both shoulders": the grader
+        # pushes it (an excavator m2 pass, Lightning's own reading: grade, compact), no
+        # hauler carries it; the supply check would rightly reject a haul of the road's m2
+        # grading, which digs nothing
+        {"id": "S3", "type": "shoulder_windrows", "length_m": 200, "width_m": 1, "haul": False,
+         "operations": ["grade", "compact"]},
     ],
     "shielding_mound": [
         {"id": "S1", "type": "shielding_mound", "length_m": 14, "width_m": 8, "lifts": 3,
@@ -730,12 +738,13 @@ def _type_budgets(robots: list[Robot], structures: list[StructureBudget]) -> dic
 
 
 def _bounds(structures: list[StructureBudget]) -> tuple[int, list[str], int, dict[str, int]]:
-    """Critical path of the canonical phase order with the fill dependency, the fully serial
-    total, and the per-zone serial hours."""
+    """Critical path of the canonical phase order with the fill dependency (structures read
+    sources first, :func:`fill_order`, so a berm the registry lists before its borrow pit
+    still waits for it), the fully serial total, and the per-zone serial hours."""
     finish: dict[str, int] = {}          # "S1/excavate" -> earliest finish (longest path)
     via: dict[str, str | None] = {}
     excavation_end: dict[str, tuple[int, str]] = {}   # structure -> (finish, key) of its last cut
-    for s in structures:
+    for s in fill_order(structures):
         prev: str | None = None
         for i, p in enumerate(s.phases):
             key = f"{s.id}/{p.phase}" + (f"#{i}" if sum(q.phase == p.phase for q in s.phases) > 1 else "")
@@ -746,7 +755,7 @@ def _bounds(structures: list[StructureBudget]) -> tuple[int, list[str], int, dic
                         start, pred = excavation_end[src]
             finish[key] = start + p.duration_h
             via[key] = pred
-            if p.phase in ("strip", "excavate") and p.unit == "m3":
+            if p.phase in ("strip", "excavate"):   # a hardstand stripped in m2 feeds a berm too
                 excavation_end[s.id] = max(excavation_end.get(s.id, (0, key)), (finish[key], key))
             prev = key
     if not finish:
@@ -775,7 +784,7 @@ def _verdict(horizon_h: int, types: dict[str, TypeBudget], lower_bound_h: int,
             short.append(f"{t.robot_type} energy short by {fmt(gap)} Wh "
                          f"({gap / t.fleet_wh * 100:.0f} % of its {fmt(t.fleet_wh)} Wh)")
     if lower_bound_h > horizon_h:
-        short.append(f"horizon short by {lower_bound_h - horizon_h} h (lower bound "
+        short.append(f"horizon short by {lower_bound_h - horizon_h} h (phase-order bound "
                      f"{lower_bound_h} h vs {horizon_h} h)")
     if short:
         return Verdict("infeasible", f"infeasible without relaxation ({'; '.join(short)})", short)
@@ -809,7 +818,7 @@ def _verdict(horizon_h: int, types: dict[str, TypeBudget], lower_bound_h: int,
     if serial_h > horizon_h or slack < HORIZON_COMFORT:
         kinds.append("horizon_bound")
         reasons.append(f"deadline fits only with parallel zones: serial plan {serial_h} h vs "
-                       f"{horizon_h} h horizon; parallel lower bound {lower_bound_h} h "
+                       f"{horizon_h} h horizon; parallel phase-order bound {lower_bound_h} h "
                        f"(slack {slack * 100:.0f} %)")
     if not kinds:
         return Verdict("comfortable", "comfortable", reasons)
@@ -818,7 +827,7 @@ def _verdict(horizon_h: int, types: dict[str, TypeBudget], lower_bound_h: int,
         texts.append("needs a careful split (" + "; ".join(split_texts) + ")")
     if "horizon_bound" in kinds:
         texts.append(f"horizon-bound (deadline fits only with parallel zones: serial {serial_h} h "
-                     f"vs horizon {horizon_h} h, parallel lower bound {lower_bound_h} h)")
+                     f"vs horizon {horizon_h} h, parallel phase-order bound {lower_bound_h} h)")
     return Verdict("+".join(kinds), "; ".join(texts), reasons)
 
 
@@ -832,7 +841,8 @@ def compute_budget(spec: dict[str, Any], source: str = "spec") -> Budget:
     zones = _zones_for(spec, specs)
     excavators_first = [s["id"] for s in specs
                         if "excavate" in wanted_phases(s, kind_of(str(s["type"])), fleet)]
-    receivers = {s["id"] for s in specs if kind_of(str(s["type"])) in RECEIVING_KINDS}
+    receivers = {s["id"] for s in specs if kind_of(str(s["type"])) in RECEIVING_KINDS
+                 and s.get("haul") is not False}   # pushed windrows haul nothing
     taken = {src for s in specs for src in fill_sources(s)}
     for s in specs:   # a receiving kind without fill_from takes the first excavation's spoil
         if s["id"] in receivers and not fill_sources(s):
@@ -937,21 +947,45 @@ _VERB = {"survey": "Survey and stake", "strip": "Strip and grade", "excavate": "
          "haul": "Haul fill to", "compact": "Compact", "sinter": "Sinter", "inspect": "Inspect"}
 
 
+def fill_order(structures: list[StructureBudget]) -> list[StructureBudget]:
+    """The structures with every fill source before the structure built from it, registry
+    order otherwise (a cycle of sources keeps registry order): the order the ``serial`` graph
+    chains them in and :func:`_bounds` reads them in. The registry lists some receivers
+    first (``shielding_mound``'s mound, ``small_fleet_long_berm``'s berm, the borrow pits of
+    ``habitat_berm_tight_horizon`` and ``depleted_excavators``), and a haul must still wait
+    for its source's dig."""
+    ids = {s.id for s in structures}
+    done: set[str] = set()
+    pending = list(structures)
+    out: list[StructureBudget] = []
+    while pending:
+        ready = next((s for s in pending if all(src in done or src not in ids or src == s.id
+                                                for src in s.fill_from)), pending[0])
+        pending.remove(ready)
+        out.append(ready)
+        done.add(ready.id)
+    return out
+
+
 def build_graph(budget: Budget, variant: str = "lazy") -> TaskGraph:
     """The canonical graph of a budget: ``lazy`` (one task per phase), ``split`` (physical
     phases above the prompt's threshold split into as many equal parts as the type has
     robots), ``fine`` (every physical phase split that way, whatever its size: the repair a
-    battery core asks for), ``serial`` (lazy, every structure after the previous one),
-    ``shrunk`` (lazy, every dig in m3 but a key trench planned as stripping the structure's
-    footprint in m2: the live models' re-scope, a ``volume:<structure>`` conflict now)."""
+    battery core asks for), ``serial`` (lazy, every structure after the previous one, fill
+    sources first: :func:`fill_order`), ``shrunk`` (lazy, every dig in m3 but a key trench
+    planned as stripping the structure's footprint in m2: the live models' re-scope, a
+    ``volume:<structure>`` conflict now). Ids follow the registry order; every haul waits for
+    the excavation tasks of each structure its fill comes from, wherever the registry lists
+    it, so every variant passes the validator's ``supply:<haul>`` check."""
     robots_of = {t: b.robots for t, b in budget.types.items()}
-    tasks: list[Task] = []
+    specs: list[dict[str, Any]] = []              # the tasks' fields, in registry order
+    first_of: dict[str, list[str]] = {}           # structure -> ids of its first phase
     last_of: dict[str, list[str]] = {}            # structure -> ids of its last phase
     excav_of: dict[str, list[str]] = {}           # structure -> ids of its excavation tasks
-    prev_structure_last: list[str] = []
+    hauls_of: dict[str, list[str]] = {}           # structure -> ids of its haul tasks
     n = 0
     for s in budget.structures:
-        prev_ids: list[str] = list(prev_structure_last) if variant == "serial" else []
+        prev_ids: list[str] = []
         label = f"{s.id} {s.type.replace('_', ' ')}"
         for p in s.phases:
             n += 1
@@ -965,9 +999,6 @@ def build_graph(budget: Budget, variant: str = "lazy") -> TaskGraph:
             if variant in ("split", "fine") and p.phase in PHYSICAL and p.quantity > threshold:
                 parts = max(1, robots_of.get(p.robot_type, 1))
             after = list(prev_ids)
-            if p.phase == "haul":
-                for src in s.fill_from:
-                    after += [i for i in excav_of.get(src, []) if i not in after]
             ids: list[str] = []
             for k in range(parts):
                 tid = f"T{n}" if parts == 1 else f"T{n}.{k + 1}"
@@ -978,16 +1009,35 @@ def build_graph(budget: Budget, variant: str = "lazy") -> TaskGraph:
                 elif p.phase == "excavate" and p.basis.startswith("fines"):
                     verb = "Strip fines of"            # grade by name, excavate by unit
                 name = f"{verb} {label}" + (f" (part {k + 1} of {parts})" if parts > 1 else "")
-                tasks.append(Task(
-                    id=tid, name=name, robot_type=p.robot_type, duration_h=1, energy_wh=0.0,
-                    zone=s.zone, after=after, structure=s.id, quantity=round(share, 2),
-                    unit=p.unit, basis=p.basis + (f" / {parts}" if parts > 1 else "")))
+                specs.append({
+                    "id": tid, "name": name, "robot_type": p.robot_type, "duration_h": 1,
+                    "energy_wh": 0.0, "zone": s.zone, "after": list(after), "structure": s.id,
+                    "quantity": round(share, 2), "unit": p.unit,
+                    "basis": p.basis + (f" / {parts}" if parts > 1 else "")})
                 ids.append(tid)
-            if p.phase in ("excavate", "strip") and p.unit == "m3":
+            if p.phase in ("excavate", "strip"):   # a strip in m2 is a source too
                 excav_of.setdefault(s.id, []).extend(ids)
+            if p.phase == "haul":
+                hauls_of.setdefault(s.id, []).extend(ids)
+            first_of.setdefault(s.id, ids)
             prev_ids = ids
         last_of[s.id] = prev_ids
-        prev_structure_last = prev_ids
+    # cross-structure edges, wherever the registry lists the structures: a haul waits for
+    # the excavation of every structure its fill comes from, and the serial graph chains the
+    # structures sources first
+    extra: dict[str, list[str]] = {}
+    for s in budget.structures:
+        feed = [i for src in s.fill_from for i in excav_of.get(src, [])]
+        for tid in hauls_of.get(s.id, []):
+            extra.setdefault(tid, []).extend(feed)
+    if variant == "serial":
+        chain = [s for s in fill_order(budget.structures) if s.id in first_of]
+        for a, b in itertools.pairwise(chain):
+            for tid in first_of[b.id]:
+                extra.setdefault(tid, []).extend(last_of[a.id])
+    tasks = [Task(**{**spec, "after": list(dict.fromkeys([*spec["after"],
+                                                           *extra.get(spec["id"], [])]))})
+             for spec in specs]
     graph, _ = apply_rates(TaskGraph(tasks=tasks, notes=f"canonical {variant} graph"))
     return graph
 
@@ -1167,9 +1217,9 @@ def format_budget(b: Budget) -> str:
     lines.append(f"zones (serial hours, one robot per zone): {zones}")
     lines.append(f"critical path {b.critical_path_h} h: {' -> '.join(b.critical_path)}")
     slack = f"{b.horizon_slack_pct:+.0f} %" if math.isfinite(b.horizon_slack_pct) else "n/a"
-    lines.append(f"lower bound {b.lower_bound_h} h (max of critical path, per-type hours / robots, "
-                 f"zone serial)   serial plan {b.serial_h} h   horizon {b.horizon_h} h "
-                 f"(slack vs lower bound {slack})")
+    lines.append(f"phase-order bound {b.lower_bound_h} h (max of critical path, per-type hours / "
+                 f"robots, zone serial)   serial plan {b.serial_h} h   horizon {b.horizon_h} h "
+                 f"(slack vs that bound {slack})")
     lines.append("")
     lines.append(f"verdict: {b.verdict.text}")
     for r in b.verdict.reasons:

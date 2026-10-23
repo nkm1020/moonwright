@@ -53,6 +53,13 @@ Conventions
                                     m2 tasks count as a surface layer up to 0.2 m, a
                                     stockpile's fill is never short (``moonwright.pipeline
                                     .validate``, "Volume")
+    supply:<task_id>                a whole plan's haul (a hauler task in m3) waits for no
+                                    source of material (a dig in m3 that is no rehandle; an
+                                    m2 strip where its spoil can be what the haul moves), or
+                                    moves more than its sources make available while another
+                                    dig could supply it, so it could start before its
+                                    material exists (``moonwright.pipeline.validate``,
+                                    "Supply order")
     reference:<task_id>.after=<id>  `after` points to an unknown task id
     duplicate:<id>                  duplicated task / robot / zone id
     cycle:<a>-><b>->...-><a>        precedence cycle
@@ -222,8 +229,9 @@ class Structure(_Model):
     """A thing to build: type, zone, the operations the brief asks for on it, and its
     dimensions as extra numeric keys in metres (diameter_m, length_m, width_m, depth_m,
     height_m, thickness_m; trench_width_m and trench_depth_m for a key trench under a berm;
-    min_<dimension>_m for the smallest size a brief allows), plus ``lifts`` (compaction lifts)
-    and ``wall_slope`` (a pit's sloped walls, "1:1") when the brief states them."""
+    min_<dimension>_m for the smallest size a brief allows), plus ``lifts`` (the count of
+    compaction layers) and ``wall_slope`` (a pit's sloped walls, "1:1") when the brief states
+    them."""
 
     model_config = ConfigDict(extra="allow", allow_inf_nan=False)
 

@@ -15,7 +15,10 @@
  * renumbering), `name` / `structure` / `unit` as diffed fields, BudgetRow on a failed schedule
  * step's payload (the numbers behind its energy core). Phase 3e: the `volume:<structure>`
  * validation conflict, `schema:json` / `schema:shape` for rejected model answers, and the
- * `min_<dimension>_m` structure extras (the smallest size a brief allows).
+ * `min_<dimension>_m` structure extras (the smallest size a brief allows). Phase 3g: the
+ * `supply:<task>` validation conflict (a haul that waits for no dig, or for too little while
+ * another dig could supply it), the `supply:<structure>` balance advisory, and the structure
+ * step's lift-count correction.
  */
 
 // ------------------------------------------------------------------ F1 requirements
@@ -197,6 +200,9 @@ export const CONFLICT_PREFIXES: Record<string, string> = {
   quantity: "physical task without a priced quantity",
   /** phase 3e: the plan's m³ fall below 70 % of the smallest volume the dimensions allow */
   volume: "planned volume below the structure's dimensions",
+  /** phase 3g: a haul waits (transitively) for no dig, or for less than it moves while another
+   *  dig could supply it, so it could start before its material exists */
+  supply: "haul planned before its material is dug",
 };
 
 export function conflictPrefix(conflict: string): string {
@@ -245,7 +251,8 @@ export interface StructurePayload {
   grid: [number, number];
   depot: [number, number] | null;
   /**
-   * Never a failure. In this order: recovered notes, site warnings, dimension warnings.
+   * Never a failure. In this order: recovered notes, site warnings, lift corrections,
+   * dimension warnings.
    * (a) "structure S1: operations [excavate, compact, sinter] recovered from malformed keys
    *     ("operations': [", 'grade', 'compact', 'sinter'); check them against the brief": the
    *     structuring model's scrambled answer was salvaged (amber: ask the user to check);
@@ -256,6 +263,12 @@ export interface StructurePayload {
    * (c) "structure S2 (blast berm) has no dimensions: the planner sizes its tasks from numeric
    *     fields such as diameter_m, length_m, width_m, depth_m or height_m and never sees the
    *     brief, so add the brief's numbers before planning" (amber: fill them before planning);
+   * (d) phase 3g, between the site and the dimension warnings: "structure S1: lifts 4 -> 1:
+   *     the brief's entry for S1 states no lift count we can read" (or "lifts 3 -> 2: the
+   *     brief's entry for S1 states 2 compaction lifts", "lifts none -> 2: ..."): the
+   *     structuring stage already wrote the corrected count into the requirements, so the
+   *     planner compacts what the eval judges (amber: check it against the brief; filed under
+   *     its structure);
    * plus the older zone-overlap / undeclared-zone / no-zone / no-depot warnings (muted).
    */
   warnings: string[];
@@ -268,8 +281,11 @@ export interface TaskGraphPayload {
    *  all (the hand-made fixtures), or "volume:<structure>: its dimensions give 360 m3
    *  (100 x 6 x 0.6 m) but its excavation tasks (T3 600 m2) total only 0 m3 (0%)" when the
    *  planned m3 clearly differ from what the dimensions imply (two lines may exist for one
-   *  structure: a berm body and its key trench; never on a replan's steps); warnings, never
-   *  conflicts. format.ts parseAdvisory reads them. */
+   *  structure: a berm body and its key trench; never on a replan's steps), or (phase 3g)
+   *  "supply:<structure>: its hauls (T5 150 m3, T6 150 m3) move 300 m3, more than the 125.7 m3
+   *  the digs before them remove (S1 landing pad: T3, T4)" when a body's hauls together move
+   *  more than the digs before them remove (often the brief's own arithmetic; never on a
+   *  replan's steps); warnings, never conflicts. format.ts parseAdvisory reads them. */
   advisories: string[];
   rate_model: boolean;
   /** tasks whose duration / energy came from the rate table (they carried a quantity) */

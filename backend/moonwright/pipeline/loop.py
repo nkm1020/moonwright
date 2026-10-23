@@ -122,11 +122,14 @@ FAILURE block (``repair_messages(advisories=...)``), so a 200 % double haul is c
 round as the energy verdict. An advisory whose id is also a conflict of the verdict (a
 ``volume:<id>`` shortfall is both) is left out: the verdict already says it; a ``volume:<id>``
 excess is always kept, since the shortfall under the same id can be another shape of the
-structure (a berm hauled twice over on a key trench dug short). ``verdict``
-feedback mode passes none. The validator's volume check judges a whole plan only:
-``validate_graph(volume=False)`` for the remaining graph of a replan and its repairs,
-``True`` otherwise; it also gets the replan's ``robot_positions``, so its energy checks
-charge the transit the solver charges.
+structure (a berm hauled twice over on a key trench dug short), and so is every
+``supply:<structure>`` balance note (a body's hauls move more m3 than the digs before them
+remove): it is keyed by the structure, the verdict's ``supply:<haul>`` by a haul, and a
+structure one of whose hauls is in the verdict gets no note at all.
+``verdict`` feedback mode passes none. The validator's volume and supply checks judge a whole
+plan only: ``validate_graph(volume=False)`` (which switches the supply check off with it) for
+the remaining graph of a replan and its repairs, ``True`` otherwise; it also gets the
+replan's ``robot_positions``, so its energy checks charge the transit the solver charges.
 """
 
 from __future__ import annotations
@@ -419,8 +422,8 @@ class Planner:
         """The advisories a repair round is told besides the verdict (module docstring, "What a
         repair is told"): those of the step that produced the graph it repairs, minus any the
         verdict already says (:func:`_repeats_verdict`: a ``volume:<id>`` shortfall is both,
-        a ``volume:<id>`` excess never is); none in ``verdict`` feedback mode, where the model
-        learns the kind alone."""
+        a ``volume:<id>`` excess and a ``supply:<structure>`` balance note never are); none in
+        ``verdict`` feedback mode, where the model learns the kind alone."""
         if not advisories or self.feedback_mode != "core":
             return None
         conflicts = set(feedback.conflicts)
@@ -874,9 +877,12 @@ def _repeats_verdict(advisory: str, conflicts: Collection[str]) -> bool:
     """Whether an advisory says what a conflict of the verdict already says: its id is one of
     ``conflicts``, except a ``volume:<id>`` excess, which no verdict carries (a berm hauled
     twice over shares ``volume:S2`` with the shortfall of its own key trench, seen in review:
-    the double haul went untold in the round that had to cut it)."""
+    the double haul went untold in the round that had to cut it), and a ``supply:<structure>``
+    balance note (a body's hauls move more than the digs before them remove), which shares
+    only the prefix with the verdict's ``supply:<haul>`` (a haul with no dig before it, or
+    too little while another dig could supply it)."""
     aid = _advisory_id(advisory)
-    if aid not in conflicts:
+    if aid not in conflicts or aid.startswith("supply:"):
         return False
     return not aid.startswith("volume:") or is_shortfall(advisory)
 

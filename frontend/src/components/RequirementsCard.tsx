@@ -335,9 +335,16 @@ function stepWarnings(step: LoopStep | null): string[] {
 // ------------------------------------------------------------------ structuring notes
 /** The shapes of StructurePayload.warnings, told apart by their opening words: operations
  *  salvaged from a scrambled structuring answer, a structure without a single dimension, an
- *  operation no robot type can staff, an operation the brief line does not ask for, zone /
- *  depot geometry; anything else is "other". */
-export type WarningShape = "recovered" | "no_dimensions" | "unstaffed" | "unsupported" | "geometry" | "other";
+ *  operation no robot type can staff, an operation the brief line does not ask for, a lift
+ *  count corrected to the brief (phase 3g), zone / depot geometry; anything else is "other". */
+export type WarningShape =
+  | "recovered"
+  | "no_dimensions"
+  | "unstaffed"
+  | "unsupported"
+  | "lifts"
+  | "geometry"
+  | "other";
 
 export interface CardWarning {
   shape: WarningShape;
@@ -357,6 +364,7 @@ export interface CardWarning {
 export const WARNING_LEADS = {
   recovered: "Check these operations against the brief",
   no_dimensions: "Add the brief's dimensions before planning",
+  lifts: "Check the lift count against the brief",
 } as const;
 
 const WARNING_SHAPES: [WarningShape, RegExp][] = [
@@ -364,6 +372,7 @@ const WARNING_SHAPES: [WarningShape, RegExp][] = [
   ["no_dimensions", /^structure \S+ (?:\([^)]*\) )?has no dimensions\b/],
   ["unstaffed", /^structure \S+ lists \S+ but the fleet has no /],
   ["unsupported", /^structure \S+ lists \S+ but the brief line about it asks for /],
+  ["lifts", /^structure \S+: (?:lifts|lift_count|compaction_lifts) \S+ -> \d+: /],
   ["geometry", /^(?:zones \S+ and \S+ overlap\b|structure \S+ (?:has no zone\b|names zone )|no depot\b)/],
 ];
 
@@ -374,7 +383,13 @@ export function classifyWarning(raw: string): CardWarning {
   const structure = /^structure (\S+?):?(?:\s|$)/.exec(text)?.[1] ?? null;
   const op = /^structure \S+ lists (\S+) but /.exec(text)?.[1] ?? null;
   const lead =
-    shape === "recovered" ? WARNING_LEADS.recovered : shape === "no_dimensions" ? WARNING_LEADS.no_dimensions : null;
+    shape === "recovered"
+      ? WARNING_LEADS.recovered
+      : shape === "no_dimensions"
+        ? WARNING_LEADS.no_dimensions
+        : shape === "lifts"
+          ? WARNING_LEADS.lifts
+          : null;
   const shown =
     shape === "recovered"
       ? text.replace(/;\s*check them against the brief\.?$/, "")

@@ -15,7 +15,7 @@ from types import ModuleType
 import pytest
 
 from moonwright.pipeline.rates import RATED_TYPES, scope_gaps, volume_advisories, volume_shares
-from moonwright.pipeline.validate import validate_graph
+from moonwright.pipeline.validate import supply_report, validate_graph
 from moonwright.schemas import Requirements
 
 BACKEND = Path(__file__).resolve().parents[1]
@@ -224,12 +224,12 @@ def test_verdict_horizon_bound_and_infeasible(bb: ModuleType) -> None:
     assert bound.verdict.kind == "horizon_bound"
     assert (bound.lower_bound_h, bound.serial_h, bound.horizon_h) == (19, 57, 48)
     assert bound.verdict.text == ("horizon-bound (deadline fits only with parallel zones: serial "
-                                  "57 h vs horizon 48 h, parallel lower bound 19 h)")
+                                  "57 h vs horizon 48 h, parallel phase-order bound 19 h)")
     assert spec(bb, pads, crew, 72).verdict.kind == "comfortable"       # serial 57 h fits
     late = spec(bb, pads, crew, 18)
     assert late.verdict.kind == "infeasible"
-    assert late.verdict.text == ("infeasible without relaxation (horizon short by 1 h (lower bound "
-                                 "19 h vs 18 h))")
+    assert late.verdict.text == ("infeasible without relaxation (horizon short by 1 h "
+                                 "(phase-order bound 19 h vs 18 h))")
     borrow = [{"id": "S1", "type": "borrow_strip", "length_m": 100, "width_m": 6, "depth_m": 0.6,
                "operations": ["excavate"]}]
     short = spec(bb, borrow, [FLEET[0]], 336)
@@ -472,3 +472,42 @@ def test_canonical_graphs_cover_the_volumes_the_validator_measures(bb: ModuleTyp
     # credit stops at the floor's own footprint and the 0.3 m below it needs a dig
     pad = outcome(bb, "low_battery_pad", "shrunk")
     assert pad["conflicts"] == ["scope:S1", "volume:S1"]
+
+
+def test_reference_graphs_haul_only_after_the_dig_their_fill_comes_from(bb: ModuleType) -> None:
+    """Phase 3g's supply check (``supply:<haul>``: a haul that waits for no source, or for too
+    little while another dig could supply it) on every brief's canonical graphs, the
+    ``shrunk`` re-scope included: each haul waits for the excavation of the structures its
+    fill comes from wherever the registry lists them (the mound of ``shielding_mound``, the
+    berm of ``small_fleet_long_berm`` and the berms of ``habitat_berm_tight_horizon`` and
+    ``depleted_excavators`` come before a source of theirs), a source stripped in m2 included
+    (``one_surveyor_three_structures``' berm is built from the hardstand's strip spoil), the
+    serial graph chains the sources first, and the bounds read them in that order."""
+    for path in sorted(EVAL_DIR.glob("*.md")):
+        budget = bb.compute_budget(bb.spec_from_brief(path), path.stem)
+        live = budget.requirements.model_copy(update={"source_brief": path.read_text()})
+        for variant in ("lazy", "split", "fine", "serial", "shrunk"):
+            graph = bb.build_graph(budget, variant)
+            failure = validate_graph(live, graph, supply=True)
+            supply = [c for c in (failure.conflicts if failure else []) if c.startswith("supply:")]
+            assert supply == [], (path.stem, variant, supply)
+            assert all(s.digs for s in supply_report(live, graph)), (path.stem, variant)
+    surveyor = bb.compute_budget(
+        bb.spec_from_brief(EVAL_DIR / "one_surveyor_three_structures.md"), "x")
+    haul = bb.build_graph(surveyor, "lazy").task("T6")
+    assert haul.name == "Haul fill to S2 containment berm" and haul.after == ["T5", "T2"]
+    budget = bb.compute_budget(bb.spec_from_brief(EVAL_DIR / "small_fleet_long_berm.md"), "x")
+    assert [s.id for s in bb.fill_order(budget.structures)] == ["S2", "S1"]
+    lazy = bb.build_graph(budget, "lazy")
+    assert lazy.task("T1").name == "Haul fill to S1 protective berm"
+    assert lazy.task("T1").after == ["T4"] and lazy.task("T4").name.startswith("Excavate S2")
+    serial = bb.build_graph(budget, "serial")
+    assert serial.task("T1").after == ["T4"] and serial.task("T4").after == []
+    # the critical path waits for the borrow dig too: 52 h of digging before the haul
+    assert budget.critical_path[:2] == ["S2/excavate", "S1/haul"] and budget.lower_bound_h == 112
+    # road_and_pad's windrows are grading spoil pushed by the grader, not a haul of the road's
+    # m2 grading (which digs nothing): the pad keeps its own spoil haul after its dig
+    road = bb.compute_budget(bb.spec_from_brief(EVAL_DIR / "road_and_pad.md"), "x")
+    assert [p.phase for p in road.structures[2].phases] == ["strip", "compact"]
+    assert [p.phase for p in road.structures[1].phases] == [
+        "survey", "excavate", "haul", "compact", "sinter", "inspect"]

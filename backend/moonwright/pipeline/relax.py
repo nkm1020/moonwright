@@ -57,8 +57,9 @@ change first (a battery raised by 19 % before one more robot in a fleet of two),
 shorter makespan. ``kinds`` restricts what is tried: a replan passes ``("extend_horizon",
 "add_robot")`` because a battery cannot be raised mid-mission and the remaining work is not
 up for re-scoping here. The call returns ``[]`` when the graph is broken beyond resources
-(cycles, references, duplicates, quantities, structure coverage, the scope guards of a
-replan, a schema or transport failure, a solver timeout): no resource change fixes a graph.
+(cycles, references, duplicates, quantities, structure coverage, a volume shortfall, a haul
+that waits for no dig or for too little, the scope guards of a replan, a schema or transport
+failure, a solver timeout): no resource change fixes a graph.
 
 Three outcomes per verification solve, kept apart: a schedule (the candidate is proven), an
 infeasibility (the candidate is refuted and counts as *tried*), and a timeout (CP-SAT answered

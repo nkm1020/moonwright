@@ -83,7 +83,11 @@ def req(*robots: Robot, structures: tuple[Structure, ...] = (),
 
 
 def graph(*tasks: Task) -> TaskGraph:
-    return TaskGraph(tasks=list(tasks))
+    """The tasks with their ``after`` edges to tasks not in the graph dropped: the berm's haul
+    waits for the pad's dig (T2) when the pad is planned too, as the supply check wants."""
+    present = {t.id for t in tasks}
+    return TaskGraph(tasks=[t.model_copy(update={"after": [a for a in t.after if a in present]})
+                            for t in tasks])
 
 
 def must_fail(r: Requirements, g: TaskGraph, **kwargs: object) -> Failure:
@@ -125,7 +129,7 @@ def berm_tasks(*skip: str) -> list[Task]:
     """Haul, compact, sinter and inspect the berm S2 (zone Z2) minus the phases in ``skip``."""
     all_ = {
         "haul": task("B1", type_="hauler", name="Haul pad spoil to berm line", unit="m3",
-                     quantity=90, zone="Z2", structure="S2"),
+                     quantity=90, zone="Z2", structure="S2", after=("T2",)),
         "compact": task("B2", type_="compactor", name="Shape and compact berm", unit="m2",
                         quantity=240, zone="Z2", structure="S2"),
         "sinter": task("B3", type_="printer", name="Sinter berm crest", unit="m2",
@@ -241,11 +245,11 @@ def test_declared_haul_needs_a_hauler_task_tagged_with_the_receiving_structure()
     stockpile = Structure(id="S2", type="spoil_stockpile", zone="Z2", operations=["haul"])
     r = req(*FLEET, structures=(pad(), stockpile))
     to_pile = task("H1", type_="hauler", name="Haul pad spoil to the stockpile", unit="m3",
-                   quantity=120, zone="Z2", structure="S2")
+                   quantity=120, zone="Z2", structure="S2", after=("T2",))
     assert validate_graph(r, graph(*pad_tasks(), to_pile), coverage=True) is None
     # hauled "to depot" and tagged with the source structure: the stockpile gets nothing
     to_depot = task("H1", type_="hauler", name="Haul pad spoil to depot", unit="m3",
-                    quantity=120, zone="Z1", structure="S1")
+                    quantity=120, zone="Z1", structure="S1", after=("T2",))
     failure = must_fail(r, graph(*pad_tasks(), to_depot))
     assert failure.conflicts == ["scope:S2"]
     assert failure.details == ["S2 (spoil_stockpile) lacks haul task (its operations list haul)"]
@@ -559,7 +563,7 @@ def test_a_haul_placed_in_the_receiving_zone_serves_it_whatever_its_tag() -> Non
     brief = (BRIEFS_DIR / "landing_pad.md").read_text()
     r = req(*FLEET, structures=(pad(), berm("haul", "compact", "sinter")), brief=brief)
     source_tagged = task("B1", type_="hauler", name="Haul pad spoil to berm line", unit="m3",
-                         quantity=90, zone="Z2", structure="S1")
+                         quantity=90, zone="Z2", structure="S1", after=("T2",))
     rest = berm_tasks("haul", "survey")
     assert validate_graph(r, graph(*pad_tasks(), source_tagged, *rest), coverage=True) is None
     assert missing_operations(r, r.structures[1], rest, hauls=[source_tagged]) == []

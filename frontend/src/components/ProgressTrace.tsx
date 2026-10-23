@@ -499,14 +499,15 @@ function GenericPayload({ step }: { step: LoopStep }) {
 }
 
 /** Chip label per structuring-note class (RequirementsCard classifyWarning): operations
- *  salvaged from a scrambled answer and a structure without dimensions (amber: act before
- *  planning), an operation the fleet cannot staff, one the brief line does not ask for, zone /
- *  depot geometry, anything else. */
+ *  salvaged from a scrambled answer, a structure without dimensions and a lift count corrected
+ *  to the brief (amber: check before planning), an operation the fleet cannot staff, one the
+ *  brief line does not ask for, zone / depot geometry, anything else. */
 const WARNING_CHIP: Record<WarningShape, string> = {
   recovered: "operations recovered",
   no_dimensions: "no dimensions",
   unstaffed: "unstaffed operation",
   unsupported: "operation not in brief",
+  lifts: "lift count corrected",
   geometry: "geometry",
   other: "note",
 };

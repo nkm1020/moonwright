@@ -8,7 +8,10 @@ coverage and got no ``volume:S1`` advisory). This module is import-free of both 
 ``rates`` and ``validate`` can share it without a cycle. The same goes for reading the brief:
 :func:`name_score` says how well a line names a structure (the coverage hints quote the
 structure's own entry with it) and :func:`entry_line` picks that entry (the volume check reads
-a pit's sloped walls from it).
+a pit's sloped walls from it, the eval's area check a stated lift count and a berm's base width).
+Both read the brief by :func:`brief_lines`, so an entry hard-wrapped over several lines (as
+editors and users write markdown) is read whole: phase 3g read only its first line and told
+the user a brief that states "placed and compacted in two\n   lifts" states no lift count.
 """
 
 from __future__ import annotations
@@ -19,6 +22,32 @@ from collections.abc import Collection, Sequence
 from moonwright.schemas import Structure, Task, TaskGraph
 
 WORDS = re.compile(r"[a-z0-9]+")   # the words of a lower-cased line or structure type
+_HEADING = re.compile(r"^\s*#")      # a markdown heading names the document, never an entry
+# a structure's own entry: an optional list marker, a short name, a colon ("1. Protective
+# berm: 100 m long ...", "- Borrow pit: ..."); a sentence ("- The berm length ... firm
+# layer: none ...") has a longer head or a full stop in it
+_ENTRY_HEAD = re.compile(r"^\s*(?:(?:\d+[.)]|[-*\u2022])\s+)?[*_]*[^:.;]{1,60}:")
+# a line that starts a block of its own: a list item ("1. ...", "- ..."), a bold paragraph
+# label ("**Fleet.** ...") or a table row; any other non-blank line continues the one before
+_BLOCK_START = re.compile(r"^\s*(?:(?:\d+[.)]|[-*+\u2022])\s|\*\*|__|\|)")
+
+
+def brief_lines(text: str | None) -> list[str]:
+    """The logical lines of a brief: each list item, paragraph or heading with the lines that
+    continue it joined on (a hard-wrapped entry, its continuation lines indented or not), so
+    "1. Protective berm: 100 m long, ... placed and compacted in two\n   lifts and inspected."
+    is one line. A blank line, a heading, a list item, a bold paragraph label and a table row
+    each start a new one; a brief with one line per entry reads exactly as ``splitlines``."""
+    out: list[str] = []
+    for line in (text or "").splitlines():
+        if not line.strip():
+            out.append("")
+        elif (out and out[-1].strip() and not _HEADING.match(out[-1])
+              and not _HEADING.match(line) and not _BLOCK_START.match(line)):
+            out[-1] = f"{out[-1].rstrip()} {line.strip()}"
+        else:
+            out.append(line)
+    return [line for line in out if line.strip()]
 
 
 def tag_names(tag: str, structure: Structure) -> bool:
@@ -84,14 +113,25 @@ def name_score(low: str, words: Collection[str], structure: Structure) -> tuple[
 def entry_line(text: str | None, structure: Structure) -> str | None:
     """The line of ``text`` (a brief) that names ``structure`` best by :func:`name_score`: its
     own entry ("1. Storage pit: 8 m diameter, 2 m deep, ..."), which names it with more of
-    its type's words, or as many words earlier, than a site paragraph that mentions it in
-    passing. None without a brief or a line that names it."""
+    its type's words than a site paragraph that mentions it in passing. On a tie a line
+    shaped like an entry (a list marker, a short name and a colon) beats a sentence, then the
+    earlier mention wins; a markdown heading is never an entry (seen in phase 3g: "# Access
+    Ramp into Crater C-4" tied with the ramp's own entry and won on position, and a type of
+    one matching word, "spool_berm", picked the constraint "- The berm length and height are
+    fixed ..." over "1. Protective berm: ... compacted in two lifts"). Lines are the brief's
+    logical lines (:func:`brief_lines`): a hard-wrapped entry is returned whole. None without
+    a brief or a line that names it."""
     if not text:
         return None
-    best: tuple[tuple[int, int], str] | None = None
-    for line in text.splitlines():
+    best: tuple[tuple[int, bool, int], str] | None = None
+    for line in brief_lines(text):
+        if _HEADING.match(line):
+            continue
         low = line.lower()
         key = name_score(low, set(WORDS.findall(low)), structure)
-        if key is not None and (best is None or key > best[0]):
-            best = (key, line)
+        if key is None:
+            continue
+        ranked = (key[0], _ENTRY_HEAD.match(line) is not None, key[1])
+        if best is None or ranked > best[0]:
+            best = (ranked, line)
     return best[1] if best else None
