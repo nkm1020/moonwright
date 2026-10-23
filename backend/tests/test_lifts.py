@@ -79,6 +79,12 @@ def compact(id_: str, m2: float, structure: str = "S1", zone: str = "Z1") -> Tas
     ("in a single lift", 1),
     ("Ten Lifts", 10),
     ("lifts: 3", 3),
+    # an article is one lift, read only when no clause states a number
+    ("graded and compacted regolith with a 20 cm compacted lift", 1),
+    ("with a compacted 10 cm bedding layer in each segment", 1),
+    ("a 0.2 m lift", 1),
+    ("an even compacted layer", 1),
+    ("on a compacted base layer, then placed in three lifts", 3),
     # a range states its smaller count, the smallest size the brief allows
     ("in 3 to 4 lifts", 3),
     ("compacted in two to three lifts", 2),
@@ -89,10 +95,9 @@ def test_a_stated_count_of_lifts_is_read(line: str, count: int) -> None:
 
 
 @pytest.mark.parametrize("line", [
-    "graded and compacted regolith with a 20 cm compacted lift",        # a thickness
     "in four 10 m segments from the top down",                          # segments, not lifts
-    "with a compacted 10 cm bedding layer in each segment",
-    "a 0.2 m lift", "a 25 cm layer of fines", "in 12 lifts", "in 0 lifts", "none", "",
+    "a 25 cm layer of fines", "in 12 lifts", "in 0 lifts", "none", "",
+    "a 20 cm compacted lift, then 12 lifts",              # a number out of range wins
     "Each lift is compacted before the next lift is placed",
     "checks the level before the second compaction lift",
     # layers that nothing compacts, or that a printer makes, are no lifts
@@ -122,6 +127,8 @@ LIVE = [   # (brief, the structure Lightning recorded, expected lifts)
                                "length_m": 100, "height_m": 2, "width_m": 3.5}, 2),
     ("depleted_excavators", {"id": "STR2", "type": "spoil_berm", "zone": "Z2", "length_m": 60,
                              "height_m": 1.2, "width_m": 3}, 1),
+    ("cable_trench", {"id": "S1", "type": "cable_trench", "zone": "Z1", "length_m": 150,
+                      "width_m": 0.4, "depth_m": 0.6, "lifts": 3}, 1),
 ]
 
 
@@ -196,10 +203,11 @@ def test_the_structure_stage_corrects_a_lift_count_to_the_brief() -> None:
         (n, reqs(s, source=brief(n))) for n, s, _ in LIVE)}
     assert notes == {
         "crater_ramp": "lifts 4 -> 1: the brief's entry for S1 states no lift count we can read",
-        "access_road": "lifts 0.2 -> 1: the brief's entry for S1 states no lift count we can read",
+        "access_road": "lifts 0.2 -> 1: the brief's entry for S1 states 1 compaction lift",
         "shielding_mound": None, "solar_array_pad": None, "habitat_berm_tight_horizon": None,
         "small_fleet_long_berm": "lifts none -> 2: the brief's entry for BERM states 2 compaction lifts",
         "depleted_excavators": None,
+        "cable_trench": "lifts 3 -> 1: the brief's entry for S1 states 1 compaction lift",
     }
     wrong = reqs({"id": "S1", "type": "solar_array_pad", "length_m": 30, "width_m": 18,
                   "lift_count": 3}, source=brief("solar_array_pad"))

@@ -96,8 +96,9 @@ area judge only what the brief states, as the volume does: the lift count is the
 structure's own entry in the brief states (:func:`lifts`, :func:`stated_lifts`: "in three
 lifts", "two compaction lifts", "compacted in 2 layers", the smaller of a range; the entry
 read whole when hard-wrapped; a recorded count kept when the entry names lifts without a
-count we can read), never "four 10 m segments" nor "a 20 cm compacted lift" (Lightning
-recorded both as lifts, 4 and 0.2, and a correct crater ramp read 25 %), and the structure
+count we can read; "a 20 cm compacted lift" is one), never "four 10 m segments" (Lightning
+recorded crater_ramp's segments as 4 lifts and access_road's lift as 0.2, and a correct crater
+ramp read 25 %), and the structure
 stage writes that count into the requirements (:func:`with_judged_lifts`), so the planner
 compacts what the eval judges. A placed body is judged on the base width the brief states
 (:func:`base_width_stated`: its entry, or the line that states its length and height), never
@@ -369,19 +370,22 @@ _COUNT_WORDS = {"one": 1, "single": 1, "two": 2, "three": 3, "four": 4, "five": 
 _COUNT = r"(?:\d+|" + "|".join(_COUNT_WORDS) + r")"
 # a count of compaction layers the brief states: "in three lifts", "three compacted lifts",
 # "two compaction lifts", "in one lift", "two 15 cm lifts", "in three 30-cm lifts", "a two-lift
-# berm", "compacted in 2 layers". The count stands right before the noun (a thickness and a
-# few adjectives may sit between), so "a 20 cm compacted lift" (a thickness, no count) and "in
-# four 10 m segments" (no lift) state none; a decimal ("0.2") is never a count, and a range
-# ("2-3 lifts", "3 to 4 lifts") states its smaller count, the smallest size the brief allows.
+# berm", "compacted in 2 layers". The count stands right before the noun (thicknesses and a
+# few adjectives may sit between, in any order), so "in four 10 m segments" (no lift) states
+# none; an article is one lift ("a 20 cm compacted lift", "a compacted 10 cm bedding layer":
+# seen live, Lightning recorded cable_trench's "three 50 m segments" as 3 lifts beside that
+# bedding layer), read only when no clause of the line states a number; a decimal ("0.2") is
+# never a count, and a range ("2-3 lifts", "3 to 4 lifts") states its smaller count, the
+# smallest size the brief allows.
 # "layer(s)" is a count of lifts only in a clause that compacts and never in one that sinters
 # or prints ("sintered in two layers" is the printer's work), nor as a hyphenated compound
 # ("a two-layer regolith shield")
 _LIFT_COUNT_RE = re.compile(
-    rf"(?<![\w.])(?P<n>{_COUNT})(?!\.\d)"
-    rf"(?:\s*(?:-|\u2013|to|or)\s*(?P<m>{_COUNT})(?!\.\d))?"
-    r"(?:[\s-]+\d+(?:\.\d+)?[\s-]*(?:cm|mm|m)\b)?"
-    r"(?:[\s-]+(?:compacted|compaction|full|separate|successive|equal|even|horizontal|thin"
-    r"|uniform|individual|distinct|placed|fill|regolith|loose|bedding|base))*"
+    rf"(?<![\w.])(?:(?P<n>{_COUNT})(?!\.\d)"
+    rf"(?:\s*(?:-|\u2013|to|or)\s*(?P<m>{_COUNT})(?!\.\d))?|(?P<a>an?))"
+    r"(?:[\s-]+(?:\d+(?:\.\d+)?[\s-]*(?:cm|mm|m)\b|compacted|compaction|full|separate"
+    r"|successive|equal|even|horizontal|thin|uniform|individual|distinct|placed|fill|regolith"
+    r"|loose|bedding|base))*"
     r"(?P<sep>[\s-]+)(?P<noun>lifts?|layers?)\b",
     re.IGNORECASE)
 _LIFTS_KEY_RE = re.compile(rf"\blifts?\s*[:=]\s*(?P<n>{_COUNT})(?![\w.])", re.IGNORECASE)  # "lifts: 3"
@@ -1155,29 +1159,39 @@ def _count_of(word: str) -> int:
     return _COUNT_WORDS[low] if low in _COUNT_WORDS else int(low)
 
 
-def _clause_lifts(clause: str) -> int | None:
-    """The lift count one clause states (:data:`_LIFT_COUNT_RE`, then "lifts: 3"), or None."""
+def _clause_lifts(clause: str) -> tuple[int | None, bool]:
+    """``(count, stated as a number)`` for one clause (:data:`_LIFT_COUNT_RE`, then "lifts:
+    3"): the first number before a lift noun, else 1 for an article ("a 20 cm compacted
+    lift"), else ``(None, False)``."""
+    article = False
     for m in _LIFT_COUNT_RE.finditer(clause):
         if m["noun"].lower().startswith("layer") and (
                 "-" in m["sep"] or not _COMPACTS_RE.search(clause)
                 or _SURFACES_RE.search(clause)):
             continue   # a two-layer compound, or layers nothing compacts (a sintered surface)
+        if m["a"]:
+            article = True
+            continue
         n = _count_of(m["n"])
-        return min(n, _count_of(m["m"])) if m["m"] else n
+        return (min(n, _count_of(m["m"])) if m["m"] else n), True
     key = _LIFTS_KEY_RE.search(clause)
-    return _count_of(key["n"]) if key else None
+    if key:
+        return _count_of(key["n"]), True
+    return (1, False) if article else (None, False)
 
 
 def stated_lifts(line: str | None) -> int | None:
     """The count of compaction lifts a brief line states (:data:`_LIFT_COUNT_RE`: digits or
     one to ten before "lift(s)", or before "layer(s)" in a clause that compacts; the smaller
-    of a range), the first one when it states several; None when it states none or a count
-    outside 1 to 10."""
+    of a range), the first one when it states several; 1 when it names only "a" lift or
+    layer; None when it states none or a count outside 1 to 10."""
+    article = False
     for clause in _LIFT_CLAUSE_SPLIT.split(line or ""):
-        n = _clause_lifts(clause)
-        if n is not None:
-            return n if 1 <= n <= _MAX_LIFTS else None
-    return None
+        n, number = _clause_lifts(clause)
+        if number:
+            return n if n is not None and 1 <= n <= _MAX_LIFTS else None
+        article = article or n is not None
+    return 1 if article else None
 
 
 def recorded_lifts(structure: Structure) -> tuple[str, float] | None:
