@@ -7,17 +7,20 @@ Contract:
     sequence_travel(req, graph, schedule, opts=None) -> {robot id: RobotTravel}   # the legs driven
     budget_rows(req, graph, failure, opts=None, locked=None) -> [{kind, subject, robots,
         budget_wh, demanded_wh, travel_wh}]   # the energy figures behind a verdict, as numbers
+                                              # (kind "type", "robot" or "order")
 
 Model (PRD section "스케줄링 모델"):
   x[i,r]  BoolVar for every task i and every robot r with r.type == task.robot_type
   s[i]    IntVar start, [start_offset_h, horizon_h]; end = s + duration
+  a[r,k,l] BoolVar per arc of robot r's circuit: task l is the next r runs after k ("Travel")
   exactly one robot per task                       hard
   x[i,r] => s_i >= start_offset_h + first_leg(i,r) hard   (the robot must be able to get there)
+  one circuit per robot over its start and tasks   hard   (the order it runs them in)
   precedence s_j >= s_i + d_i for each edge        soft group  precedence:<i>-><j>
-  per-robot no-overlap (optional intervals on x,
-    each [s_i - T[i,r], s_i + d_i])                soft group  robot:<r>
+  a[r,k,l] => s_l >= s_k + d_k + leg_h(k,l), plus
+    a redundant no-overlap and timeline row        soft group  robot:<r>
   per-zone no-overlap (optional intervals)         soft group  zone:<z>
-  sum_i (e_i + travel_wh(T_cells[i,r])) x[i,r]
+  sum_i e_i x[i,r] + sum_(k,l) leg_wh(k,l) a[r,k,l]
     <= battery_wh[r]                               soft group  energy:<r>
   C_max >= end_i, C_max <= horizon_h               soft group  horizon
   objective: minimise C_max (work end: the makespan is when the last task finishes)
@@ -28,45 +31,87 @@ enforcement literal.
 
 Travel
 ------
-travel is a per-task transit allowance (an upper bound over the site), not terrain; the
-simulator pays the actual distance. For every task i and capable robot r,
-``T_cells[i,r] = max(dist(p, zone_i))`` over p in {r's start position} ∪ {centres of the zones
-of every task r may run} and ``T[i,r] = ceil(T_cells[i,r] / speed_r)`` whole hours
-(:func:`moonwright.geometry.travel_hours`). Whatever r did before task i, it comes from its
-start position or from one of those zones, so the leg it actually drives is never longer than
-the allowance: the bound is sound and independent of the sequence the solver picks. On r's
-timeline the task occupies ``[s_i - T[i,r], s_i + d_i]`` (an optional interval with an affine
-start), so consecutive tasks are at least a full allowance apart; the first task cannot start
-before the first leg ``ceil(dist(start_r, zone_i) / speed_r)`` (a hard constraint, skipped for
-a locked task, whose robot is by definition already on it); and the per-robot energy sum
-budgets ``T_cells[i,r] * TRAVEL_WH_PER_CELL`` (0.5 Wh per cell, the simulator's constant) for
-every task the robot takes. Group names are unchanged, so cores, hints and repair prompts read
-as before. Zone no-overlap is unchanged (travel happens outside zones), and the makespan stays
-the end of the last task. Zone centres come from :func:`moonwright.geometry.zone_positions`
-(declared zones plus the deterministic layout of the ones only tasks use), exactly as the
-simulator lays them out. ``SolveOptions.robot_positions`` says where each robot is at
-``start_offset_h`` (a replan passes the simulator frame); everyone else starts at the depot.
-Since the simulator leaves for the next zone as soon as a robot is free and starts work at
-max(scheduled start, arrival), a disturbance-free replay of a solver schedule starts every
+Travel is exact and sequence-dependent (phase 3k): CP-SAT picks each robot's order of tasks
+and times and prices the legs of that order, so "optimal" is optimal for the driving the
+robots really do. Seen live: given the requirements and the verified task graphs of 21 run-3
+plans, Nemotron 3 Ultra wrote schedules that :func:`check_schedule` accepted and that beat
+CP-SAT's "optimal" makespan on 9 of them (four_mast_pads 43 h against 60 h, shielding_mound
+36 h against 45 h; ``scripts/llm_schedule_check.py``), because the solver reserved before
+every task the longest leg its robot could ever drive to that zone, even between two tasks
+in one zone, and charged that allowance's energy for every task. On the same graphs the
+solver now finishes at or below the model every time (four_mast_pads 41 h, shielding_mound
+36 h). Per robot r there is one ``AddCircuit`` over node 0, where r is at ``start_offset_h``
+(``SolveOptions.robot_positions`` for a replan, which passes the simulator frame, the depot
+otherwise; free to set off then, or at its ``SolveOptions.robot_ready_h`` hour), and one node
+per task r may run:
+
+* a task node's self-loop is NOT x[i,r] (r does not run the task); node 0's is idle[r], true
+  exactly when r runs nothing;
+* an arc k -> l (literal a[r,k,l]) puts l right after k on r's timeline and
+  a[r,k,l] => s_l >= s_k + d_k + leg_h(zone_k, zone_l), enforced on [a, robot group literal]
+  in the soft model so that robot:<r> keeps covering ordering and travel: ``leg_h`` is
+  ``ceil(dist / speed_r)`` whole hours between zone centres (:func:`moonwright.geometry
+  .travel_hours`, the rule :func:`check_schedule` and the simulator use), 0 within one zone;
+* an arc 0 -> l needs no constraint of its own: it implies x[l,r], and the hard first leg
+  x[l,r] => s_l >= start_offset_h + leg_h(start_r, zone_l), kept for every assigned task (a
+  valid bound whatever r does first), times it; from a later, fractional set-off hour (a
+  replan, :func:`moonwright.geometry.arrival_hour`) the wait and the leg are rounded up
+  together. The arc l -> 0 closing the circuit is free (no return leg, as before);
+* energy:<r> charges every arc taken, ``leg_wh`` = dist x TRAVEL_WH_PER_CELL in whole
+  milli-Wh per leg, rounded up (:func:`moonwright.geometry.leg_mwh`): exactly what
+  :func:`check_schedule` charges the same sequence, and never less than the simulator drains
+  driving it.
+
+The circuit itself is unconditional (it only orders). Two redundant constraints under
+robot:<r> help the solver prove a makespan: a per-robot NoOverlap over ``[s_i, s_i + d_i]``
+(it propagates) and one linear row saying that the robot's work plus the leg hours of its arcs
+end by the makespan (it bounds). Group names are unchanged, so cores, hints and repair prompts
+read as before. A lock that starts at or before ``start_offset_h`` (a replan's running task)
+is the task its robot is on: node 0 is its zone, the arc 0 -> it is forced and charges no leg.
+A later lock is a stop like any other with a pinned start: the robot may work before it, and
+the leg into it is timed and charged (the 3k review found the earliest lock of a robot taken
+to be the task it is on whatever its start, which forbade earlier work and drove it there
+for free). A robot whose tasks all lie in one zone centre gets
+no circuit, since it has no order to pick and no leg between its tasks: the no-overlap times
+it exactly, and its energy row pays the first leg once if it runs anything (busy[r]). Zone
+no-overlap is unchanged (travel happens outside zones), and the makespan stays the end of the
+last task. Zone centres come from :func:`moonwright.geometry.zone_positions` (declared zones
+plus the deterministic layout of the ones only tasks use), exactly as the simulator lays them
+out. Since the simulator leaves for the next zone as soon as a robot is free and starts work
+at max(scheduled start, arrival), a disturbance-free replay of a solver schedule starts every
 task on time; a ``task_overrun`` there is a genuine anomaly, not travel drift.
 
 Solve strategy:
-  1. normal solve (:func:`_solve`): one worker first, for at most ``SINGLE_WORKER_S``; one
-     worker breaks ties between equally good schedules the same way on every call, so a replay
-     of the same graph gets the same schedule (the opts.num_workers portfolio returns whichever
-     optimum a worker reports first). Only when one worker settles neither the optimum nor
-     infeasibility in that time does the portfolio take the rest of the time limit.
-     OPTIMAL/FEASIBLE -> Schedule.
+  1. normal solve (opts.num_workers, time limit). OPTIMAL/FEASIBLE -> Schedule. Exact travel
+     leaves many optimal schedules and the parallel workers race to one of them (the
+     landing-pad fixture got 3 different 80 h schedules in 30 solves, and its EX2-at-30 h
+     replan had 9 or 11 tasks to reschedule depending on which), so an optimal makespan is
+     then settled (:func:`_settle`): one more solve holds the makespan and minimises the sum of
+     the start times, on CP-SAT's portfolio interleaved in a fixed order (``interleave_search``,
+     the same answer whatever the number of workers) within a deterministic time budget
+     (:data:`SETTLE_DETERMINISTIC_S`) and what is left of the time limit. Whenever it finds a
+     schedule in that budget the same graph gets the same schedule (the fixtures and the
+     run-3 four_mast_pads graph, where a single settling worker found none and 12 solves gave
+     7 schedules); otherwise the first, just as optimal, is returned, and its tasks keep the
+     race's starts. Status, makespan and bound stay those of the first solve. A solve on one
+     worker, or with ``SolveOptions.deterministic`` (the interleaved portfolio from the start:
+     Monte Carlo replans and the relaxation advice), breaks ties the same way every time
+     already and is not settled.
   2. INFEASIBLE -> re-solve with assumptions, num_workers=1 (cores are only produced there);
      read solver.sufficient_assumptions_for_infeasibility() -> group names.
      If opts.minimize_core: shrink by deletion (drop a group, re-solve; keep it out while still
      infeasible) so the core is minimal and small enough to be a useful repair hint.
-     When the single-worker assumption solve times out, start from every group instead and let
-     the deletion filter isolate the core; every re-solve of the filter is a hard feasibility
-     trial on all workers (see below). After the first core its groups are disabled and up to
-     ``MAX_CORES - 1`` further, disjoint cores are looked for the same way, so one repair round
-     sees every independent conflict; ``Failure.conflicts`` is their union. The whole
-     explanation shares one wall-clock budget (opts.explain_time_limit_s).
+     Before it, the likely cores (:func:`_likely_cores`: a robot type's batteries together)
+     are hard trials of their own, which settle a pool shortfall in milliseconds where the
+     assumption solve can time out on the circuits. When the single-worker assumption solve
+     times out, start from every group instead and let the deletion filter isolate the core;
+     every re-solve of the filter is a hard feasibility trial on all workers (see below).
+     After the first core its groups are disabled and up to ``MAX_CORES - 1`` further,
+     disjoint cores are looked for the same way, each search opening with one hard trial on
+     every group left (most often they fit together, which a trial tells far sooner than the
+     assumption solve), so one repair round sees every independent conflict;
+     ``Failure.conflicts`` is their union. The whole explanation shares one wall-clock budget
+     (opts.explain_time_limit_s).
   3. UNKNOWN (timeout) -> Failure(kind="solver_timeout").
 `locked` entries pin task->robot and start (replanning of tasks already underway).
 Return Failure(kind="infeasible", conflicts=[group names], hint=<one sentence per group, the
@@ -81,30 +126,57 @@ Implementation notes
   ``soft=False`` (hard constraints, no objective) because CP-SAT's presolve can use fixed
   constraints but not assumption literals, and that is the difference between proving a tight
   instance infeasible in milliseconds and timing out on it with one worker.
-* The start domain is ``[start_offset_h, base + sum(durations + allowances)]`` rather than
+* The start domain is ``[start_offset_h, base + sum(durations + longest legs)]`` rather than
   ``[.., horizon_h]`` so the horizon is enforced *only* through the ``horizon`` group; otherwise
   a long precedence chain would look infeasible through the variable bounds and the core would
   blame the precedence edges instead of the horizon. In the hard model ``C_max <= horizon_h``
   tightens the bounds at the root, so nothing is lost. The domain leaves room for a fully
-  serial schedule with every allowance, so the hard first-leg constraints alone can never make
-  the model infeasible and every core is a set of soft groups.
+  serial schedule with the longest leg any capable robot could drive into every task, so the
+  hard first-leg constraints alone can never make the model infeasible and every core is a set
+  of soft groups (a pinned start a robot cannot reach is the one exception, and the precheck
+  reports it before any model is built, see ``locked`` below).
 * Groups that can never be violated are not created (a zone or robot with fewer than two
-  candidate tasks, a robot whose candidate tasks fit its battery even all together, travel
-  allowances included). They would never appear in a core anyway and leaving them out keeps the
-  model small. The allowance adds no variable or constraint: it only widens the intervals the
-  robot no-overlap already has and adds a constant per task to the energy sum.
+  candidate tasks, a robot whose candidate tasks fit its battery even all together, each with
+  the longest leg it could drive to it). They would never appear in a core anyway and leaving
+  them out keeps the model small; a robot with neither group gets no circuit either, since
+  nothing would read its order. A robot with n candidate tasks in two zones or more adds
+  n * (n + 1) arc literals, plus n * (n - 1) timed arcs and one timeline row when it has a
+  robot group and one energy row when it has an energy group; arcs into a locked task the
+  robot is on, and out of its start to any other task, are never created.
+* Every hard model (``soft=False``) also starts twins in graph order: tasks with the same
+  robot type, zone, duration, energy, predecessors and successors (:func:`_twins`; a phase
+  split in equal parts, as the task-graph prompt asks for), counting only the precedence edges
+  the model builds. Swapping two twins keeps every constraint, so no makespan is lost and no
+  trial of the deletion filter changes its verdict, and CP-SAT stops proving the same bound
+  once per permutation (the canonical "fine" graph of four_mast_pads: 7 s to 1 s to optimal;
+  at a horizon one hour short, the fallback trial now proves it infeasible and a core comes
+  back where none did). The assumption model goes without: a core found there must hold
+  without anything it does not name.
 * Energies are integer milli-Wh (:func:`moonwright.schemas.to_mwh`, i.e. ``round(x * 1000)``)
-  for task energies, travel allowances and batteries alike: the one fixed-point unit the
+  for task energies and batteries, legs rounded up per leg (:func:`moonwright.geometry
+  .leg_mwh`): the one fixed-point unit the
   validator, this model and :func:`check_schedule` share, so the three agree to 1e-3 Wh and a
   fractional budget (replans hand over 3-dp task energies and 2-dp remaining batteries) is
   neither rejected by rounding up nor accepted by rounding down. Hints quote the figures the
   model used as whole Wh with thousands separators ("9,930 Wh"), the travel share called out
-  when it is worth a Wh; a fractional budget gets just the decimals that keep the two figures
-  apart (see the "hints" section). :func:`budget_rows` returns the same figures as numbers.
+  when it is worth a Wh (the least travel any order needs, one robot's cheapest route or the
+  cheapest tree for several: a lower bound like every figure a hint states); a fractional
+  budget gets just the decimals that keep the two figures apart (see the "hints" section).
+  When a robot's tasks fit its battery in their cheapest order, the hint names the order
+  the rest of the core holds it to instead (the "order" form). :func:`budget_rows` returns
+  the same figures as numbers.
 * ``locked``: an entry pins ``x[task, robot] = 1`` and ``start == entry.start_h`` (absolute hours,
   the entry's ``end_h`` is ignored; the graph's duration counts). A locked robot that cannot do
   the task by type is treated as capable for that pair. Locks naming a task that is not in the
-  graph or a robot that is not in the requirements are ignored.
+  graph or a robot that is not in the requirements are ignored. A robot's earliest lock that
+  starts at or before ``start_offset_h`` is the task it is on: its circuit starts there, its
+  start position is that task's zone (``robot_positions``, if given for it, must say the same
+  for :func:`check_schedule` to agree, as a replan's frame does) and it drives no leg into it.
+  Any other lock is a stop of its robot's circuit with a pinned start: its first leg is timed
+  and charged like any task's, and a lock its robot cannot reach by its pinned start (nor the
+  task it is on, when ``robot_ready_h`` frees the robot only later) is reported by the
+  precheck as ``robot:<r>`` (:func:`_unkept_locks`), since the model would refuse it on a
+  hard constraint no core can name.
 * :func:`check_schedule` reports the shared conflict ids plus four of its own for defects a
   solver output cannot have but a hand-written schedule can: ``missing:<task>`` (not scheduled),
   ``unknown:<task>`` (entry for a task that is not in the graph), ``duration:<task>``
@@ -112,15 +184,16 @@ Implementation notes
   ``end_h`` of the entries). It checks the *actual* legs of each robot's sequence
   (:func:`sequence_travel`, which the verification receipt prints too): consecutive entries
   must be a whole ``travel_hours`` apart (``robot:<r>`` otherwise) and the energy per robot
-  includes the travel of that sequence (``energy:<r>``). Every actual leg is at most the
-  allowance the solver reserved, so a solver schedule always passes. With ``opts`` given, the
-  first leg of every robot (from ``opts.robot_positions`` or the depot, starting at
-  ``opts.start_offset_h``) is timed and charged as well; without it the robots' start
-  positions are unknown and only the legs between tasks are checked.
+  includes the travel of that sequence (``energy:<r>``). Those are the legs the solver's
+  circuit times and charges, computed on their own here, so a solver schedule always passes.
+  With ``opts`` given, the first leg of every robot (from ``opts.robot_positions`` or the
+  depot, starting at ``opts.start_offset_h``) is timed and charged as well; without it the
+  robots' start positions are unknown and only the legs between tasks are checked.
 """
 
 from __future__ import annotations
 
+import itertools
 import math
 import time
 from collections import defaultdict
@@ -131,10 +204,16 @@ from typing import Any
 from ortools.sat.python import cp_model
 
 from moonwright.geometry import (
+    Cell,
+    Point,
+    arrival_hour,
+    cheapest_legs,
     distance,
+    leg_mwh,
+    route_cost,
+    spanning_cost,
     start_positions,
     travel_hours,
-    travel_wh,
     zone_positions,
 )
 from moonwright.schemas import (
@@ -155,10 +234,9 @@ from moonwright.text import wh as _wh
 from moonwright.text import whole_wh as _whole_wh
 
 MAX_CORES = 3  # disjoint conflict cores reported per infeasible solve
-# How long the production solve stays on one worker before the portfolio takes over (module
-# docstring, solve strategy 1); the 264 saved graphs of the live evaluation runs all solve on one
-# worker in under a second.
-SINGLE_WORKER_S = 2.0
+LIKELY_CORE_S = 1.0  # time limit of each likely-core trial while explaining (_likely_cores)
+SETTLE_DETERMINISTIC_S = 0.2  # deterministic-time budget of the settling solve ("Solve strategy")
+SETTLE_MIN_S = 0.05           # no settling solve is started with less wall time left
 
 
 @dataclass
@@ -173,8 +251,20 @@ class SolveOptions:
     # Where each robot is at ``start_offset_h``, in grid cells (floats allowed): a replan passes
     # the positions of the simulator frame it replans from. Robots missing from the dict, and
     # every robot when None, start at the depot. The first task of a robot cannot start before
-    # it can drive there from this position, and its transit allowance covers that leg too.
+    # it can drive there from this position, and its circuit charges that leg.
     robot_positions: dict[str, tuple[float, float]] | None = None
+    # The hour (absolute, like ``start_offset_h``, fractions allowed) from which each robot
+    # listed may set off from that position; the others may from ``start_offset_h``. A replan
+    # at a fractional hour lists every robot that is not on a locked task at the fraction:
+    # planner hour 0 is floor(t_h), but the simulator resumes at t_h (``moonwright.sim
+    # .replan``), so a first leg is timed from when the robot really is free
+    # (:func:`moonwright.geometry.arrival_hour`).
+    robot_ready_h: dict[str, float] | None = None
+    # Interleave CP-SAT's portfolio in a fixed order (``interleave_search``) instead of racing
+    # its workers: the same inputs always give the same schedule, whatever ``num_workers``, at
+    # some speed. Monte Carlo replans and the relaxation advice solve this way; the production
+    # solve races and then settles (module docstring, "Solve strategy").
+    deterministic: bool = False
 
 
 # ----------------------------------------------------------------------------- public API
@@ -189,6 +279,14 @@ def solve_schedule(
     Returns a :class:`Schedule` (absolute hours, ``status`` "optimal" or "feasible") or a
     :class:`Failure` of kind ``infeasible`` (with the conflict core and a human hint) or
     ``solver_timeout`` (no answer within ``opts.time_limit_s``).
+
+    ``locked`` pins tasks to a robot and a start (absolute hours; the graph's duration
+    counts). A lock that starts at or before ``opts.start_offset_h`` is the task its robot is
+    on: the robot stands in that task's zone and runs it first, with no leg into it, so
+    ``opts.robot_positions``, if it places that robot, must place it there (a replan passes
+    the frame, which does). A later lock is a stop like any other with its start pinned: the
+    robot may run other tasks before it, and its leg into it is timed and charged. A lock its
+    robot cannot reach by its start is an ``infeasible`` verdict naming ``robot:<r>``.
     """
     opts = opts or SolveOptions()
     inst = _instance(req, graph, opts, locked or [])
@@ -196,10 +294,17 @@ def solve_schedule(
     if failure is not None:
         return failure
 
+    began = time.monotonic()
     built = _build(inst, soft=False, minimize=True)
-    solver, status, earlier_s = _solve(built, opts)
-    if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-        return _extract(inst, built, solver, status, earlier_s)
+    solver, status = _run(built, workers=opts.num_workers, time_limit_s=opts.time_limit_s,
+                          deterministic=opts.deterministic)
+    if status == cp_model.OPTIMAL:
+        first = _extract(inst, built, solver, status)
+        if opts.deterministic or opts.num_workers <= 1:
+            return first   # its search breaks ties the same way on every call already
+        return _settle(inst, first, opts.time_limit_s - (time.monotonic() - began))
+    if status == cp_model.FEASIBLE:
+        return _extract(inst, built, solver, status)
     if status == cp_model.INFEASIBLE:
         if not opts.explain_infeasibility:
             return Failure(kind="infeasible", hint="The solver proved the plan infeasible "
@@ -230,9 +335,11 @@ def check_schedule(
     Energy is compared in milli-Wh, exactly as the solver modelled it.
 
     ``opts`` (the :class:`SolveOptions` the solver was given) supplies where and when each
-    robot starts (``robot_positions`` or the depot, at ``start_offset_h``), so the first leg of
-    every robot is timed and charged as well. Without it the start positions are unknown and
-    only the legs between consecutive tasks are checked.
+    robot starts (``robot_positions`` or the depot, at ``start_offset_h`` or its later
+    ``robot_ready_h`` hour), so the first leg of every robot is timed and charged as well.
+    Without it the start positions are unknown and only the legs between consecutive tasks are
+    checked. It knows nothing of locks: a robot :func:`solve_schedule` takes to be on a locked
+    task stands in that task's zone, and ``opts`` must place it there (a replan's frame does).
     """
     conflicts: set[str] = set()
     robots = {r.id: r for r in req.robots}
@@ -298,8 +405,9 @@ def check_schedule(
 @dataclass(frozen=True)
 class RobotTravel:
     """The legs one robot drives along its scheduled sequence: their energy in milli-Wh (each
-    leg at :data:`~moonwright.geometry.TRAVEL_WH_PER_CELL`) and how many of them do not fit
-    between their entries in whole hours (``late_legs``: the ``robot:<r>`` defect)."""
+    leg at :data:`~moonwright.geometry.TRAVEL_WH_PER_CELL`, rounded up to a milli-Wh as
+    :func:`moonwright.geometry.leg_mwh` charges it) and how many of them do not fit between
+    their entries in whole hours (``late_legs``: the ``robot:<r>`` defect)."""
 
     mwh: int = 0
     late_legs: int = 0
@@ -310,14 +418,16 @@ def sequence_travel(
 ) -> dict[str, RobotTravel]:
     """Per scheduled robot of ``req``, the travel of its actual sequence of entries (sorted by
     start): with ``opts`` the first leg from where the robot starts (``opts.robot_positions``
-    or the depot, free from ``opts.start_offset_h``), then zone to zone; without ``opts`` the
-    start position is unknown and only the legs between entries count. Entries naming unknown
-    tasks or robots are skipped (``check_schedule`` reports them)."""
+    or the depot, free from ``opts.start_offset_h`` or its ``opts.robot_ready_h`` hour), then
+    zone to zone; without ``opts`` the start position is unknown and only the legs between
+    entries count. Entries naming unknown tasks or robots are skipped (``check_schedule``
+    reports them)."""
     robots = {r.id: r for r in req.robots}
     tasks = {t.id: t for t in graph.tasks}
     layout = zone_positions(req.site, (t.zone for t in graph.tasks))
     starts = None if opts is None else start_positions(req, opts.robot_positions)
     origin = 0 if opts is None else max(0, opts.start_offset_h)
+    ready = {} if opts is None else opts.robot_ready_h or {}   # fractional in a replan
     by_robot: dict[str, list[ScheduleEntry]] = defaultdict(list)
     for entry in schedule.entries:
         if entry.task in tasks and entry.robot in robots:
@@ -326,13 +436,13 @@ def sequence_travel(
     for robot_id, entries in by_robot.items():
         robot = robots[robot_id]
         here = None if starts is None else starts[robot_id]
-        free_h, mwh, late = origin, 0, 0
+        free_h, mwh, late = max(origin, ready.get(robot_id, origin)), 0, 0
         for entry in sorted(entries, key=lambda e: (e.start_h, e.end_h)):
             there = layout[tasks[entry.task].zone]
             if here is not None:
-                cells = distance(here, there)
-                mwh += to_mwh(travel_wh(cells))
-                if entry.start_h < free_h + travel_hours(cells, robot.speed_cells_per_h):
+                mwh += leg_mwh(here, there)
+                if entry.start_h < arrival_hour(free_h, distance(here, there),
+                                                robot.speed_cells_per_h):
                     late += 1
             here, free_h = there, max(free_h, entry.end_h)
         out[robot_id] = RobotTravel(mwh=mwh, late_legs=late)
@@ -349,16 +459,21 @@ def budget_rows(
 
     * ``{"kind": "type", "subject": <robot type>, "robots": [every robot of the type],
       "budget_wh": <their batteries combined>, "demanded_wh": <the type's work plus the least
-      transit allowance of each task>, "travel_wh": <that allowance>}``: one row per type whose
-      work fits the pool but no split of it fits the single batteries, however many of its
-      robots the core names;
+      travel its robots need to reach every zone of it>, "travel_wh": <that travel>}``: one row
+      per type of two robots or more whose work exceeds the pool, or fits it but no split of
+      it fits the single batteries, however many of its robots the core names;
     * ``{"kind": "robot", "subject": <robot id>, "robots": [<robot id>], "budget_wh": <its
-      battery>, "demanded_wh": <the tasks only it can run, transit included>, "travel_wh":
-      <that transit>}``: one row per robot whose own forced tasks exceed its battery.
+      battery>, "demanded_wh": <the tasks only it can run, plus the least travel to reach
+      them>, "travel_wh": <that travel>}``: one row per robot whose own forced tasks exceed its
+      battery;
+    * ``{"kind": "order", ...}``, the fields of a "robot" row: the only robot of its type,
+      whose tasks fit its battery in their cheapest order (``demanded_wh`` is within
+      ``budget_wh``) but not in the order the rest of the core holds it to (phase 3k).
 
-    Wh to the milli-Wh: exactly the figures the hint sentences quote (rounded there). ``[]``
-    when the failure has no energy conflict; conflicts naming a robot ``req`` does not have
-    are skipped.
+    The travel is the least any order and split of the tasks needs (:func:`_travel_floor`), so
+    every ``demanded_wh`` is a lower bound. Wh to the milli-Wh: exactly the figures the hint
+    sentences quote (rounded there). ``[]`` when the failure has no energy conflict; conflicts
+    naming a robot ``req`` does not have are skipped.
     """
     core = [c for c in failure.conflicts if c.startswith("energy:")]
     if not core:
@@ -379,19 +494,48 @@ def _overlapping(entries: Iterable[ScheduleEntry]) -> bool:
 
 # ----------------------------------------------------------------------------- instance
 @dataclass(frozen=True)
-class _Transit:
-    """Travel budget of one (task, robot) pair. The allowance is the longest leg the robot
-    could have to drive to the task's zone (from its start position or from any zone it can be
-    sent to); the first leg is the one from its start position (0 for a locked task)."""
+class _Route:
+    """What one robot can drive (module docstring, "Travel"). Node 0 is ``origin``, where the
+    robot is at ``start_offset_h``: the zone of the locked task it is on (a lock that starts at
+    or before ``start_offset_h``), else its ``robot_positions`` entry or the depot. Node k >= 1
+    is the zone of ``tasks[k - 1]``, the tasks it may run in graph order. ``hours[u][v]`` and
+    ``mwh[u][v]`` are the leg from node u to node v, in whole hours at the robot's speed and in
+    milli-Wh (0 within one zone), except that ``hours[0][v]`` counts from ``start_offset_h``
+    to the robot's arrival, so it holds the wait for a later ``robot_ready_h`` hour as well
+    (:func:`moonwright.geometry.arrival_hour`). ``start_h`` is where its timeline begins:
+    ``start_offset_h``, or the pinned start of the lock it is on; ``on`` is that lock's node,
+    which nothing precedes."""
 
-    allowance_h: int      # hours reserved before the task on the robot's timeline
-    allowance_mwh: int    # energy reserved for that leg, milli-Wh
-    first_leg_h: int      # hours before the robot can be at the zone at all
+    origin: Point
+    start_h: int
+    tasks: list[int]
+    nodes: dict[int, int]        # task position -> node
+    hours: list[list[int]]
+    mwh: list[list[int]]
+    on: int | None
+
+    @property
+    def on_task(self) -> int | None:
+        """The position of the locked task the robot is on (node ``on``), if any."""
+        return None if self.on is None else self.tasks[self.on - 1]
+
+    def tails(self, v: int) -> list[int]:
+        """The nodes an arc into task node ``v`` can come from: any other node, except that the
+        task the robot is on comes from the start and nothing else does."""
+        if self.on is not None:
+            return [0] if v == self.on else [u for u in self.nodes.values() if u != v]
+        return [u for u in range(len(self.tasks) + 1) if u != v]
+
+    def longest_in(self, table: list[list[int]], i: int) -> int:
+        """The longest leg (``table``: ``hours`` or ``mwh``) the robot could drive into task
+        ``i``'s zone, whatever it ran before: the most that leg can cost in any order."""
+        v = self.nodes[i]
+        return max(table[u][v] for u in self.tails(v))
 
 
 @dataclass(frozen=True)
 class _Instance:
-    """The problem pre-digested into integer data, capability sets and the lock table."""
+    """The problem pre-digested into integer data, capability sets, routes and the lock table."""
 
     req: Requirements
     opts: SolveOptions
@@ -403,9 +547,19 @@ class _Instance:
     edge_groups: dict[str, tuple[int, int]]  # precedence group name -> its edge (i, j)
     energy: list[int]                   # milli-Wh per task
     battery: dict[str, int]             # milli-Wh per robot id
-    transit: dict[tuple[int, str], _Transit]  # (task position, robot id) -> travel budget
+    cells: list[Cell]                   # per task: the centre of its zone
+    routes: dict[str, _Route]           # robot id -> what it can drive
     start_lb: int                       # earliest start (start_offset_h)
     start_ub: int                       # latest start that still leaves room for every task
+
+    def first_leg_h(self, i: int, robot_id: str) -> int:
+        """Hours after ``start_offset_h`` before ``robot_id`` can be at task ``i``'s zone at all:
+        the leg from its origin, from when it may set off (:class:`_Route`); 0 for the locked
+        task it is on, whose zone it is in already."""
+        route = self.routes[robot_id]
+        if i == route.on_task:
+            return 0
+        return route.hours[0][route.nodes[i]]
 
 
 def _edge_name(tasks: list[Task], i: int, j: int) -> str:
@@ -440,49 +594,63 @@ def _instance(
     for i, j in edges:
         edge_groups.setdefault(_edge_name(tasks, i, j), (i, j))
 
-    transit = _transits(req, tasks, capable, locks, opts.robot_positions)
     start_lb = max(0, opts.start_offset_h)
+    cells, routes = _routes(req, tasks, capable, locks, opts, start_lb)
     base = max([start_lb, req.horizon_h, *(e.start_h for e in locks.values())])
-    room = sum(t.duration_h + max((transit[i, r].allowance_h for r in capable[i]), default=0)
+    room = sum(t.duration_h + max((routes[r].longest_in(routes[r].hours, i) for r in capable[i]),
+                                  default=0)
                for i, t in enumerate(tasks))
     return _Instance(
         req=req, opts=opts, tasks=tasks, index=index, capable=capable, locked=locks, edges=edges,
         edge_groups=edge_groups,
         energy=[to_mwh(t.energy_wh) for t in tasks],
         battery={r.id: to_mwh(r.battery_wh) for r in req.robots},
-        transit=transit,
+        cells=cells, routes=routes,
         start_lb=start_lb, start_ub=base + room,
     )
 
 
-def _transits(
+def _routes(
     req: Requirements, tasks: list[Task], capable: list[list[str]],
-    locks: dict[int, ScheduleEntry], positions: dict[str, tuple[float, float]] | None,
-) -> dict[tuple[int, str], _Transit]:
-    """The transit allowance of every (task, capable robot) pair (module docstring, "Travel")."""
+    locks: dict[int, ScheduleEntry], opts: SolveOptions, start_lb: int,
+) -> tuple[list[Cell], dict[str, _Route]]:
+    """Every task's zone centre and every robot's :class:`_Route` (module docstring,
+    "Travel"): its origin and the legs between it and the zones of the tasks it may run. The
+    task a robot is on is its earliest lock that starts at or before ``start_lb``; any other
+    lock is a task like any other, with a pinned start."""
     layout = zone_positions(req.site, (t.zone for t in tasks))
-    starts = start_positions(req, positions)
-    speed = {r.id: r.speed_cells_per_h for r in req.robots}
-    reach: dict[str, set[tuple[int, int]]] = defaultdict(set)  # zones a robot may be sent to
-    for i, task in enumerate(tasks):
-        for robot_id in capable[i]:
-            reach[robot_id].add(layout[task.zone])
-    transit: dict[tuple[int, str], _Transit] = {}
-    for i, task in enumerate(tasks):
-        here = layout[task.zone]
-        for robot_id in capable[i]:
-            first = distance(starts[robot_id], here)
-            cells = max(first, *(distance(p, here) for p in reach[robot_id]))
-            transit[i, robot_id] = _Transit(
-                allowance_h=travel_hours(cells, speed[robot_id]),
-                allowance_mwh=to_mwh(travel_wh(cells)),
-                first_leg_h=0 if i in locks else travel_hours(first, speed[robot_id]),
-            )
-    return transit
+    cells = [layout[t.zone] for t in tasks]
+    starts = start_positions(req, opts.robot_positions)
+    ready = opts.robot_ready_h or {}
+    on: dict[str, int] = {}   # robot id -> the locked task it is on
+    for i, lock in sorted(locks.items(), key=lambda item: (item[1].start_h, item[0])):
+        if lock.start_h <= start_lb:
+            on.setdefault(lock.robot, i)
+    routes: dict[str, _Route] = {}
+    for robot in req.robots:
+        mine = [i for i in range(len(tasks)) if robot.id in capable[i]]
+        nodes = {i: k for k, i in enumerate(mine, start=1)}
+        if robot.id in on:   # working in that zone since the lock's start
+            origin, start_h, free_h = cells[on[robot.id]], locks[on[robot.id]].start_h, start_lb
+        else:
+            origin, start_h = starts[robot.id], start_lb
+            free_h = max(start_lb, ready.get(robot.id, start_lb))
+        points = [origin, *(cells[i] for i in mine)]
+        speed = robot.speed_cells_per_h
+        hours = [[travel_hours(distance(p, q), speed) for q in points] for p in points]
+        hours[0] = [arrival_hour(free_h, distance(origin, q), speed) - start_lb for q in points]
+        routes[robot.id] = _Route(
+            origin=origin, start_h=start_h, tasks=mine, nodes=nodes, hours=hours,
+            mwh=[[leg_mwh(p, q) for q in points] for p in points],
+            on=nodes[on[robot.id]] if robot.id in on else None,
+        )
+    return cells, routes
 
 
 def _precheck(inst: _Instance) -> Failure | None:
-    """Structural problems the validator normally catches first; reported instead of crashing."""
+    """Structural problems the validator normally catches first, and locks their robots
+    cannot keep (:func:`_unkept_locks`): reported instead of crashing, or instead of a model
+    that a hard constraint alone makes infeasible, which no core could name."""
     conflicts: list[str] = []
     for i, task in enumerate(inst.tasks):
         if not inst.capable[i]:
@@ -490,10 +658,34 @@ def _precheck(inst: _Instance) -> Failure | None:
         for pred_id in task.after:
             if pred_id not in inst.index:
                 conflicts.append(f"reference:{task.id}.after={pred_id}")
-    if not conflicts:
+    unkept = _unkept_locks(inst)
+    if not conflicts and not unkept:
         return None
-    core = sorted(set(conflicts))
-    return Failure(kind="infeasible", conflicts=core, hint=_hints(inst, core))
+    sentences = [_hints(inst, sorted(set(conflicts)))] if conflicts else []
+    sentences += [sentence for _, sentence in unkept]
+    core = sorted({*conflicts, *(f"robot:{robot_id}" for robot_id, _ in unkept)})
+    return Failure(kind="infeasible", conflicts=core, hint=" ".join(sentences))
+
+
+def _unkept_locks(inst: _Instance) -> list[tuple[str, str]]:
+    """``(robot id, sentence)`` for every lock whose pinned start comes before its robot can be
+    in the task's zone: a later lock before the robot has set off and driven there
+    (:meth:`_Instance.first_leg_h`), the lock a robot is on before the ``robot_ready_h`` hour
+    the options give it. No schedule keeps such a lock, and :func:`check_schedule` would call
+    any that did ``robot:<r>``, so that is the conflict."""
+    out: list[tuple[str, str]] = []
+    ready = inst.opts.robot_ready_h or {}
+    for i, lock in sorted(inst.locked.items()):
+        route = inst.routes[lock.robot]
+        if i == route.on_task:
+            earliest = arrival_hour(ready.get(lock.robot, lock.start_h), 0.0, 1.0)
+        else:
+            earliest = inst.start_lb + inst.first_leg_h(i, lock.robot)
+        if lock.start_h < earliest:
+            sentence = (f"{inst.tasks[i].id} is locked to {lock.robot} from {_h(lock.start_h)}, "
+                        f"but {lock.robot} cannot be in its zone before {_h(earliest)}.")
+            out.append((lock.robot, sentence))
+    return out
 
 
 # ----------------------------------------------------------------------------- model
@@ -503,6 +695,7 @@ class _Model:
     assign: dict[tuple[int, str], cp_model.IntVar]   # (task position, robot id) -> x[i, r]
     start: list[cp_model.IntVar]                     # s[i]
     groups: dict[str, cp_model.IntVar]               # group name -> literal (soft model only)
+    makespan: cp_model.IntVar                        # C_max
 
 
 def _build(
@@ -553,41 +746,71 @@ def _build(
     # precedence (one group per edge, named as in inst.edge_groups)
     for i, j in inst.edges:
         add(start[j] >= start[i] + tasks[i].duration_h, switch(_edge_name(tasks, i, j)))
+    if not soft:  # a hard model: twins start in graph order (see _twins)
+        for twins in _twins(inst, enabled):
+            for i, j in itertools.pairwise(twins):
+                model.add(start[i] <= start[j])
 
-    # per-robot energy + no-overlap (each task's interval is preceded by its transit allowance)
-    candidates: dict[str, list[int]] = defaultdict(list)
-    for i, robot_id in assign:
-        candidates[robot_id].append(i)
+    # makespan: the end of the last task (its horizon bound comes last, as a group of its own)
+    max_d = max(t.duration_h for t in tasks)
+    makespan = model.new_int_var(0, inst.start_ub + max_d, "makespan")
+    model.add_max_equality(makespan, [start[i] + tasks[i].duration_h for i in range(len(tasks))])
+
+    # per robot: first legs, then its sequence (module docstring, "Travel"): a circuit through
+    # the tasks it runs, timed under robot:<r> and priced under energy:<r>
     for robot in inst.req.robots:
-        idxs = candidates.get(robot.id, [])
-        need = {i: inst.energy[i] + inst.transit[i, robot.id].allowance_mwh for i in idxs}
-        if sum(need.values()) > inst.battery[robot.id]:
-            add(sum(need[i] * assign[i, robot.id] for i in idxs) <= inst.battery[robot.id],
-                switch(f"energy:{robot.id}"))
-        for i in idxs:  # first leg: the robot cannot be at the zone before it can drive there
-            lead = inst.transit[i, robot.id].first_leg_h
+        route = inst.routes[robot.id]
+        x = {k: assign[i, robot.id] for i, k in route.nodes.items()}   # task node -> x[i, r]
+        for i, k in route.nodes.items():  # no robot is at a zone before it can drive there
+            lead = inst.first_leg_h(i, robot.id)
             if lead:
-                model.add(start[i] >= inst.start_lb + lead).only_enforce_if(assign[i, robot.id])
-        if len(idxs) < 2:
-            continue
-        g = switch(f"robot:{robot.id}")
-        if g is False:
-            continue
-        intervals = []
-        for i in idxs:
-            x = assign[i, robot.id]
-            if g is True:
-                present = x
-            else:  # present <=> x AND g
-                present = model.new_bool_var(f"p[{tasks[i].id},{robot.id}]")
-                model.add_bool_and([x, g]).only_enforce_if(present)
-                model.add_bool_or([x.negated(), g.negated(), present])
-            d = tasks[i].duration_h
-            allowance = inst.transit[i, robot.id].allowance_h
-            begin = start[i] - allowance if allowance else start[i]
-            intervals.append(model.new_optional_interval_var(
-                begin, d + allowance, start[i] + d, present, f"iv[{tasks[i].id},{robot.id}]"))
-        model.add_no_overlap(intervals)
+                model.add(start[i] >= inst.start_lb + lead).only_enforce_if(x[k])
+        most = sum(inst.energy[i] + route.longest_in(route.mwh, i) for i in route.tasks)
+        energy_g = switch(f"energy:{robot.id}") if most > inst.battery[robot.id] else False
+        robot_g = switch(f"robot:{robot.id}") if len(route.tasks) >= 2 else False
+        if energy_g is False and robot_g is False:
+            continue  # nothing reads this robot's order
+        # every task it may run in one zone centre: no order to pick and no leg between them
+        single = len({inst.cells[i] for i in route.tasks}) == 1
+        arcs = {} if single else _circuit(model, route, x, robot.id, tasks)
+        if robot_g is not False:
+            for (u, v), a in arcs.items():
+                if u and v:  # out of the start: the first leg above; back to it: free
+                    i, j = route.tasks[u - 1], route.tasks[v - 1]
+                    gap = tasks[i].duration_h + route.hours[u][v]
+                    model.add(start[j] >= start[i] + gap).only_enforce_if(
+                        a if robot_g is True else [a, robot_g])
+            # redundant, for the bound: the work and every leg the robot drives, the first one
+            # included, end by the makespan (Monte Carlo replans of four_mast_pads run-3 #1
+            # prove optimal in half the time, the slowest in 1.1 s instead of 3 s)
+            terms = [(x[k], tasks[i].duration_h) for i, k in route.nodes.items()]
+            terms += [(a, route.hours[u][v]) for (u, v), a in arcs.items()
+                      if v and route.hours[u][v]]
+            busy_h = cp_model.LinearExpr.weighted_sum([t for t, _ in terms],
+                                                      [c for _, c in terms])
+            add(busy_h <= makespan - route.start_h, robot_g)
+            intervals = []  # redundant with the timed arcs, but it propagates
+            for i, k in route.nodes.items():
+                if robot_g is True:
+                    present = x[k]
+                else:  # present <=> x AND g
+                    present = model.new_bool_var(f"p[{tasks[i].id},{robot.id}]")
+                    model.add_bool_and([x[k], robot_g]).only_enforce_if(present)
+                    model.add_bool_or([x[k].negated(), robot_g.negated(), present])
+                d = tasks[i].duration_h
+                intervals.append(model.new_optional_interval_var(
+                    start[i], d, start[i] + d, present, f"iv[{tasks[i].id},{robot.id}]"))
+            model.add_no_overlap(intervals)
+        if energy_g is not False:  # every leg driven, the first one included; never the way back
+            terms = [(x[k], inst.energy[i]) for i, k in route.nodes.items()]
+            terms += [(a, route.mwh[u][v]) for (u, v), a in arcs.items() if v and route.mwh[u][v]]
+            if single and route.mwh[0][1]:  # its one leg, paid if it runs anything at all
+                busy = model.new_bool_var(f"busy[{robot.id}]")
+                for lit in x.values():
+                    model.add_implication(lit, busy)
+                terms.append((busy, route.mwh[0][1]))
+            used = cp_model.LinearExpr.weighted_sum([t for t, _ in terms], [c for _, c in terms])
+            add(used <= inst.battery[robot.id], energy_g)
 
     # per-zone no-overlap (a task occupies its zone whichever robot runs it)
     zones: dict[str, list[int]] = defaultdict(list)
@@ -610,52 +833,80 @@ def _build(
                     model.new_optional_interval_var(start[i], d, start[i] + d, g, name))
         model.add_no_overlap(intervals)
 
-    # makespan + horizon
-    max_d = max(t.duration_h for t in tasks)
-    makespan = model.new_int_var(0, inst.start_ub + max_d, "makespan")
-    model.add_max_equality(makespan, [start[i] + tasks[i].duration_h for i in range(len(tasks))])
+    # horizon
     add(makespan <= inst.req.horizon_h, switch("horizon"))
     if minimize:
         model.minimize(makespan)
-    return _Model(model=model, assign=assign, start=start, groups=groups)
+    return _Model(model=model, assign=assign, start=start, groups=groups, makespan=makespan)
+
+
+def _twins(inst: _Instance, enabled: Collection[str] | None = None) -> list[list[int]]:
+    """Classes of interchangeable tasks, each in graph order: the same robot type, zone,
+    duration, energy, predecessors and successors and none of them locked (a phase split in
+    equal parts, as the task-graph prompt asks for). Swapping two twins' robots and starts
+    keeps every constraint, so any schedule can be relabelled to start them in graph order.
+    Only the precedence edges ``enabled`` builds count (every one when None): with one twin's
+    edge left out of a deletion-filter trial and the other's kept, they are twins no more."""
+    preds: list[set[int]] = [set() for _ in inst.tasks]
+    succs: list[set[int]] = [set() for _ in inst.tasks]
+    for i, j in inst.edges:
+        if enabled is not None and _edge_name(inst.tasks, i, j) not in enabled:
+            continue
+        succs[i].add(j)
+        preds[j].add(i)
+    classes: dict[tuple[Any, ...], list[int]] = defaultdict(list)
+    for i, t in enumerate(inst.tasks):
+        if i not in inst.locked:
+            classes[t.robot_type, t.zone, t.duration_h, inst.energy[i], frozenset(preds[i]),
+                    frozenset(succs[i])].append(i)
+    return [twins for twins in classes.values() if len(twins) > 1]
+
+
+def _circuit(
+    model: cp_model.CpModel, route: _Route, x: dict[int, cp_model.IntVar], robot_id: str,
+    tasks: list[Task],
+) -> dict[tuple[int, int], cp_model.IntVar]:
+    """The robot's sequence as one ``AddCircuit`` over its route (module docstring, "Travel"):
+    a task node's self-loop is NOT x (the robot does not run it), the start's is idle[r] (it
+    runs nothing). Returns the arc literals by (tail, head) node: k -> l puts task node l
+    right after k, k -> 0 closes the circuit. The locked task the robot is on is the forced
+    first node."""
+    names = ["start", *(tasks[i].id for i in route.tasks)]
+    arcs: dict[tuple[int, int], cp_model.IntVar] = {}
+    for v in route.nodes.values():
+        for u in route.tails(v):
+            arcs[u, v] = model.new_bool_var(f"a[{robot_id},{names[u]}->{names[v]}]")
+    for u in route.nodes.values():
+        arcs[u, 0] = model.new_bool_var(f"a[{robot_id},{names[u]}->start]")
+    loops = [(k, k, lit.negated()) for k, lit in x.items()]
+    if route.on is None:
+        idle = model.new_bool_var(f"idle[{robot_id}]")
+        loops.append((0, 0, idle))
+        for lit in x.values():  # a circuit through tasks alone would skip the start
+            model.add_implication(lit, idle.negated())
+    else:
+        model.add(arcs[0, route.on] == 1)
+    model.add_circuit([*loops, *((u, v, a) for (u, v), a in arcs.items())])
+    return arcs
 
 
 def _run(
-    built: _Model, *, workers: int, time_limit_s: float
+    built: _Model, *, workers: int, time_limit_s: float, deterministic: bool = False
 ) -> tuple[cp_model.CpSolver, cp_model.CpSolverStatus]:
+    """Solve ``built`` on ``workers`` within ``time_limit_s``; ``deterministic`` interleaves
+    the portfolio instead of racing it (:attr:`SolveOptions.deterministic`). One worker is
+    deterministic as it is, and faster without interleaving."""
     solver = cp_model.CpSolver()
     solver.parameters.num_workers = workers
     solver.parameters.max_time_in_seconds = time_limit_s
+    if deterministic and workers > 1:
+        solver.parameters.interleave_search = True
     status = solver.solve(built.model)
     return solver, status
 
 
-def _solve(
-    built: _Model, opts: SolveOptions
-) -> tuple[cp_model.CpSolver, cp_model.CpSolverStatus, float]:
-    """The production solve (module docstring, solve strategy 1): one worker for at most
-    ``SINGLE_WORKER_S`` (for the whole time limit when ``opts.num_workers`` is 1), then, if it
-    proved neither an optimum nor infeasibility, the portfolio for the rest of the limit. A
-    portfolio that finds nothing in that time keeps the one worker's feasible schedule. Returns
-    the solver to read, its status and the seconds the other solve took (0 when the one worker
-    settled it), which the reported solve time adds to the solver's own."""
-    alone = opts.num_workers <= 1
-    first = opts.time_limit_s if alone else min(opts.time_limit_s, SINGLE_WORKER_S)
-    t0 = time.monotonic()
-    solver, status = _run(built, workers=1, time_limit_s=first)
-    if alone or status in (cp_model.OPTIMAL, cp_model.INFEASIBLE, cp_model.MODEL_INVALID):
-        return solver, status, 0.0
-    t1 = time.monotonic()
-    portfolio, again = _run(built, workers=opts.num_workers,
-                            time_limit_s=max(0.0, opts.time_limit_s - (t1 - t0)))
-    if again == cp_model.UNKNOWN and status == cp_model.FEASIBLE:
-        return solver, status, time.monotonic() - t1
-    return portfolio, again, t1 - t0
-
-
 def _extract(
-    inst: _Instance, built: _Model, solver: cp_model.CpSolver, status: cp_model.CpSolverStatus,
-    earlier_s: float = 0.0,
+    inst: _Instance, built: _Model, solver: cp_model.CpSolver, status: cp_model.CpSolverStatus
 ) -> Schedule:
     entries = []
     for i, task in enumerate(inst.tasks):
@@ -668,8 +919,33 @@ def _extract(
         makespan_h=max(e.end_h for e in entries),
         status="optimal" if status == cp_model.OPTIMAL else "feasible",
         objective_bound_h=int(solver.best_objective_bound),
-        solve_time_s=earlier_s + solver.wall_time,
+        solve_time_s=solver.wall_time,
     )
+
+
+def _settle(inst: _Instance, first: Schedule, time_left_s: float) -> Schedule:
+    """The settled schedule of the optimal makespan of ``first`` (module docstring, "Solve
+    strategy"): the production model with the makespan held there and the sum of the start
+    times minimised, by the interleaved portfolio within :data:`SETTLE_DETERMINISTIC_S` of
+    deterministic time, so the schedule depends on the inputs alone (the best sum the budget
+    reached, not always the least). ``first`` itself, just as optimal, when no settled schedule
+    turns up within the budget or ``time_left_s`` (what is left of the solve's time limit)."""
+    if time_left_s < SETTLE_MIN_S:
+        return first
+    built = _build(inst, soft=False)
+    built.model.add(built.makespan <= first.makespan_h)
+    built.model.minimize(cp_model.LinearExpr.sum(built.start))
+    solver = cp_model.CpSolver()
+    solver.parameters.num_workers = inst.opts.num_workers
+    solver.parameters.interleave_search = True
+    solver.parameters.max_deterministic_time = SETTLE_DETERMINISTIC_S
+    solver.parameters.max_time_in_seconds = time_left_s
+    status = solver.solve(built.model)
+    if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+        return first
+    settled = _extract(inst, built, solver, cp_model.OPTIMAL)
+    return settled.model_copy(update={"objective_bound_h": first.objective_bound_h,
+                                      "solve_time_s": first.solve_time_s + solver.wall_time})
 
 
 # ----------------------------------------------------------------------------- infeasibility
@@ -738,30 +1014,58 @@ def _minimize_core(inst: _Instance, core: list[str], *, deadline: float | None =
     return sorted(set(current))
 
 
-def _find_core(
-    inst: _Instance, enabled: Collection[str] | None, deadline: float
-) -> tuple[list[str], list[str]] | None:
-    """One conflict core among the ``enabled`` groups (every group when None), as
-    ``(core, assumed)``; None when the model restricted to those groups is feasible or the
-    budget ran out before infeasibility could be confirmed.
+def _likely_cores(inst: _Instance, enabled: Collection[str]) -> list[list[str]]:
+    """Group sets that are often a core on their own and cheap to try as hard trials: the
+    ``energy:<r>`` groups of each robot type in ``enabled``, together (one robot's tasks that
+    no order fits, a type whose work exceeds its pool, a split no battery takes). Their models
+    have no timing at all, so a trial settles them in milliseconds where the single-worker
+    assumption solve over every group can time out (the 3k review: the run-3 four_mast_pads
+    graph twice over, its excavators 650 Wh short, went 15.4 s and a 32-group core with
+    precedence edges in it, against 0.05 s for the trial on the two batteries)."""
+    by_type: dict[str, list[str]] = defaultdict(list)
+    for robot in inst.req.robots:
+        if f"energy:{robot.id}" in enabled:
+            by_type[robot.type].append(f"energy:{robot.id}")
+    return [groups for _, groups in sorted(by_type.items())]
 
-    Fast path: one assumption solve, which usually names a small sufficient subset in
-    milliseconds. When it times out (one worker cannot always prove what the multi-worker
-    production solve refuted), the fallback confirms infeasibility with one hard trial and lets
-    the deletion filter isolate the core from there; the fallback always minimises because
-    the full set is not an explanation.
+
+def _find_core(
+    inst: _Instance, enabled: list[str], deadline: float, *, proven: bool
+) -> list[str] | None:
+    """One conflict core among the ``enabled`` groups; None when the model restricted to them
+    is feasible or the budget ran out before infeasibility could be confirmed. ``proven``: the
+    hard model with these groups is known to be infeasible (the production solve, for the
+    first core); otherwise one hard trial on all of them decides first, which tells groups
+    that fit together apart far faster than the assumption solve.
+
+    Then the likely cores (:func:`_likely_cores`), each a short hard trial. Then the
+    assumption solve, which usually names a small sufficient subset in milliseconds. When it
+    times out (one worker cannot always prove what the multi-worker production solve refuted),
+    the fallback confirms that a hard trial still proves infeasibility within the budget left
+    and lets the deletion filter isolate the core from every group; the fallback always
+    minimises because the full set is not an explanation.
     """
+    if not proven and (_trial(inst, enabled, time_limit_s=_time_slice(inst, deadline))
+                       != cp_model.INFEASIBLE):
+        return None  # these groups are satisfiable together (or not provably not, in time)
+    for likely in _likely_cores(inst, enabled):
+        limit = min(LIKELY_CORE_S, _time_slice(inst, deadline))
+        if _trial(inst, likely, time_limit_s=limit) == cp_model.INFEASIBLE:
+            if inst.opts.minimize_core:
+                return _minimize_core(inst, likely, deadline=deadline)
+            return likely
     status, core, assumed = _core_solve(inst, enabled, time_limit_s=_time_slice(inst, deadline))
     if status == cp_model.INFEASIBLE:
         core = core or assumed  # no core reported: start from every group and let deletion shrink
         if inst.opts.minimize_core:
             core = _minimize_core(inst, core, deadline=deadline)
-        return core, assumed
+        return core
     if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         return None  # these groups are satisfiable together
-    if _trial(inst, assumed, time_limit_s=_time_slice(inst, deadline)) != cp_model.INFEASIBLE:
+    if proven and (_trial(inst, assumed, time_limit_s=_time_slice(inst, deadline))
+                   != cp_model.INFEASIBLE):
         return None
-    return _minimize_core(inst, assumed, deadline=deadline), assumed
+    return _minimize_core(inst, assumed, deadline=deadline)
 
 
 def _explain(inst: _Instance) -> Failure:
@@ -776,18 +1080,15 @@ def _explain(inst: _Instance) -> Failure:
     """
     deadline = time.monotonic() + inst.opts.explain_time_limit_s
     cores: list[list[str]] = []
-    all_groups: list[str] | None = None  # every buildable group, known after the first solve
+    all_groups = sorted(_build(inst, soft=True).groups)   # every buildable group
     disabled: set[str] = set()
     for _ in range(MAX_CORES):
-        enabled = None if all_groups is None else [g for g in all_groups if g not in disabled]
-        if enabled is not None and not enabled:
+        enabled = [g for g in all_groups if g not in disabled]
+        if not enabled:
             break
-        found = _find_core(inst, enabled, deadline)
-        if found is None:
+        core = _find_core(inst, enabled, deadline, proven=not cores)
+        if core is None:
             break
-        core, assumed = found
-        if all_groups is None:
-            all_groups = assumed
         cores.append(core)
         disabled.update(core)
         if not core:
@@ -797,7 +1098,7 @@ def _explain(inst: _Instance) -> Failure:
                        "could not isolate the conflicting constraints within the "
                        f"{inst.opts.explain_time_limit_s:g} s explanation budget.")
     union = sorted(set().union(*cores))
-    return Failure(kind="infeasible", conflicts=union, hint=_hints(inst, union))
+    return Failure(kind="infeasible", conflicts=union, hint=_hints(inst, union, cores))
 
 
 # ----------------------------------------------------------------------------- hints
@@ -807,20 +1108,33 @@ def _explain(inst: _Instance) -> Failure:
 # one type whose conflict has the same pool-form explanation share one sentence that lists them.
 # Every figure a repair needs (budget, demand, travel share, pool) stays in the sentence;
 # :func:`budget_rows` hands the energy figures over as numbers, from the very rows the
-# sentences are rendered from, so prose and table can never disagree.
-def _hints(inst: _Instance, core: list[str]) -> str:
+# sentences are rendered from, so prose and table can never disagree. Every figure is a sound
+# lower bound (phase 3k): the travel a sentence counts is the least any order and split of the
+# tasks needs (:func:`_travel_floor`), so the demand it belongs to reads "at least".
+def _hints(inst: _Instance, core: list[str], cores: list[list[str]] | None = None) -> str:
     """The human hint for ``core``: one sentence per conflict in core order, pool-form energy
     and robot sentences of one type merged into one (emitted where the group's first conflict
-    stands)."""
+    stands), and so is a ``robot:<r>`` conflict that only ties an order to time (no
+    ``horizon`` beside it) with the energy sentence that names the order. ``cores``, the
+    disjoint cores ``core`` is the union of, tell which groups conflict together; without
+    them every group of ``core`` counts as one conflict."""
     if not core:
         return "The plan is infeasible even with every soft constraint relaxed."
     merged: dict[str, tuple[int, str]] = {}   # conflict id -> (group number, its sentence)
     groups = 0
-    for budget in _energy_budgets(inst, core):
+    for budget in _energy_budgets(inst, core, cores):
         groups += 1
+        sentence = _energy_sentence(inst, budget)
         for robot_id in budget.named:
-            merged[f"energy:{robot_id}"] = (groups, _energy_sentence(inst, budget))
-    for load in _robot_loads(inst, core):
+            merged[f"energy:{robot_id}"] = (groups, sentence)
+        scope = _scope(core, cores, budget.robots)
+        if budget.cause and "horizon" not in scope:
+            # without a deadline beside it, robot:<r> is there to tie the order to time: the
+            # energy sentence that names the order explains it, not a sentence about hours
+            for robot_id in budget.robots:
+                if f"robot:{robot_id}" in scope:
+                    merged[f"robot:{robot_id}"] = (groups, sentence)
+    for load in _robot_loads(inst, [c for c in core if c not in merged]):
         groups += 1
         for robot_id in load.named:
             merged[f"robot:{robot_id}"] = (groups, _robot_sentence(load))
@@ -859,13 +1173,15 @@ def _decimals_apart(need: int, budget: int) -> int:
 
 
 def _travel_clause(mwh: int) -> str:
-    """', about 30 Wh of it travel' when the transit share is worth a Wh, else ''. The share
-    is the allowance the model reserved (an upper bound), hence "about"."""
-    return f", about {_wh(mwh)} of it travel" if _whole_wh(mwh) >= 1 else ""
+    """', 30 Wh of it travel' when the travel share is worth a Wh, else ''. The share is the
+    least travel any order of the tasks needs (:func:`_travel_floor`), so the demand it is part
+    of reads "at least"."""
+    return f", {_wh(mwh)} of it travel" if _whole_wh(mwh) >= 1 else ""
 
 
 def _transit_note(hours: int) -> str:
-    return f" plus up to {_h(hours)} of transit" if hours else ""
+    """' plus at least 7 h of transit': the least driving any order of the tasks needs."""
+    return f" plus at least {_h(hours)} of transit" if hours else ""
 
 
 def _forced_tasks(inst: _Instance, robot_id: str) -> list[int]:
@@ -875,11 +1191,63 @@ def _forced_tasks(inst: _Instance, robot_id: str) -> list[int]:
             or (i in inst.locked and inst.locked[i].robot == robot_id)]
 
 
-def _least_allowance(inst: _Instance, i: int) -> _Transit:
-    """The transit budget of task ``i`` on whichever capable robot needs the least: a lower
-    bound whatever the solver assigns."""
-    return min((inst.transit[i, r] for r in inst.capable[i]),
-               key=lambda t: (t.allowance_mwh, t.allowance_h))
+def _shared_tasks(inst: _Instance, robot_type: str) -> list[int]:
+    """The tasks the robots of ``robot_type`` share: the type's own, except one locked to a
+    robot of another type, plus one of another type locked to a robot of this one."""
+    return [i for i, t in enumerate(inst.tasks)
+            if (inst.req.robot(inst.locked[i].robot).type if i in inst.locked
+                else t.robot_type) == robot_type]
+
+
+def _travel_floor(inst: _Instance, robot_ids: list[str], tasks: list[int], *,
+                  hours: bool) -> int:
+    """The least travel any schedule needs for the robots ``robot_ids`` to reach the zone of
+    every task in ``tasks`` from where they start, whatever order and split CP-SAT picks: in
+    whole hours at the fastest of their speeds (``hours``) or in milli-Wh, priced on the
+    cheapest chains of legs through every zone they may stop at. One robot: its cheapest
+    route through those zones (:func:`moonwright.geometry.route_cost`); several: the cheapest
+    tree joining the zones to their origins (:func:`moonwright.geometry.spanning_cost`), since
+    the split is theirs to pick. A sound lower bound either way, which is what lets a hint
+    state it."""
+    routes = [inst.routes[r] for r in robot_ids]
+    if hours:
+        speed = max(inst.req.robot(r).speed_cells_per_h for r in robot_ids)
+
+        def leg(p: Point, q: Point) -> int:
+            return travel_hours(distance(p, q), speed)
+    else:
+        leg = leg_mwh
+    origins = [route.origin for route in routes]
+    cost = cheapest_legs([*origins, *(inst.cells[i] for r in routes for i in r.tasks)], leg)
+    zones = [inst.cells[i] for i in tasks]
+    if len(origins) == 1:
+        return route_cost(origins[0], zones, cost)
+    return spanning_cost(origins, zones, cost)
+
+
+def _order_cause(inst: _Instance, core: Collection[str], robot_ids: Collection[str],
+                 ) -> str | None:
+    """What holds ``robot_ids`` to an order of their tasks that their batteries cannot drive,
+    as a clause for "the order ...": the groups of ``core`` that time their arcs, "the
+    precedence edges force", "the deadline forces", "the precedence edges and the shared
+    zones force", or the pinned start of a task locked to one of them that it is not already
+    on. None when ``core`` names none of their ``robot:<r>`` groups, the only ones that tie an
+    order to time (module docstring, "Travel"): without them every robot may drive its
+    cheapest order, or when nothing else in ``core`` times one."""
+    if not any(f"robot:{r}" in core for r in robot_ids):
+        return None
+    kinds = {c.partition(":")[0] for c in core}
+    causes = [(phrase, plural) for kind, phrase, plural in (
+        ("precedence", "the precedence edges", True), ("horizon", "the deadline", False),
+        ("zone", "the shared zones", True)) if kind in kinds]
+    pinned = [inst.tasks[i].id for i, lock in sorted(inst.locked.items())
+              if lock.robot in robot_ids and i != inst.routes[lock.robot].on_task]
+    if pinned:
+        causes.append((f"the locked start of {_join_and(pinned)}", False))
+    if not causes:
+        return None
+    plural = len(causes) > 1 or causes[0][1]
+    return f"{_join_and([phrase for phrase, _ in causes])} {'force' if plural else 'forces'}"
 
 
 # -- energy: the budget rows behind energy:<robot> conflicts, and their sentences
@@ -887,10 +1255,13 @@ def _least_allowance(inst: _Instance, i: int) -> _Transit:
 class _Budget:
     """The figures behind one or more ``energy:<robot>`` conflicts, in milli-Wh. ``kind``
     "robot": the tasks only ``subject`` can run (locked to it, or it is the only robot of its
-    type) already exceed its battery. ``kind`` "type": the ``subject`` type's work fits the pool
-    of its robots' batteries but no split of it fits the single batteries. ``named`` are the
-    robots of the core the row explains; ``robots`` those whose batteries make up
-    ``budget_mwh`` (the robot itself, or every robot of the type)."""
+    type), with the least travel to reach them, already exceed its battery. ``kind`` "order":
+    ``subject`` is the only robot of its type and its tasks fit its battery in their cheapest
+    order, but not in the order ``cause`` holds it to (:func:`_order_cause`). ``kind`` "type":
+    the ``subject`` type's work exceeds the pool of its robots' batteries, or fits it but no
+    split of it fits the single batteries (in the orders ``cause`` holds them to, when set).
+    ``named`` are the robots of the core the row explains; ``robots`` those whose batteries
+    make up ``budget_mwh`` (the robot itself, or every robot of the type)."""
 
     kind: str
     subject: str
@@ -899,6 +1270,7 @@ class _Budget:
     budget_mwh: int
     demanded_mwh: int
     travel_mwh: int
+    cause: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {"kind": self.kind, "subject": self.subject, "robots": list(self.robots),
@@ -907,11 +1279,26 @@ class _Budget:
                 "travel_wh": _wh_value(self.travel_mwh)}
 
 
-def _energy_budgets(inst: _Instance, core: list[str]) -> list[_Budget]:
-    """One :class:`_Budget` per robot-form ``energy:<robot>`` conflict of ``core`` and one per
-    robot *type* of the pool-form ones, in order of first appearance; conflicts naming a robot
-    the instance does not have are skipped. The figures are the model's own (milli-Wh, travel
-    allowances included), so a hint matches the verdict exactly."""
+def _scope(core: list[str], cores: list[list[str]] | None, robot_ids: Collection[str],
+           ) -> list[str]:
+    """The groups that conflict together with the ``energy:<r>`` groups of ``robot_ids``: the
+    cores of ``cores`` that hold one of them, or all of ``core`` without ``cores``."""
+    if cores is None:
+        return core
+    mine = {f"energy:{r}" for r in robot_ids}
+    return sorted({c for k in cores if mine.intersection(k) for c in k})
+
+
+def _energy_budgets(inst: _Instance, core: list[str],
+                    cores: list[list[str]] | None = None) -> list[_Budget]:
+    """One :class:`_Budget` per robot-form or order-form ``energy:<robot>`` conflict of
+    ``core`` and one per robot *type* of the pool-form ones, in order of first appearance;
+    conflicts naming a robot the instance does not have are skipped. The figures are the
+    model's own milli-Wh, the travel the least any order and split needs
+    (:func:`_travel_floor`), so a hint never claims more than the verdict proves. A robot alone
+    in its type runs every task it may run, so when they fit its battery in their cheapest
+    order the conflict is the order (phase 3k: energy depends on it), never a split; what
+    holds it to that order is read from the groups it conflicts with (:func:`_scope`)."""
     rows: list[_Budget] = []
     pools: dict[str, _Budget] = {}
     for conflict in core:
@@ -921,19 +1308,25 @@ def _energy_budgets(inst: _Instance, core: list[str]) -> list[_Budget]:
         robot = inst.req.robot(robot_id)
         budget = inst.battery[robot_id]
         forced = _forced_tasks(inst, robot_id)
-        travel = sum(inst.transit[i, robot_id].allowance_mwh for i in forced)
+        travel = _travel_floor(inst, [robot_id], forced, hours=False)
         need = sum(inst.energy[i] for i in forced) + travel
         if need > budget:
             rows.append(_Budget("robot", robot_id, [robot_id], [robot_id], budget, need, travel))
             continue
+        peers = [r.id for r in inst.req.robots_of_type(robot.type)]
+        if peers == [robot_id]:
+            cause = _order_cause(inst, _scope(core, cores, peers), peers)
+            rows.append(_Budget("order", robot_id, [robot_id], [robot_id], budget, need, travel,
+                                cause=cause))
+            continue
         pool = pools.get(robot.type)
         if pool is None:
-            peers = inst.req.robots_of_type(robot.type)
-            typed = [i for i, t in enumerate(inst.tasks) if t.robot_type == robot.type]
-            travel = sum(_least_allowance(inst, i).allowance_mwh for i in typed)
-            pool = _Budget("type", robot.type, [], [r.id for r in peers],
-                           sum(inst.battery[r.id] for r in peers),
-                           sum(inst.energy[i] for i in typed) + travel, travel)
+            shared = _shared_tasks(inst, robot.type)
+            travel = _travel_floor(inst, peers, shared, hours=False)
+            have = sum(inst.battery[r] for r in peers)
+            need = sum(inst.energy[i] for i in shared) + travel
+            cause = None if need > have else _order_cause(inst, _scope(core, cores, peers), peers)
+            pool = _Budget("type", robot.type, [], peers, have, need, travel, cause=cause)
             pools[robot.type] = pool
             rows.append(pool)
         pool.named.append(robot_id)
@@ -941,28 +1334,42 @@ def _energy_budgets(inst: _Instance, core: list[str]) -> list[_Budget]:
 
 
 def _energy_sentence(inst: _Instance, row: _Budget) -> str:
-    """Robot form: "PR1 would need 4,023 Wh, about 33 Wh of it travel, but has 4,000 Wh."
-    Type form: "EX1 and EX2 each have 5,000 Wh; the excavator tasks need 9,930 Wh in total,
-    about 30 Wh of it travel, and cannot be split across 2 excavators (10,000 Wh combined)
-    without exceeding one budget." """
+    """Robot form: "PR1 would need at least 4,023 Wh, 33 Wh of it travel, but has 4,000 Wh."
+    Order form: "R1 has 327 Wh, which cannot cover its 300 Wh of work and the legs of the order
+    the precedence edges force; the cheapest order alone drives 19 Wh." Type form: "EX1 and
+    EX2 each have 5,000 Wh; the excavator tasks need at least 9,930 Wh in total, 30 Wh of it
+    travel, and cannot be split across 2 excavators (10,000 Wh combined) without exceeding one
+    budget.", with ", in the orders the precedence edges force," before "without" when an order
+    is part of the conflict. Without a travel share worth a Wh the demand is the work alone
+    and reads without "at least"."""
     travel = _travel_clause(row.travel_mwh)
     comma = "," if travel else ""
+    least = "at least " if travel else ""
     if row.kind == "robot":
         decimals = _decimals_apart(row.demanded_mwh, row.budget_mwh)
-        return (f"{row.subject} would need {_wh(row.demanded_mwh, decimals)}{travel}{comma} "
-                f"but has {_wh(row.budget_mwh, decimals)}.")
+        return (f"{row.subject} would need {least}{_wh(row.demanded_mwh, decimals)}{travel}"
+                f"{comma} but has {_wh(row.budget_mwh, decimals)}.")
+    if row.kind == "order":
+        work = row.demanded_mwh - row.travel_mwh
+        decimals = _decimals_apart(row.budget_mwh, work) if row.budget_mwh > work else 0
+        legs = f"the legs of the order {row.cause}" if row.cause else "the legs it has to drive"
+        cheapest = (f"; the cheapest order alone drives {_wh(row.travel_mwh)}"
+                    if _whole_wh(row.travel_mwh) >= 1 else "")
+        return (f"{row.subject} has {_wh(row.budget_mwh, decimals)}, which cannot cover its "
+                f"{_wh(work, decimals)} of work and {legs}{cheapest}.")
     budgets = [inst.battery[r] for r in row.named]
     if len(row.named) > 1 and len(set(budgets)) == 1:
         who = f"{_join_and(row.named)} each have {_wh(budgets[0])}"
     else:
         who = _join_and([f"{r} has {_wh(b)}" for r, b in zip(row.named, budgets, strict=True)])
     fleet = _plural(len(row.robots), row.subject)
-    need = f"the {row.subject} tasks need {_wh(row.demanded_mwh)} in total{travel}"
+    need = f"the {row.subject} tasks need {least}{_wh(row.demanded_mwh)} in total{travel}"
     if row.demanded_mwh > row.budget_mwh:
         return (f"{who}; {need}, more than the {_wh(row.budget_mwh)} the {fleet} have "
                 "combined.")
+    orders = f", in the orders {row.cause}," if row.cause else ""
     return (f"{who}; {need}{comma} and cannot be split across {fleet} "
-            f"({_wh(row.budget_mwh)} combined) without exceeding one budget.")
+            f"({_wh(row.budget_mwh)} combined){orders} without exceeding one budget.")
 
 
 # -- robot time: the hours behind robot:<robot> conflicts, and their sentences
@@ -970,7 +1377,8 @@ def _energy_sentence(inst: _Instance, row: _Budget) -> str:
 class _Load:
     """The hours behind ``robot:<robot>`` conflicts: ``kind`` "robot" when the ``tasks`` only
     ``subject`` can run already take ``hours`` back to back, "type" when the ``subject`` type's
-    ``tasks`` take ``hours`` across its ``count`` robots; ``transit_h`` is the transit on top."""
+    ``tasks`` take ``hours`` across its ``count`` robots; ``transit_h`` is the least driving on
+    top (:func:`_travel_floor`)."""
 
     kind: str
     subject: str
@@ -994,14 +1402,15 @@ def _robot_loads(inst: _Instance, core: list[str]) -> list[_Load]:
         if forced:
             rows.append(_Load("robot", robot_id, [robot_id], 1, len(forced),
                               sum(inst.tasks[i].duration_h for i in forced),
-                              sum(inst.transit[i, robot_id].allowance_h for i in forced)))
+                              _travel_floor(inst, [robot_id], forced, hours=True)))
             continue
         pool = pools.get(robot.type)
         if pool is None:
-            typed = [i for i, t in enumerate(inst.tasks) if t.robot_type == robot.type]
-            pool = _Load("type", robot.type, [], len(inst.req.robots_of_type(robot.type)),
-                         len(typed), sum(inst.tasks[i].duration_h for i in typed),
-                         sum(_least_allowance(inst, i).allowance_h for i in typed))
+            peers = [r.id for r in inst.req.robots_of_type(robot.type)]
+            shared = _shared_tasks(inst, robot.type)
+            pool = _Load("type", robot.type, [], len(peers), len(shared),
+                         sum(inst.tasks[i].duration_h for i in shared),
+                         _travel_floor(inst, peers, shared, hours=True))
             pools[robot.type] = pool
             rows.append(pool)
         pool.named.append(robot_id)
@@ -1133,8 +1542,7 @@ def _chains(
     into = list(durations)
     if with_travel:
         for i in range(n):
-            lead = min((inst.transit[i, r].first_leg_h for r in inst.capable[i]), default=0)
-            into[i] += lead
+            into[i] += min((inst.first_leg_h(i, r) for r in inst.capable[i]), default=0)
     if with_locks:
         for i, lock in inst.locked.items():
             into[i] = max(into[i], lock.start_h - inst.start_lb + durations[i])

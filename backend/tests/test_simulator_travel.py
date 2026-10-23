@@ -1,10 +1,11 @@
-"""Planner <-> simulator agreement on travel (phase 3a, plan item 4).
+"""Planner <-> simulator agreement on travel (phase 3a, plan item 4; exact since phase 3k).
 
-The solver reserves a per-task transit allowance (an upper bound over the zones a robot can be
-sent to) and the simulator pays the actual straight-line distance, which is never longer: a
-disturbance-free replay of a verified plan must therefore start every task at its scheduled
-hour and raise no event at all. ``task_overrun`` and battery depletion keep their phase-2
-meaning and now flag genuine anomalies only.
+The solver times and charges the legs of each robot's actual sequence, straight lines between
+zone centres in whole hours (each leg's energy rounded up to the milli-Wh), and the simulator
+drives exactly those lines: a disturbance-free replay of a verified plan must therefore start
+every task at its scheduled hour, spend what the plan charged and raise no event at all.
+``task_overrun`` and battery depletion keep their phase-2 meaning and flag genuine anomalies
+only.
 """
 
 from __future__ import annotations
@@ -26,7 +27,12 @@ from moonwright.geometry import (
 )
 from moonwright.llm.base import FixtureClient
 from moonwright.pipeline.loop import Planner
-from moonwright.pipeline.schedule import SolveOptions, check_schedule, solve_schedule
+from moonwright.pipeline.schedule import (
+    SolveOptions,
+    check_schedule,
+    sequence_travel,
+    solve_schedule,
+)
 from moonwright.schemas import (
     PlanResult,
     Requirements,
@@ -38,7 +44,9 @@ from moonwright.schemas import (
     TaskGraph,
     Zone,
 )
-from moonwright.sim.simulator import Simulator, zone_positions
+from moonwright.sim.montecarlo import solver_only_planner
+from moonwright.sim.replan import robot_ready_h, run_with_replanning
+from moonwright.sim.simulator import FailureInjection, Simulator, zone_positions
 from moonwright.sim.simulator import depot_position as sim_depot
 
 BRIEFS_DIR = Path(__file__).resolve().parents[1] / "examples" / "briefs"
@@ -127,10 +135,11 @@ def test_fixture_plan_replays_without_any_event(brief_id):
     assert_on_time_replay(plan.requirements, plan.task_graph, plan.schedule, dt_h=0.5)
 
 
-def test_fixture_plans_reserve_more_than_the_simulator_spends():
-    """The solver budgets the longest leg a robot could drive before each task; the replay
-    pays the actual one, so every robot ends with at least the battery the checker promised.
-    The live demo plan runs its printer down to 23 of its 4,000 Wh, and no further."""
+def test_fixture_plans_charge_what_the_simulator_spends():
+    """The solver charges the legs of each robot's sequence and the replay drives them, so
+    every robot ends with the battery the plan left it (each leg is charged rounded up to the
+    milli-Wh, so the replay never spends more than the plan charged). The hand-made plans keep
+    a tenth of every battery in hand; the live demo plan runs its printer close to empty."""
     for brief_id in [*BRIEF_IDS, "landing_pad"]:
         plan = fixture_plan(brief_id)
         req, graph, schedule = plan.requirements, plan.task_graph, plan.schedule
@@ -145,7 +154,9 @@ def test_fixture_plans_reserve_more_than_the_simulator_spends():
                 pos = layout[graph.task(e.task).zone]
             work = sum(graph.task(e.task).energy_wh for e in entries)
             left = next(r.battery_wh for r in res.frames[-1].robots if r.id == robot_id)
-            assert left == pytest.approx(robot.battery_wh - work - travel_wh(cells), abs=0.05)
+            assert left == pytest.approx(robot.battery_wh - work - travel_wh(cells), abs=0.01)
+            charged = sequence_travel(req, graph, schedule, SolveOptions())[robot_id].mwh
+            assert 0 <= charged - travel_wh(cells) * 1000 < len(entries)   # < 1 mWh per leg
             # every robot of the hand-made plans keeps a tenth in hand
             assert left >= (0.10 * robot.battery_wh if brief_id in BRIEF_IDS else 0.0)
 
@@ -209,6 +220,37 @@ def test_replan_from_frame_positions_starts_on_time_as_well():
         assert first_work_step(res.frames, entry.task) == pytest.approx(entry.start_h + DT_H)
 
 
+def test_a_replan_at_a_fractional_hour_times_free_robots_from_when_they_are_free():
+    """3k review: planner hour 0 of a replan is floor(t_h), but the simulator resumes at t_h,
+    and an exact first leg timed from hour 0 arrived up to that fraction late (the transit
+    allowance's slack used to absorb it). R2 fails at 2.5 h on T1; R1, idle at the depot, must
+    redo it 9 cells away (0.75 h at 12 cells/h). Free at 0.5 in planner time, it arrives at
+    1.25, so T1 is planned from hour 2, 4 h in simulator time, and starts then; from hour 0 it
+    was planned for 3 h and started at 3.25 h."""
+    site = Site(grid=(40, 40), depot=(20, 1), zones=[Zone(id="Z1", center=(20, 10))])
+    req = Requirements(site=site, horizon_h=40, robots=[
+        Robot(id="R1", type="excavator", battery_wh=1000, speed_cells_per_h=12.0),
+        Robot(id="R2", type="excavator", battery_wh=1000, speed_cells_per_h=12.0)])
+    graph = TaskGraph(tasks=[Task(id="T1", name="dig", robot_type="excavator", duration_h=4,
+                                  energy_wh=100, zone="Z1")])
+    schedule = Schedule(status="optimal", makespan_h=5,
+                        entries=[ScheduleEntry(task="T1", robot="R2", start_h=1, end_h=5)])
+    assert check_schedule(req, graph, schedule, SolveOptions()) == []
+    plan = PlanResult(requirements=req, task_graph=graph, schedule=schedule, success=True)
+    res = run_with_replanning(solver_only_planner(), plan, [FailureInjection("R2", 2.5)],
+                              key="k", max_replans=1)
+    [record] = res.replans
+    frame = next(f for f in res.frames if f.t_h == pytest.approx(2.5))
+    assert robot_ready_h(frame, record.event) == {"R1": 0.5}
+    redo = record.after.schedule.entry("T1")
+    assert (redo.robot, redo.start_h, redo.end_h) == ("R1", 4, 8)
+    redone = next(f.t_h for f in res.frames if f.t_h > 2.5 and "T1" in f.active_tasks)
+    assert redone == pytest.approx(redo.start_h + DT_H)   # on time: R1 was there by 3.25 h
+    assert res.completed and res.finished_at_h == pytest.approx(record.after.schedule.makespan_h)
+    # a whole hour needs no set-off hour, and a robot on a locked task never gets one
+    assert robot_ready_h(frame.model_copy(update={"t_h": 3.0}), record.event) == {}
+
+
 # --------------------------------------------------------------------------- anomalies stay
 def test_task_overrun_is_now_a_genuine_anomaly():
     """Tasks that really run longer than planned still overrun (Monte Carlo jitter), while the
@@ -255,5 +297,5 @@ def test_battery_depletion_still_stops_the_robot_and_the_checker_now_says_why():
     # and the solver's answer to the same brief is honest: the legs do not fit the battery
     verdict = solve_schedule(req, graph, FAST)
     assert not isinstance(verdict, Schedule) and verdict.conflicts == ["energy:R1"]
-    assert "about 41 Wh of it travel" in verdict.hint
+    assert verdict.hint == "R1 would need at least 239 Wh, 39 Wh of it travel, but has 200 Wh."
     assert math.isclose(distance((20, 1), (2, 38)) + 36, 77.146, abs_tol=0.001)

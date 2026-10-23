@@ -14,11 +14,11 @@ Requirements
    │  F2  Nemotron (task graph)         → tasks: what and how much (quantity, unit, basis), robot type,
    │      + deterministic rate model      zone, precedence → hours and Wh computed from the rate table
    ▼
-TaskGraph ──► F3 validator (cycles, references, capability, energy + transit, critical path, coverage: phases + the brief's operations, volume)
+TaskGraph ──► F3 validator (cycles, references, capability, energy + least travel, critical path, coverage: phases + the brief's operations, volume)
    │               │ conflicts
    ▼               ▼
 F4 CP-SAT ───► infeasible? ── F5 Nemotron repair (≤ 3 rounds, fed the infeasibility core) ──┐
-   │ feasible (precedence, robots, zones, batteries, transit allowance, horizon)             │
+   │ feasible (precedence, robots, zones, batteries, exact travel, horizon)                  │
    ▼                                                                                        │
 Schedule + F6 explanation ──► F7 2D simulator ──► event (robot failure, low battery) ──► F8 replan ─┘
                                                       CP-SAT reschedules first; Nemotron is asked only
@@ -87,14 +87,21 @@ Schedule + F6 explanation ──► F7 2D simulator ──► event (robot failu
   structure has no dimensions, when zones overlap or when a listed operation has no robot type in
   the fleet.
 * **Solver.** CP-SAT minimises makespan with optional intervals per (task, robot), `AddNoOverlap` per
-  robot and per safety zone, linear battery budgets per robot and a horizon bound. Travel between
-  zones is a per-task transit allowance (whole hours and 0.5 Wh per grid cell, an upper bound over
-  the zones a robot can be sent to) inside the robot intervals and the energy sums, so a verified
-  schedule replays in the simulator without overrunning itself. The validator charges every task
-  the same allowance (the least any robot of its type would be charged, from the robots' actual
+  robot and per safety zone, linear battery budgets per robot and a horizon bound. Travel is exact
+  and sequence-dependent (phase 3k): an `AddCircuit` per robot over its start and the tasks it may
+  run picks the order, each arc times the leg it implies (whole hours at the robot's speed, 0
+  within one zone) and charges its energy (0.5 Wh per grid cell), so a verified schedule replays
+  in the simulator on time and on budget, and "optimal" is optimal for the driving the robots
+  really do. Before it, every task carried a transit allowance (the longest leg its robot could
+  ever drive there), and asked to write the schedules of 21 verified run-3 graphs itself,
+  Nemotron 3 Ultra beat CP-SAT's "optimal" makespan on 9 of them (four_mast_pads 43 h against
+  60 h); the solver now finishes at or below the model on all 21 (41 h there). The validator
+  charges the travel no schedule can avoid (per task the least leg into its zone, per robot
+  type the cheapest tree from its robots' starts through its zones, or a lone robot's cheapest
+  route through them, from their actual
   positions on a replan), so a graph it passes at 3,999 of 4,000 Wh is no longer one CP-SAT
-  rejects at 4,037 Wh, and its energy verdicts name the travel share (`printer tasks need
-  4,037 Wh, about 38 Wh of it travel; its 1 robot carries 4,000 Wh`); one verdict per cause (a
+  rejects with travel, and its energy verdicts name the travel share (`printer tasks need at
+  least 4,001 Wh, 11 Wh of it travel; its 1 robot carries 4,000 Wh`); one verdict per cause (a
   type's overrun that one oversized task explains is reported as that task). Each constraint group sits behind an
   assumption literal; on infeasibility the solver's sufficient-assumption core is shrunk by deletion
   to a minimal set and returned as machine-readable conflict ids such as `energy:EX1` or
@@ -150,7 +157,10 @@ Schedule + F6 explanation ──► F7 2D simulator ──► event (robot failu
   reports the probability of finishing within the horizon with a Wilson 95 % interval, finish-time
   percentiles, a histogram, the outcome of every miss (`lost_only:<type>`: the only robot of a type
   died, `replan_infeasible:<kind>`, `late`, `stuck`) and the fleet's single points of failure.
-  Replans are solver-only (CP-SAT re-schedules the remaining work), so 50 runs take about a second.
+  Replans are solver-only (CP-SAT re-schedules the remaining work, deterministically), so 200 runs
+  of the landing pad take about 2 s; a plan of many short tasks across far zones takes longer,
+  every replan being solved to optimality (200 runs of four_mast_pads' 32-task "fine" graph: about
+  25 s).
 
 ## Evaluation
 
@@ -204,15 +214,16 @@ latency, request id, the ask's `max_tokens` and thinking flag, never prompt or a
 
 ## Limitations and known failures (full list)
 
-* **Travel is a per-task transit allowance (an upper bound over the site), not terrain; the simulator
-  pays the actual distance.** No slope cost, path planning or congestion; a leg of any length costs a
-  whole hour in the planner, so verified makespans are a few hours above the work-only optimum.
+* **Travel is exact in the planning model, not terrain.** CP-SAT times and charges the straight
+  legs of the order it picks, and the simulator drives the same lines; there is no slope cost, path
+  planning or congestion, and a leg of any length costs at least a whole hour in the planner, so
+  verified makespans sit a few hours above the work-only optimum.
 * **The rates are assumptions.** `backend/moonwright/pipeline/rates.py` uses illustrative lunar-rated
   low-power units calibrated to the example briefs; the regolith-excavation literature (RASSOR,
   Chariot/LANCE) is inspiration for the order of magnitude only. Replace the rows with measured ones
   before trusting an hour figure. Tasks without a quantity keep the model's own estimate.
 * **"Verified" means verified against the planning model**: precedence, one task per robot at a
-  time, one robot per zone, battery budgets with the transit allowance, the horizon. A repair can
+  time, one robot per zone, battery budgets with the legs each robot drives, the horizon. A repair can
   re-scope work (the shipped tight-battery fixture cuts a trench from 4000 to 2100 Wh): the repair
   diff and scope-drift figure make it visible and the coverage check refuses a repair that drops a
   phase or a structure, but a smaller scope that keeps every phase is accepted for the planner to
@@ -242,7 +253,7 @@ latency, request id, the ask's `max_tokens` and thinking flag, never prompt or a
   95 % a plan verifies but is not counted in scope. The advice on a failed run explores single
   changes only (one battery, one spare, one deadline): a battery figure is the smallest one, to
   50 Wh, under which CP-SAT still finds a schedule for that one change, in the planning model's
-  accounting (work plus transit allowance); a candidate whose verification solve times out is
+  accounting (work plus the legs the robot drives); a candidate whose verification solve times out is
   reported as untried, never as refuted.
 * **Strict JSON-schema decoding and small models.** Under `response_format: json_schema` Lightning
   occasionally drifts into Python-style quoting and the grammar keeps the output valid JSON with

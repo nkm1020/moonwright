@@ -284,7 +284,7 @@ def test_a_failed_schedule_step_hands_the_ui_the_budget_rows_behind_its_hint():
     assert verdict.payload == {"budget": budget_rows(REQ, PRIOR_INFEASIBLE, verdict.failure)}
     [row] = verdict.payload["budget"]
     assert row == {"kind": "type", "subject": "excavator", "robots": ["EX1", "EX2"],
-                   "budget_wh": 10000.0, "demanded_wh": 9929.649, "travel_wh": 29.649}
+                   "budget_wh": 10000.0, "demanded_wh": 9915.449, "travel_wh": 15.449}
     for key in ("budget_wh", "demanded_wh", "travel_wh"):   # the sentence quotes them, rounded
         assert f"{round(row[key]):,} Wh" in verdict.failure.hint
     assert all("budget" not in (s.payload or {}) for s in result.steps if s is not verdict)
@@ -980,8 +980,8 @@ def test_the_stage_gets_the_advisories_as_its_argument(monkeypatch):
 def test_the_validator_is_told_whether_the_volume_check_applies(monkeypatch):
     """``validate_graph(volume=...)``: True for a fresh plan and its repairs, False for a
     replan's remaining graph (the m3 already moved are not in it) and its repairs. A replan's
-    robot positions reach the validator too, so its energy checks charge the transit the
-    solver charges."""
+    robot positions reach the validator too, so its energy checks start the robots where the
+    solver does."""
     real = loop_module.validate_graph
     seen: list[tuple[bool, bool | None, Any]] = []
 

@@ -16,35 +16,38 @@ Checks, in this order, collecting *all* conflicts of the kinds below before retu
     count (whole plans only, see below) ................... volume:<structure_id>
   a haul that waits for no dig, or for too little while
     another dig could supply it (whole plans only, below) . supply:<task_id>
-  task energy + transit > max battery of its type ......... energy_task:<task_id>
+  task energy + travel > max battery of its type .......... energy_task:<task_id>
   critical path (longest duration chain) > horizon_h ...... horizon_path:<a>-><b>->...
   per robot type: ceil(total duration / #robots) > horizon  horizon   (hint names the type)
-  per robot type: energy + transit > sum of batteries ..... energy:<type>  (hint explains)
+  per robot type: energy + travel > sum of batteries ...... energy:<type>  (hint explains)
 Return None when everything passes. `hint` is one human sentence per conflict group, joined.
 
-Energy with transit (``energy_task:<task_id>``, ``energy:<type>``)
-------------------------------------------------------------------
-CP-SAT charges every task a transit allowance on top of its energy (``moonwright.pipeline
-.schedule``, "Travel": for task *i* on robot *r*, the longest leg *r* could have to drive to
-the task's zone, from where it starts or from any zone a task of its type uses, at
-:data:`moonwright.geometry.TRAVEL_WH_PER_CELL`), so a plan the validator passed at 3,999 of
-4,000 Wh failed in the solver at 4,037 Wh and wasted a repair round. Both energy checks now
-charge the same allowance (:func:`transit_allowances`): per task the least allowance any
-robot of its type would be charged, which is the solver's own figure for the pool
-(``budget_rows`` "type" rows) and never more than it demands of any assignment, so a graph
-the validator rejects on energy is one CP-SAT would reject too, and the figures match to the
-milli-Wh on a fresh plan. ``robot_positions`` (robot id -> grid cell, the
-``SolveOptions.robot_positions`` a replan passes the solver) places the robots; without it
-everyone starts at the depot, as the solver assumes without it. The detail and the hint name
-the travel share ("printer tasks need 4,037 Wh, about 38 Wh of it travel; its 1 robot carries
-4,000 Wh") and print every figure through ``moonwright.text`` (whole Wh with thousands
-separators, decimals only where two figures would otherwise print equal). One verdict per
-cause: a type's overrun that its ``energy_task`` tasks alone explain (the type would fit if
-each of them were cut to the largest battery) is reported as those tasks only, and their hint
-says that the type's batteries cannot carry them either, so splitting alone cannot fit them
-and the full work stays unless the brief allows less (the repair prompt's rule for this case);
-an overrun with a cause of its own (the rest of the type's work exceeds the pool too) keeps
-``energy:<type>`` beside them.
+Energy with travel (``energy_task:<task_id>``, ``energy:<type>``)
+-----------------------------------------------------------------
+CP-SAT charges every leg a robot drives on top of its tasks' energy (``moonwright.pipeline
+.schedule``, "Travel"), so a plan the validator passed at 3,999 of 4,000 Wh once failed in the
+solver at 4,037 Wh and wasted a repair round (phase 3e). Both energy checks charge travel too,
+but only the travel no schedule can avoid (:func:`travel_floor`, phase 3k, now that the solver
+charges the legs of the order it picks instead of a per-task allowance): per task the least a
+robot of its type spends to reach the task's zone from where it starts, and per robot type
+the cheapest tree joining the zones of its tasks to its robots' start positions
+(:func:`moonwright.geometry.spanning_cost`), or, for a type with one robot, which cannot
+branch, its cheapest route through them (:func:`moonwright.geometry.route_cost`): the
+solver's own figures for the pool (``budget_rows`` "type" and "robot" rows, to the milli-Wh on
+a fresh plan). Both are lower bounds whatever order and split CP-SAT picks, so a graph the
+validator rejects on energy is one CP-SAT would reject too, and the solver keeps the last word
+on a tight one. ``robot_positions`` (robot id
+-> grid cell, the ``SolveOptions.robot_positions`` a replan passes the solver) places the
+robots; without it everyone starts at the depot, as the solver assumes without it. The detail
+and the hint name the travel share ("printer tasks need at least 4,037 Wh, 38 Wh of it travel;
+its 1 robot carries 4,000 Wh") and print every figure through ``moonwright.text`` (whole Wh
+with thousands separators, decimals only where two figures would otherwise print equal). One
+verdict per cause: a type's overrun that its ``energy_task`` tasks alone explain (the type
+would fit if each of them were cut to the largest battery) is reported as those tasks only,
+and their hint says that the type's batteries cannot carry them either, so splitting alone
+cannot fit them and the full work stays unless the brief allows less (the repair prompt's rule
+for this case); an overrun with a cause of its own (the rest of the type's work exceeds the
+pool too) keeps ``energy:<type>`` beside them.
 
 Volume (``volume:<structure_id>``, whole plans only)
 ---------------------------------------------------
@@ -282,7 +285,14 @@ from collections import Counter, deque
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 
-from moonwright.geometry import distance, start_positions, travel_wh, zone_positions
+from moonwright.geometry import (
+    cheapest_legs,
+    leg_mwh,
+    route_cost,
+    spanning_cost,
+    start_positions,
+    zone_positions,
+)
 from moonwright.pipeline.rates import (
     DOUBLE_MARK,
     RATED_TYPES,
@@ -334,7 +344,7 @@ __all__ = [   # tag_names / structure_tasks live in ``tags`` and stay importable
     "covered_phases", "hauls_into", "missing_operations", "missing_phases", "needs_quantity",
     "performs", "required_phases", "source_hauls", "structure_kind", "structure_tasks",
     "supply_advisories", "supply_report", "tag_names", "task_changes", "task_phases",
-    "transit_allowances", "unstaffed_operations", "unsupported_operations", "validate_graph",
+    "travel_floor", "unstaffed_operations", "unsupported_operations", "validate_graph",
 ]
 
 Positions = Mapping[str, tuple[float, float]]
@@ -357,16 +367,16 @@ def validate_graph(req: Requirements, graph: TaskGraph, previous: TaskGraph | No
     task-graph stage's advisory alone) and ``True`` forces it without coverage. ``supply`` is
     the supply-order check (``supply:<task_id>``, a haul that waits for no source, or for too
     little while another dig could supply it), a whole-plan judgment too: ``None`` (the default) follows the volume check's switch as resolved above,
-    ``False`` / ``True`` override it. ``robot_positions`` places the robots for the transit the energy checks charge (robot id
-    -> grid cell, what a replan passes the solver as ``SolveOptions.robot_positions``); the
-    depot for everyone without it. ``previous`` is the graph a repair answered (if any): a
-    structure it served that ``graph`` no longer serves is reported with the tasks that went
-    missing.
+    ``False`` / ``True`` override it. ``robot_positions`` places the robots for the travel the
+    energy checks charge (robot id -> grid cell, what a replan passes the solver as
+    ``SolveOptions.robot_positions``); the depot for everyone without it. ``previous`` is the
+    graph a repair answered (if any): a structure it served that ``graph`` no longer serves is
+    reported with the tasks that went missing.
     """
     prec = _Precedence.from_graph(graph)
     cycles = _check_cycles(prec)
-    transit = transit_allowances(req, graph, robot_positions)
-    pools = _energy_pools(req, graph, transit)
+    legs, floors = travel_floor(req, graph, robot_positions)
+    pools = _energy_pools(req, graph, legs, floors)
     volume_on = coverage if volume is None else volume
     supply_on = volume_on if supply is None else supply
     groups = [
@@ -378,7 +388,7 @@ def validate_graph(req: Requirements, graph: TaskGraph, previous: TaskGraph | No
         _check_coverage(req, graph, previous) if coverage else None,
         _check_volume(req, graph) if volume_on else None,
         _check_supply(req, graph) if supply_on else None,
-        _check_task_energy(graph, transit, pools),
+        _check_task_energy(graph, legs, pools),
         None if cycles else _check_critical_path(prec, req.horizon_h),
         _check_type_horizon(req, graph),
         _check_type_energy(pools),
@@ -637,33 +647,33 @@ def _check_capability(req: Requirements, graph: TaskGraph) -> _Group | None:
     )
 
 
-def transit_allowances(req: Requirements, graph: TaskGraph,
-                       robot_positions: Positions | None = None) -> list[int]:
-    """Per task of ``graph`` (in order), the transit allowance in milli-Wh the energy checks
-    charge: the least any robot of the task's type would be charged by CP-SAT, which
-    reserves for task *i* on robot *r* the longest leg *r* could have to drive to the task's
-    zone, from its start position (``robot_positions``, else the depot) or from the zone of
-    any task of its type, at :data:`moonwright.geometry.TRAVEL_WH_PER_CELL` per cell
-    (``moonwright.pipeline.schedule``, "Travel"). Zone centres come from
-    :func:`moonwright.geometry.zone_positions` over every zone the graph names, exactly as
-    the solver lays them out. 0 for a task of a type the fleet lacks (a ``capability``
+def travel_floor(req: Requirements, graph: TaskGraph, robot_positions: Positions | None = None,
+                 ) -> tuple[list[int], dict[str, int]]:
+    """The travel the energy checks charge, in milli-Wh, as figures no schedule can beat
+    (module docstring, "Energy with travel"): per task of ``graph`` (in order) the least a robot
+    of its type spends to reach the task's zone from where it starts (``robot_positions``, else
+    the depot), and per robot type with robots the least its robots spend between them to reach
+    the zone of every task of the type (:func:`moonwright.geometry.spanning_cost`; one robot's
+    cheapest route, :func:`moonwright.geometry.route_cost`, when the type has one). Both are
+    priced on the cheapest chains of legs through the type's zones
+    (:func:`moonwright.geometry.cheapest_legs`), each leg as CP-SAT charges it
+    (:func:`moonwright.geometry.leg_mwh`), between the zone centres of
+    :func:`moonwright.geometry.zone_positions` over every zone the graph names, exactly as the
+    solver lays them out. 0 for a task of a type the fleet lacks (a ``capability``
     conflict)."""
     layout = zone_positions(req.site, (t.zone for t in graph.tasks))
     starts = start_positions(req, robot_positions)
-    reach: dict[str, set[tuple[int, int]]] = {}   # robot type -> zone cells of its tasks
-    for t in graph.tasks:
-        reach.setdefault(t.robot_type, set()).add(layout[t.zone])
-    out: list[int] = []
-    for t in graph.tasks:
-        robots = req.robots_of_type(t.robot_type)
-        if not robots:
-            out.append(0)
-            continue
-        here = layout[t.zone]
-        farthest = max(distance(p, here) for p in reach[t.robot_type])
-        cells = min(max(distance(starts[r.id], here), farthest) for r in robots)
-        out.append(to_mwh(travel_wh(cells)))
-    return out
+    legs = [0] * len(graph.tasks)
+    floors: dict[str, int] = {}
+    for typ, positions, robots in _served_types(req, graph):
+        origins = [starts[r.id] for r in robots]
+        zones = [layout[graph.tasks[i].zone] for i in positions]
+        cost = cheapest_legs([*origins, *zones], leg_mwh)
+        for i, here in zip(positions, zones, strict=True):
+            legs[i] = min(cost(origin, here) for origin in origins)
+        floors[typ] = (route_cost(origins[0], zones, cost) if len(origins) == 1
+                       else spanning_cost(origins, zones, cost))
+    return legs, floors
 
 
 def _decimals_apart(need: int, budget: int) -> int:
@@ -680,15 +690,18 @@ def _decimals_apart(need: int, budget: int) -> int:
 
 
 def _travel_clause(mwh: int) -> str:
-    """', about 38 Wh of it travel' when the transit share is worth a Wh, else ''."""
-    return f", about {_wh(mwh)} of it travel" if _whole_wh(mwh) >= 1 else ""
+    """', 38 Wh of it travel' when the travel share is worth a Wh, else ''. The share is the
+    least travel any schedule needs (:func:`travel_floor`), so the demand it is part of reads
+    "at least"."""
+    return f", {_wh(mwh)} of it travel" if _whole_wh(mwh) >= 1 else ""
 
 
 @dataclass(frozen=True)
 class _Pool:
     """The energy of one robot type the graph uses and the fleet has: its tasks (positions in
-    ``graph.tasks``), their work and transit (milli-Wh), its batteries, and the tasks larger
-    than its largest battery with by how much (``over``: position -> milli-Wh)."""
+    ``graph.tasks``), their work and the least travel they need (milli-Wh), its batteries, and
+    the tasks larger than its largest battery with by how much (``over``: position ->
+    milli-Wh)."""
 
     typ: str
     positions: list[int]
@@ -708,13 +721,13 @@ class _Pool:
 
     @property
     def short(self) -> bool:
-        """Whether the type's work plus transit exceeds its batteries combined."""
+        """Whether the type's work plus its least travel exceeds its batteries combined."""
         return self.need > self.have
 
     @property
     def explained(self) -> bool:
         """Whether the overrun is its oversized tasks alone: cut each of them to the largest
-        battery and the type would fit (module docstring, "Energy with transit")."""
+        battery and the type would fit (module docstring, "Energy with travel")."""
         return self.short and bool(self.over) and self.need - sum(self.over.values()) <= self.have
 
     @property
@@ -725,37 +738,39 @@ class _Pool:
         return f"{_plural(len(self.robots), self.typ)} {verb}"
 
 
-def _energy_pools(req: Requirements, graph: TaskGraph, transit: list[int]) -> list[_Pool]:
+def _energy_pools(req: Requirements, graph: TaskGraph, legs: list[int],
+                  floors: dict[str, int]) -> list[_Pool]:
     """One :class:`_Pool` per robot type of the graph with robots, sorted by type."""
     pools: list[_Pool] = []
     for typ, positions, robots in _served_types(req, graph):
         cap = max(to_mwh(r.battery_wh) for r in robots)
-        over = {i: to_mwh(graph.tasks[i].energy_wh) + transit[i] - cap for i in positions
-                if to_mwh(graph.tasks[i].energy_wh) + transit[i] > cap}
+        over = {i: to_mwh(graph.tasks[i].energy_wh) + legs[i] - cap for i in positions
+                if to_mwh(graph.tasks[i].energy_wh) + legs[i] > cap}
         pools.append(_Pool(typ=typ, positions=positions, robots=robots,
                            work=sum(to_mwh(graph.tasks[i].energy_wh) for i in positions),
-                           travel=sum(transit[i] for i in positions), cap=cap, over=over))
+                           travel=floors[typ], cap=cap, over=over))
     return pools
 
 
-def _check_task_energy(graph: TaskGraph, transit: list[int], pools: list[_Pool]) -> _Group | None:
+def _check_task_energy(graph: TaskGraph, legs: list[int], pools: list[_Pool]) -> _Group | None:
     items: dict[str, str] = {}
     phrases: dict[str, str] = {}
     for pool in pools:
         for i in pool.over:
             t, cap = graph.tasks[i], pool.cap
             work = to_mwh(t.energy_wh)
-            need = work + transit[i]
+            need = work + legs[i]
             cid = f"energy_task:{t.id}"
             decimals = _decimals_apart(need, cap)
-            travel = _travel_clause(transit[i])
+            travel = _travel_clause(legs[i])
+            least = "at least " if travel else ""
             items[cid] = (
-                f"{t.id} needs {_wh(need, decimals)}{travel}{',' if travel else ''} but the "
-                f"largest {t.robot_type} battery is {_wh(cap, decimals)}"
+                f"{t.id} needs {least}{_wh(need, decimals)}{travel}{',' if travel else ''} but "
+                f"the largest {t.robot_type} battery is {_wh(cap, decimals)}"
             )
             against = f"against the largest {t.robot_type} battery of {_wh(cap, decimals)}"
             phrases[cid] = (
-                f"{t.id} ({_wh(work)} of work plus about {_wh(transit[i])} of travel, "
+                f"{t.id} ({_wh(work)} of work plus at least {_wh(legs[i])} of travel, "
                 f"{_wh(need, decimals)} {against})" if travel
                 else f"{t.id} ({_wh(need, decimals)} {against})"
             )
@@ -829,15 +844,17 @@ def _check_type_energy(pools: list[_Pool]) -> _Group | None:
         ids.append(f"energy:{pool.typ}")
         fleet = _plural(len(pool.robots), "robot")
         carry = "carries" if len(pool.robots) == 1 else "carry"
+        travel = _travel_clause(pool.travel)
+        least = "at least " if travel else ""
         details.append(
-            f"{pool.typ} tasks need {_wh(need, decimals)}{_travel_clause(pool.travel)}; its "
-            f"{fleet} {carry} {_wh(have, decimals)}"
+            f"{pool.typ} tasks need {least}{_wh(need, decimals)}{travel}; its {fleet} {carry} "
+            f"{_wh(have, decimals)}"
         )
-        split = (f", {_wh(pool.work)} of work and about {_wh(pool.travel)} of travel,"
-                 if _whole_wh(pool.travel) >= 1 else "")
+        split = (f", {_wh(pool.work)} of work and {_wh(pool.travel)} of travel,"
+                 if travel else "")
         phrases.append(
-            f"{pool.typ} tasks need {_wh(need, decimals)}{split} but its {fleet} {carry} only "
-            f"{_wh(have, decimals)} combined"
+            f"{pool.typ} tasks need {least}{_wh(need, decimals)}{split} but its {fleet} {carry} "
+            f"only {_wh(have, decimals)} combined"
         )
     if not ids:
         return None
@@ -1788,7 +1805,7 @@ def _served_types(
     req: Requirements, graph: TaskGraph
 ) -> list[tuple[str, list[int], list[Robot]]]:
     """``(type, task positions, robots)`` for every robot type used by the graph that has
-    robots; the positions index ``graph.tasks`` and :func:`transit_allowances` alike."""
+    robots; the positions index ``graph.tasks`` and the legs of :func:`travel_floor` alike."""
     out: list[tuple[str, list[int], list[Robot]]] = []
     for typ in sorted({t.robot_type for t in graph.tasks}):
         robots = req.robots_of_type(typ)

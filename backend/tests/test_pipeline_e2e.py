@@ -31,9 +31,10 @@ landing_pad_v1 horizon 336 h; EX1 EX2 5000, HL1 HL2 3000, CP1 3500, PR1 4000, SV
   printer    T11 22h/2700 + T12 6h/700                            = 28 h; 3400 / 4000 Wh
   surveyor   T1 4h/300 + T13 3h/200 + T14 4h/300                  = 11 h;  800 / 1500 Wh
   critical path T1>T2>T3>T7>T10>T12>T13 = 4+12+18+16+14+6+3 = 73 h. PR1 must finish the pad
-  surface before the berm crest, so the work-only optimum is 77 h (T13 at 74-77); with the
-  phase-3 transit allowance (whole hours per zone change, 1-2 h per leg on this site) CP-SAT
-  proves 80 h (T13 at 77-80).
+  surface before the berm crest, so the work-only optimum is 77 h (T13 at 74-77); with travel
+  (whole hours per leg, 1-2 h on this site: SV1's 1 h from the depot to Z1 and PR1's 2 h from
+  the pad surface in Z1 to the crest in Z2) CP-SAT proves 80 h (T13 at 77-80), as it did with
+  the phase-3 transit allowance.
   same-zone serial load: Z1 72 h, Z2 53 h, Z3 10 h, Z4 12 h; every zone chain is already
   serial through precedence, so one-robot-per-zone costs nothing extra.
 
@@ -44,8 +45,9 @@ access_road   horizon 240 h; EX1 5000, HL1 3000, CP1 CP2 3500, SV1 1500 Wh
              energy 4400 / 7000 Wh; {1400,1400,800} = 3600 does not fit, so one compactor
              carries at most 1400+800+800 = 3000 Wh
   surveyor   T1 5h/350 + T11 4h/300 + T12 4h/300                  = 13 h;  950 / 1500 Wh
-  critical path T1>T2>T3>T4>T6>T10>T12 = 5+10+10+12+10+8+4 = 59 h = work-only optimum; the
-  transit allowance makes it 64 h (EX1 moves zone twice, SV1 three times).
+  critical path T1>T2>T3>T4>T6>T10>T12 = 5+10+10+12+10+8+4 = 59 h = work-only optimum; travel
+  makes it 63 h: SV1's 2 h from the depot to Z1 and EX1's two 1 h moves (Z1 -> Z2 -> Z3). The
+  phase-3 transit allowance, the longest leg into each zone before every task, made it 64 h.
   T7 (25-37) and T8 (28-40) overlap, which is what the second compactor is for.
   same-zone serial load: Z1 39 h, Z2 22 h, Z3 24 h, Z4 18 h.
 
@@ -65,8 +67,10 @@ tight_battery horizon 168 h; EX1 EX2 5000, HL1 3000, CP1 3500, SV1 1500 Wh
              energy 8200 / 10000 Wh; every 3-task subset is >= 6100 > 5000, so the only split
              is {2100,2100} = 4200 and {2100,1900} = 4000 Wh, both inside 5000 (84 % / 80 %)
   hauler, compactor, surveyor unchanged (2000/3000, 3000/3500, 800/1500 Wh)
-  critical path T1>T2>T3>T6>T9>T10 = 4+14+14+16+14+3 = 65 h = work-only optimum; the transit
-  allowance makes it 68 h.
+  critical path T1>T2>T3>T6>T9>T10 = 4+14+14+16+14+3 = 65 h = work-only optimum; travel makes
+  it 66 h, SV1's 1 h from the depot to Z1 (one excavator, EX2 in the settled schedule, digs
+  both halves of the bowl in Z1 back to back, with no leg between them; the phase-3 transit
+  allowance charged one and made it 68 h).
   same-zone serial load: Z1 50 h, Z2 47 h, Z3 8 h, Z4 12 h.
   No replan fixture is shipped: an offline replan keeps the exact remaining graph that
   build_replan_inputs derives from the live simulator state (a canned graph cannot know which
@@ -100,7 +104,7 @@ V1_BRIEF = Path(__file__).resolve().parent / "data" / "landing_pad_v1.md"
 BRIEF_IDS = ["landing_pad_v1", "access_road", "tight_battery"]   # the hand-made fixtures
 HORIZONS_H = {"landing_pad_v1": 14 * 24, "access_road": 10 * 24, "tight_battery": 7 * 24}
 MAKESPANS_H = {"landing_pad_v1": 77, "access_road": 59, "tight_battery": 65}  # work, no transit
-TRAVEL_MAKESPANS_H = {"landing_pad_v1": 80, "access_road": 64, "tight_battery": 68}  # phase 3
+TRAVEL_MAKESPANS_H = {"landing_pad_v1": 80, "access_road": 63, "tight_battery": 66}  # phase 3k
 # (brief id, task-graph fixture, whether a budget-respecting robot assignment exists)
 GRAPH_FIXTURES = [
     ("landing_pad_v1", "taskgraph_1.json", True),
@@ -165,13 +169,15 @@ def _energy_packable(req: Requirements, graph: TaskGraph) -> bool:
     return True
 
 
-def _assert_verified_plan(plan: PlanResult) -> None:
+def _assert_verified_plan(plan: PlanResult, explained: bool = True) -> None:
     assert plan.success and plan.failure is None
     assert plan.task_graph is not None and plan.schedule is not None
     assert plan.schedule.makespan_h <= plan.requirements.horizon_h
     assert sorted(e.task for e in plan.schedule.entries) == sorted(plan.task_graph.ids())
     assert check_schedule(plan.requirements, plan.task_graph, plan.schedule) == []
-    assert f"{plan.schedule.makespan_h} hours" in (plan.explanation or "")
+    assert plan.explanation
+    if explained:
+        assert f"{plan.schedule.makespan_h} hours" in plan.explanation
 
 
 # --------------------------------------------------------------------------- fixture content
@@ -295,8 +301,9 @@ def test_fixture_plans_keep_their_makespans_under_the_rate_model(brief_id: str) 
     """The fixture graphs carry no quantity, so the rate model leaves them untouched (and the
     task-graph step says so with the ungrounded advisory): the planned graph is the recorded
     one, field for field, and the makespan is exactly what CP-SAT gives the raw fixture graph
-    (77 / 59 / 65 h with the phase-2 scheduler; the travel allowance of phase 3 shifts the
-    figures, not this equality)."""
+    (77 / 59 / 65 h with the phase-2 scheduler, 80 / 64 / 68 h with the transit allowance of
+    phase 3, 80 / 63 / 66 h with the exact travel of phase 3k: travel shifts the figures, not
+    this equality)."""
     plan = _plan(brief_id)
     assert plan.success and plan.schedule is not None and plan.task_graph is not None
     final = "taskgraph_2.json" if brief_id == "tight_battery" else "taskgraph_1.json"
@@ -411,13 +418,15 @@ def test_quantities_ground_the_graph_before_it_is_scheduled() -> None:
 
 # --------------------------------------------------------------------------- live recordings
 def test_landing_pad_replays_its_live_run() -> None:
-    """Oct 23: Nemotron 3 Ultra's first graph needs 4,112 Wh of the printer's 4,000 and hauls
-    the 120 m3 berm twice over. Recorded live, the validator refused it on the printer alone
-    (the double haul was an advisory then); since phase 3i a 200 % haul is the conflict
+    """Oct 23: Nemotron 3 Ultra's first graph needs more than the printer's 4,000 Wh (4,112 Wh
+    with the travel allowance of the time, at least 4,096 Wh with phase 3k's exact legs) and
+    hauls the 120 m3 berm twice over. Recorded live, the validator refused it on the printer
+    alone (the double haul was an advisory then); since phase 3i a 200 % haul is the conflict
     volume:S2 too, so the replay refuses it on both (and the supply balance note gives way to
     the double count). The one repair trims the crest sintering from 160 to 146 m2, halves the
-    hauls to 2 x 60 m3, each after the dig part that feeds it, and CP-SAT proves 89 h: in
-    scope, never a supply conflict."""
+    hauls to 2 x 60 m3, each after the dig part that feeds it, and CP-SAT proves 87 h (89 h
+    live, before exact travel): in scope, never a supply conflict. The recorded explanation
+    still quotes 89 h until the take is re-recorded."""
     plan = _plan("landing_pad")
 
     assert [(s.stage, s.ok) for s in plan.steps] == [
@@ -434,8 +443,8 @@ def test_landing_pad_replays_its_live_run() -> None:
     refused = plan.steps[2].failure
     assert refused is not None and refused.kind == "validation"
     assert refused.conflicts == ["volume:S2", "energy:printer"]
-    assert ("printer tasks need 4,112 Wh, 4,078 Wh of work and about 34 Wh of travel, but its "
-            "1 robot carries only 4,000 Wh combined") in refused.hint
+    assert ("printer tasks need at least 4,096 Wh, 4,078 Wh of work and 18 Wh of travel, but "
+            "its 1 robot carries only 4,000 Wh combined") in refused.hint
 
     repair = plan.steps[3]
     assert repair.attempt == 2 and repair.usage is not None
@@ -446,12 +455,12 @@ def test_landing_pad_replays_its_live_run() -> None:
     assert [graph.task(i).quantity for i in ("T12", "T13", "T14")] == [146.0, 60.0, 60.0]
     assert "T5" in graph.task("T13").after and "T6" in graph.task("T14").after
     assert plan.repairs == 1 and plan.schedule is not None
-    assert (plan.schedule.makespan_h, plan.schedule.status) == (89, "optimal")
+    assert (plan.schedule.makespan_h, plan.schedule.status) == (87, "optimal")
     assert not [c for s in plan.steps if s.failure is not None for c in s.failure.conflicts
                 if c.startswith("supply:")]
     assert validate_graph(plan.requirements, graph, coverage=True, supply=True) is None
     assert scope_gaps(plan.requirements, graph) == []
-    _assert_verified_plan(plan)
+    _assert_verified_plan(plan, explained=False)   # the recorded text quotes the live 89 h
 
 
 def test_front_loaded_replays_its_live_run() -> None:

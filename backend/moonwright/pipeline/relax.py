@@ -10,11 +10,15 @@ When a plan ends without a verified schedule (repairs exhausted, the repair loop
 the fleet cannot serve) the planner says which *resource* change would make the LAST graph it
 was answered feasible. Nothing is guessed: every candidate is a modified copy of the
 requirements (the inputs are never mutated) that CP-SAT
-(:func:`moonwright.pipeline.schedule.solve_schedule`) solves for real, on one worker so ties
-between equally good schedules break the same way on every call, and only a candidate the
+(:func:`moonwright.pipeline.schedule.solve_schedule`) solves for real, deterministically (the
+portfolio interleaved in a fixed order on every worker, ``SolveOptions.deterministic``) so
+ties between equally good schedules break the same way on every call, and only a candidate the
 solver actually scheduled becomes a :class:`moonwright.schemas.Suggestion` with
 ``verified=True``. Each solve gets at most :data:`SOLVE_LIMIT_S`; the whole call stops at
-``budget_s`` (candidates left untried are simply not reported).
+``budget_s`` (candidates left untried are simply not reported). One worker breaks ties as
+reliably, but with exact travel (phase 3k) it could no longer prove the later deadline of the
+run-3 four_mast_pads graph within its 2 s ("finishing needs 41 h (feasible; a shorter deadline
+may exist)" where 41 h is optimal, the 3k review); interleaved, it proves it.
 
 Candidates are derived from the conflict ids of ``failure`` (the verdict on ``graph``):
 
@@ -37,11 +41,12 @@ Candidates are derived from the conflict ids of ``failure`` (the verdict on ``gr
                    largest battery for the validator's ``energy:<type>`` and
                    ``energy_task:<task>``): solve with that battery lifted to the schema's cap,
                    read back what that schedule charges the robot *in the planning model*
-                   (work plus the transit allowance of every task it took, rounded up to
-                   :data:`BATTERY_STEP_WH`: a battery that is certainly enough), then search
-                   the :data:`BATTERY_STEP_WH` grid between the battery it has and that figure
-                   for the smallest one CP-SAT still schedules (feasibility is monotone in a
-                   battery, so a binary search is exact) -> "EX1 needs 5,950 Wh (has 5,000 Wh):
+                   (work plus the legs of the sequence it drives, exactly what CP-SAT's
+                   circuit charges, rounded up to :data:`BATTERY_STEP_WH`: a battery that is
+                   certainly enough), then search the :data:`BATTERY_STEP_WH` grid between the
+                   battery it has and that figure for the smallest one CP-SAT still schedules
+                   (feasibility is monotone in a battery, so a binary search is exact) ->
+                   "EX1 needs 5,950 Wh (has 5,000 Wh):
                    feasible at 62 h". The makespan-optimal lifted schedule often piles more
                    work on the lifted robot than it needs, so without the search the sentence
                    over-claimed by whole tasks ("EX2 needs 7,800 Wh" where 5,200 Wh works).
@@ -87,8 +92,8 @@ from typing import Any
 from moonwright.geometry import travel_hours
 from moonwright.pipeline.schedule import (
     SolveOptions,
-    _instance,  # the planning model's own energy accounting (work + transit allowance)
     check_schedule,
+    sequence_travel,
     solve_schedule,
 )
 from moonwright.schemas import (
@@ -141,7 +146,8 @@ def suggest_relaxations(
 ) -> list[Suggestion]:
     """Resource changes that would make ``graph`` feasible, each proven by a CP-SAT solve on a
     modified copy of ``req`` (module docstring). ``failure`` is the verdict on ``graph``;
-    ``opts`` the options the planner solved with (time limit replaced, one worker); ``locked``
+    ``opts`` the options the planner solved with (time limit replaced, solved
+    deterministically); ``locked``
     the pinned entries of a replan; ``kinds`` the suggestion kinds allowed (default: all);
     ``reserved_ids`` robot ids a spare must not take (the robots a replan has lost);
     ``budget_s`` the wall-clock budget of the whole call. Deterministic for a given input as
@@ -307,11 +313,11 @@ def _limit(deadline: float) -> float:
 
 def _solve(req: Requirements, graph: TaskGraph, opts: SolveOptions, locked: list[ScheduleEntry],
            limit: float) -> Schedule | None:
-    """One verification solve: the planner's options with ``limit`` seconds, one worker (ties
-    break the same way every time) and no infeasibility explanation (a refuted candidate needs
-    no core). The schedule when CP-SAT found one, None when it proved there is none, and
+    """One verification solve: the planner's options with ``limit`` seconds, deterministic
+    (ties break the same way every time) and no infeasibility explanation (a refuted candidate
+    needs no core). The schedule when CP-SAT found one, None when it proved there is none, and
     :class:`_Unknown` when it ran out of time (a ``solver_timeout`` verdict proves nothing)."""
-    out = solve_schedule(req, graph, replace(opts, time_limit_s=limit, num_workers=1,
+    out = solve_schedule(req, graph, replace(opts, time_limit_s=limit, deterministic=True,
                                              explain_infeasibility=False), locked=locked)
     if isinstance(out, Schedule):
         return out
@@ -320,19 +326,18 @@ def _solve(req: Requirements, graph: TaskGraph, opts: SolveOptions, locked: list
     return None
 
 
-def _needed_wh(req: Requirements, graph: TaskGraph, opts: SolveOptions,
-               locked: list[ScheduleEntry], schedule: Schedule, robot_id: str) -> float:
-    """What ``schedule`` charges ``robot_id`` in the planning model, work plus the transit
-    allowance of every task it took, rounded up to :data:`BATTERY_STEP_WH`: the smallest
-    budget under which CP-SAT admits that schedule again."""
-    inst = _instance(req, graph, opts, locked)
-    use = 0
-    for entry in schedule.entries:
-        i = inst.index.get(entry.task)
-        if entry.robot != robot_id or i is None:
-            continue
-        transit = inst.transit.get((i, robot_id))
-        use += inst.energy[i] + (transit.allowance_mwh if transit is not None else 0)
+def _needed_wh(req: Requirements, graph: TaskGraph, opts: SolveOptions, schedule: Schedule,
+               robot_id: str) -> float:
+    """What ``schedule`` charges ``robot_id`` in the planning model, work plus the legs of its
+    sequence from where ``opts`` starts it (:func:`moonwright.pipeline.schedule
+    .sequence_travel`: the very legs CP-SAT's circuit charges), rounded up to
+    :data:`BATTERY_STEP_WH`: the smallest budget under which CP-SAT admits that schedule
+    again."""
+    tasks = {t.id: t for t in graph.tasks}
+    use = sum(to_mwh(tasks[e.task].energy_wh) for e in schedule.entries
+              if e.robot == robot_id and e.task in tasks)
+    legs = sequence_travel(req, graph, schedule, opts)
+    use += legs[robot_id].mwh if robot_id in legs else 0
     step = BATTERY_STEP_WH * MWH_PER_WH
     return float(max(1, -(-use // step)) * BATTERY_STEP_WH)
 
@@ -349,7 +354,8 @@ def _serial_hours(req: Requirements, graph: TaskGraph, opts: SolveOptions,
     grid at the slowest speed, from the latest start the inputs impose."""
     diagonal = math.hypot(req.site.grid[0], req.site.grid[1])
     slowest = min(r.speed_cells_per_h for r in req.robots)
-    base = max([max(0, opts.start_offset_h), *(e.start_h for e in locked)])
+    base = max([max(0, opts.start_offset_h), *(e.start_h for e in locked),
+                *(math.ceil(h) for h in (opts.robot_ready_h or {}).values())])
     return base + sum(t.duration_h + travel_hours(diagonal, slowest) for t in graph.tasks)
 
 
@@ -393,7 +399,7 @@ def _add_robot(req: Requirements, graph: TaskGraph, opts: SolveOptions,
         schedule = _solve(req2, graph, opts, locked, _limit(deadline))
         if schedule is None:
             return None
-        battery = _needed_wh(req2, graph, opts, locked, schedule, new_id)
+        battery = _needed_wh(req2, graph, opts, schedule, new_id)
         if check_schedule(_with_battery(req2, new_id, battery), graph, schedule, opts):
             return None
         detail = (f"a {robot_type} ({new_id}, {fmt_wh(to_mwh(battery))} Wh; the fleet has none): "
@@ -413,7 +419,7 @@ def _raise_battery(req: Requirements, graph: TaskGraph, opts: SolveOptions,
     schedule = _solve(lifted, graph, opts, locked, _limit(deadline))
     if schedule is None:
         return None
-    enough = _needed_wh(lifted, graph, opts, locked, schedule, robot_id)
+    enough = _needed_wh(lifted, graph, opts, schedule, robot_id)
     if to_mwh(enough) <= to_mwh(robot.battery_wh):
         return None
     # the lifted solve charged the robot whatever its makespan-optimal schedule put on it,

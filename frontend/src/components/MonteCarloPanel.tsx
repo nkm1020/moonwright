@@ -44,6 +44,8 @@ export interface MonteCarloPanelProps {
   briefId: string | null;
   result: MonteCarloResult | null;
   running: boolean;
+  /** seconds the run in progress has taken so far (App's ticker); null while idle */
+  elapsedS?: number | null;
   error: string | null;
   onRun: (req: MonteCarloRequest) => void;
   /** Optional: when given, the what-if column offers "Plan with these requirements" with the
@@ -166,6 +168,7 @@ export function MonteCarloPanel({
   briefId,
   result,
   running,
+  elapsedS = null,
   error,
   onRun,
   onAdoptRequirements,
@@ -408,10 +411,12 @@ export function MonteCarloPanel({
             className="mt-5 flex items-center gap-3 rounded-md border border-dashed border-white/10 px-4 py-6 text-[13px] text-muted"
           >
             <Spinner className="size-4 shrink-0 text-accent" />
-            <span>
+            <span className="min-w-0 flex-1">
               Replaying {runs} runs with random failures and jitter; CP-SAT reschedules after every event, Nemotron is
-              not called. Usually a few seconds.
+              not called. A few seconds for most plans; one with many short tasks across far zones can take half a minute,
+              since every replan is solved to optimality.
             </span>
+            <span className="shrink-0 font-mono text-xs tabular-nums text-dim">{elapsedS === null ? "" : fmtSeconds(elapsedS)}</span>
           </div>
         )}
 

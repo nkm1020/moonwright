@@ -189,6 +189,8 @@ interface State {
   simOptions: SimulateOptions;
   sim: Async<SimResult>;
   mc: Async<MonteCarloResult>;
+  /** Date.now() when the running Monte Carlo request started (the panel's timer). */
+  mcStartedAt: number | null;
   sample: { loading: boolean; note: string | null; error: string | null };
   /** The PlanResult of each bundled sample: the demo buttons and the example cards read the
    *  run's outcome from it. */
@@ -222,6 +224,7 @@ const initialState: State = {
   simOptions: DEFAULT_SIMULATE_OPTIONS,
   sim: idle(),
   mc: idle(),
+  mcStartedAt: null,
   sample: { loading: false, note: null, error: null },
   recordings: {},
   recordedWhatIf: null,
@@ -251,7 +254,7 @@ type Action =
   | { type: "simStart" }
   | { type: "simDone"; result: SimResult }
   | { type: "simError"; message: string }
-  | { type: "mcStart" }
+  | { type: "mcStart"; startedAt: number }
   | { type: "mcDone"; result: MonteCarloResult }
   | { type: "mcError"; message: string }
   | { type: "sampleStart" }
@@ -379,7 +382,7 @@ function reducer(state: State, action: Action): State {
     case "simError":
       return { ...state, sim: { status: "error", result: state.sim.result, error: action.message } };
     case "mcStart":
-      return { ...state, mc: { status: "running", result: state.mc.result, error: null } };
+      return { ...state, mc: { status: "running", result: state.mc.result, error: null }, mcStartedAt: action.startedAt };
     case "mcDone":
       return { ...state, mc: { status: "done", result: action.result, error: null } };
     case "mcError":
@@ -1129,7 +1132,7 @@ export function App() {
       await replayTo("robustness");
       return;
     }
-    dispatch({ type: "mcStart" });
+    dispatch({ type: "mcStart", startedAt: Date.now() });
     try {
       const result = await postMonteCarlo(req);
       dispatch({ type: "mcDone", result });
@@ -1173,6 +1176,7 @@ export function App() {
   );
   const { stage, busy } = deriveStage(state);
   const verified = Boolean(planResult?.success && planResult.schedule && planResult.task_graph);
+  const mcElapsed = useElapsed(state.mcStartedAt, state.mc.status === "running");
   // the trace that goes with planResult: the streamed steps once the run is done, else the
   // result's own steps (a previous plan kept while a new run streams or after one failed)
   const resultSteps = useMemo(
@@ -1560,6 +1564,7 @@ export function App() {
             briefId={state.plan.briefId}
             result={state.mc.result}
             running={state.mc.status === "running"}
+            elapsedS={mcElapsed}
             error={state.mc.error}
             onRun={runMonteCarlo}
             onAdoptRequirements={

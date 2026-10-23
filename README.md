@@ -151,8 +151,9 @@ recorded runs without a backend. Commands, endpoints and settings: [docs/referen
 ## Limitations
 
 * **Verified means verified against the planning model**: precedence, robots, zones, battery budgets
-  with a transit allowance, supply order and the deadline. Travel is an allowance per task, not
-  terrain; the simulator is 2D and kinematic; failures are injected, not modelled.
+  with the legs each robot drives, supply order and the deadline. Travel is exact for that model
+  (straight lines between zone centres in whole hours, the order chosen by CP-SAT), not terrain;
+  the simulator is 2D and kinematic; failures are injected, not modelled.
 * **The rates are assumptions.** The rate table (`backend/moonwright/pipeline/rates.py`) uses
   illustrative low-power figures; replace them with measured ones before trusting an hour.
 * **Checks only judge what the brief states.** A structure recorded without dimensions has no volume

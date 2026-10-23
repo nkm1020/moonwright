@@ -157,7 +157,7 @@ function ReceiptCard({
       label: "One task per robot",
       value: plural(receipt.robot_rows, "robot"),
       detail: receipt.travel_allowance
-        ? "no overlap on any robot row, transit between zones reserved"
+        ? "no overlap on any robot row, travel between zones timed"
         : "no overlap on any robot row",
     },
     {

@@ -65,7 +65,7 @@ function escalatedVariant(sim: SimResult): SimResult {
     const core: Failure = {
       kind: "infeasible",
       conflicts: ["energy:EX1"],
-      hint: "EX1 would need 4,310 Wh, about 25 Wh of it travel, but has 3,551 Wh.",
+      hint: "EX1 would need at least 4,310 Wh, 25 Wh of it travel, but has 3,551 Wh.",
       details: [],
     };
     const steps: LoopStep[] = [];
@@ -132,7 +132,7 @@ function failedVariant(sim: SimResult): SimResult {
   const failure: Failure = {
     kind: "infeasible",
     conflicts: ["energy:EX1"],
-    hint: "EX1 would need 5,100 Wh, about 40 Wh of it travel, but has 3,551 Wh.",
+    hint: "EX1 would need at least 5,100 Wh, 40 Wh of it travel, but has 3,551 Wh.",
     details: [],
   };
   const budget = [{ kind: "robot", subject: "EX1", robots: ["EX1"], budget_wh: 3551, demanded_wh: 5100, travel_wh: 40 }];

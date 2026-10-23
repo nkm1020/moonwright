@@ -151,7 +151,8 @@ def test_solver_only_planner_replans_by_rescheduling_the_remaining_graph(plan):
     assert [s.stage for s in after.steps] == ["validate", "schedule", "replan"]
     assert record.escalated is False and after.repairs == 0
     assert after.steps[-1].message is not None
-    assert after.steps[-1].message.startswith("CP-SAT rescheduled 12 tasks in ")
+    # T1, T2 and T5 are done at 20 h (the 80 h plan with exact travel digs T5 first, 5-11 h)
+    assert after.steps[-1].message.startswith("CP-SAT rescheduled 11 tasks in ")
     assert "Nemotron not needed" in after.steps[-1].message
     assert after.task_graph.ids() == record.remaining_tasks
     assert all(s.usage is None for s in after.steps)  # no model was called

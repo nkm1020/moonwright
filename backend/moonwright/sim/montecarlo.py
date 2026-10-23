@@ -66,10 +66,18 @@ the within-horizon side.
 
 Determinism: the same ``seed`` gives an identical result (``elapsed_s`` aside); ``seed=None``
 picks a base seed and reports it as ``samples[0].seed`` (sample ``i`` has seed ``base + i``).
-The default planner (:class:`MonteCarloPlanner`) runs CP-SAT on one worker: the remaining-work
-models often have several optimal schedules, and with the 8-worker portfolio whichever worker
-reports first wins, so two identical replans can pick different (equally good) assignments and
-the simulated finish differs by a few steps. One worker breaks ties the same way every time.
+The remaining-work models often have several optimal schedules, and with the 8-worker portfolio
+racing, whichever worker reports first wins, so two identical replans could pick different
+(equally good) assignments and the simulated finish would differ by a few steps. The default
+planner (:class:`MonteCarloPlanner`) therefore solves deterministically: CP-SAT's portfolio
+interleaved in a fixed order on every worker (``SolveOptions.deterministic``), which breaks
+ties the same way every time, whatever the worker count. It used to run one worker, which
+breaks ties as reliably but proves the travel-heavy remaining-work models (exact,
+sequence-dependent travel since phase 3k) far slower: 200 runs of the canonical "fine"
+four_mast_pads plan took 40 to 49 s on one worker, one replan cut at its 10 s limit, against
+26 s interleaved, none above 2 s (2 s at base, under the transit allowance); the landing-pad
+fixture's 200 runs take about 2 s either way. A solve that hits its time limit is the
+exception: what it returns depends on the clock.
 """
 
 from __future__ import annotations
@@ -193,13 +201,14 @@ class SolverOnlyClient:
 
 
 class MonteCarloPlanner(Planner):
-    """A :class:`Planner` whose CP-SAT solves run on a single worker, so that ties between
-    equally good schedules break the same way on every call (module docstring, Determinism).
-    The remaining-work models solve in milliseconds on one worker as well."""
+    """A :class:`Planner` whose CP-SAT solves are deterministic (``SolveOptions
+    .deterministic``: the portfolio interleaved in a fixed order on every worker), so that ties
+    between equally good schedules break the same way on every call (module docstring,
+    Determinism)."""
 
-    # Overrides the Planner's verification hook only to pin the worker count (further keyword
-    # arguments pass through untouched); a constructor option on Planner (solver workers /
-    # SolveOptions) would make this subclass unnecessary.
+    # Overrides the Planner's verification hook only to make its solves deterministic (further
+    # keyword arguments pass through untouched); a constructor option on Planner (SolveOptions)
+    # would make this subclass unnecessary.
     def _check(
         self,
         req: Requirements,
@@ -210,12 +219,12 @@ class MonteCarloPlanner(Planner):
         steps: list[LoopStep],
         **kwargs: Any,
     ) -> tuple[Failure | None, Schedule | None]:
-        return super()._check(req, graph, replace(opts, num_workers=1), locked, required, steps,
-                              **kwargs)
+        return super()._check(req, graph, replace(opts, deterministic=True), locked, required,
+                              steps, **kwargs)
 
 
 def solver_only_planner(*, solver_time_limit_s: float = 10.0) -> Planner:
-    """The default Monte Carlo planner: CP-SAT only (one worker), no repairs, no explanation
+    """The default Monte Carlo planner: CP-SAT only (deterministic), no repairs, no explanation
     and no relaxation advice on an infeasible replan (nothing displays it in a Monte Carlo
     sample, so ``suggest_budget_s=0`` saves the verification solves)."""
     return MonteCarloPlanner(SolverOnlyClient(), max_repairs=0,

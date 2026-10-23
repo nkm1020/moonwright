@@ -402,7 +402,7 @@
           "action": "waitForText",
           "text": "Completed at {{replan_after_h}} h",
           "by": "done at",
-          "note": "the voice names 91 h at 'done at'; the result is normally on screen before 'CP-SAT reschedules'"
+          "note": "the voice names 95 h at 'done at'; the result is normally on screen before 'CP-SAT reschedules'"
         },
         {
           "action": "waitForText",
@@ -425,10 +425,10 @@
           "role": "slider",
           "name": "Simulation time",
           "at": [
-            0.322,
+            0.308,
             0.5
           ],
-          "note": "seeks to ~29.3 h: the replay reaches the failure and holds on it, with the event banner drawn across the map"
+          "note": "seeks to ~29.3 h of the 95 h replay (0.308 of the track; 0.322 when it ran to 91 h): the replay reaches the failure and holds on it, with the event banner drawn across the map"
         },
         {
           "action": "waitForText",
@@ -443,7 +443,7 @@
             0.105
           ],
           "cue": "with no model call",
-          "note": "just under 'rescheduled 11 tasks in <0.01 s' in the canvas banner"
+          "note": "just under 'rescheduled 9 tasks in <0.01 s' in the canvas banner"
         },
         {
           "action": "scrollTo",
@@ -703,8 +703,8 @@
       "id": "repair",
       "kind": "ui",
       "voDelay": 0.6,
-      "narration": "When the solver says no, it says exactly why. This core proves the excavators need {{tight_demand_wh_words}} watt-hours, and no split fits two {{tight_battery_each_wh_words}} watt-hour batteries. It becomes the repair prompt: a prepared repair splits the dig and trims the trench, a flagged {{tight_scope_cut}} scope cut, and CP-SAT verifies it in {{tight_repair_rounds|words}} round.",
-      "caption": "When the solver says no, it says exactly why. This core proves the excavators need {{tight_demand_wh}} Wh, and no split fits two {{tight_battery_each_wh}} Wh batteries. It becomes the repair prompt: a prepared repair splits the dig and trims the trench, a flagged {{tight_scope_cut}} scope cut, and CP-SAT verifies it in {{tight_repair_rounds|words}} round.",
+      "narration": "When the solver says no, it says exactly why. This core proves the excavators need at least {{tight_demand_wh_words}} watt-hours, and no split fits two {{tight_battery_each_wh_words}} watt-hour batteries. It becomes the repair prompt: a prepared repair splits the dig and trims the trench, a flagged {{tight_scope_cut}} scope cut, and CP-SAT verifies it in {{tight_repair_rounds|words}} round.",
+      "caption": "When the solver says no, it says exactly why. This core proves the excavators need at least {{tight_demand_wh}} Wh, and no split fits two {{tight_battery_each_wh}} Wh batteries. It becomes the repair prompt: a prepared repair splits the dig and trims the trench, a flagged {{tight_scope_cut}} scope cut, and CP-SAT verifies it in {{tight_repair_rounds|words}} round.",
       "setup": [
         {
           "action": "unhighlight"

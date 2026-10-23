@@ -15,8 +15,9 @@ build_replan_inputs:
     default the layout of the graph in force) is declared with its cell, so the planner's
     own layout of the *remaining* graph (:func:`moonwright.geometry.zone_positions` sorts the
     undeclared ids and hands them the first lattice cells) cannot drift from where the robots
-    actually are: with undeclared zones a drifted layout made the transit allowance unsound
-    and a locked robot's first leg non-zero, which the planner's re-verification raised on.
+    actually are: with undeclared zones a drifted layout put the planner's legs in the wrong
+    cells and gave a locked robot a non-zero first leg, which the planner's re-verification
+    raised on.
   * tasks: drop done tasks; tasks in progress on a healthy robot stay with remaining duration
     (ceil) and are passed as `locked` ScheduleEntry(robot, start=0) so they continue; tasks in
     progress on the failed robot are re-added in full; `after` edges to done tasks are removed.
@@ -30,8 +31,9 @@ build_replan_inputs:
     because the graph only carries its reduced copy.
   * context: one paragraph for the LLM: time now, what finished, which robot failed and what it
     was doing, remaining budgets. The planner is called with prior_graph=graph2, context,
-    variant="replan", start_offset_h=0, required_tasks=graph2.ids(), start_with_prior=True
-    and the surviving robots' frame positions (sim converts back by adding floor(t_h)).
+    variant="replan", start_offset_h=0, required_tasks=graph2.ids(), start_with_prior=True,
+    the surviving robots' frame positions and, at a fractional t_h, the hour the free ones may
+    set off (sim converts back by adding floor(t_h); see the time convention below).
 
 Solver first, Nemotron on infeasibility
   :func:`replan_after_event` is solver-first: the remaining graph goes straight to the
@@ -61,7 +63,11 @@ Time convention (one place: :func:`replan_offset_h` and :func:`remaining_horizon
   locked entry starts at or before ``t_h`` and the robot working on it never pauses. The
   simulation itself resumes at ``t_h``, up to an hour after planner time 0, which is why the
   horizon is shrunk by ``ceil(t_h)``: a schedule that fits the shrunken horizon still meets the
-  original deadline in simulator time. ``ReplanRecord.after.schedule`` therefore holds absolute
+  original deadline in simulator time. For the same reason a robot that is not on a locked
+  task sets off from its frame position at the fraction of ``t_h`` in planner time
+  (:func:`robot_ready_h`, ``SolveOptions.robot_ready_h``), so its first task is timed from
+  when it really is free; a robot on a locked task still finishes it up to that fraction of an
+  hour after its planned end, as before. ``ReplanRecord.after.schedule`` therefore holds absolute
   times and can be handed to :meth:`Simulator.apply_new_plan` as-is, while
   ``ReplanRecord.after.requirements.horizon_h`` stays the *relative* budget the planner was
   given (the hours left at the event, rounded down).
@@ -197,10 +203,28 @@ def locked_entries(graph2: TaskGraph, frame: SimFrame,
 
 
 def robot_positions(frame: SimFrame, event: Event | None = None) -> dict[str, tuple[float, float]]:
-    """Where every surviving robot is now (robot id -> grid cell), for the travel allowance."""
+    """Where every surviving robot is now (robot id -> grid cell): the start of its first leg in
+    the replan (a robot on a locked task stands in that task's zone)."""
     failed = _failed_robots(frame, event)
     return {rs.id: (float(rs.pos[0]), float(rs.pos[1]))
             for rs in frame.robots if rs.id not in failed}
+
+
+def robot_ready_h(frame: SimFrame, event: Event | None = None) -> dict[str, float]:
+    """The planner hour from which each surviving robot that is not on a locked task may set
+    off (``SolveOptions.robot_ready_h``): the fraction of ``t_h``, since planner hour 0 maps
+    back to floor(t_h) while the simulator resumes at t_h (module docstring, time convention);
+    none when ``t_h`` is a whole hour. Timed from planner hour 0, an exact first leg arrived up
+    to that fraction late and the lag carried down the robot's sequence (the 3k review: 22 of
+    78 replanned runs finished after the replanned makespan, against 12 of 86 under the
+    transit allowance, whose slack absorbed it)."""
+    fraction = frame.t_h - math.floor(frame.t_h)
+    if fraction <= _TIME_EPS:
+        return {}
+    failed = _failed_robots(frame, event)
+    busy = set(_in_progress_workers(frame, failed).values())
+    return {rs.id: round(fraction, 6) for rs in frame.robots
+            if rs.id not in failed and rs.id not in busy}
 
 
 def declared_site(site: Site, layout: Mapping[str, tuple[int, int]]) -> Site:
@@ -471,8 +495,9 @@ def replan_after_event(
     """Reschedule the remaining work solver-first and return the record with absolute times.
 
     The planner is called with ``start_with_prior=True``, ``start_offset_h=0``, ``locked``
-    pins for tasks underway on healthy robots, ``required_tasks`` = every remaining id and the
-    surviving robots' positions; CP-SAT reschedules the remaining graph as it is and the model
+    pins for tasks underway on healthy robots, ``required_tasks`` = every remaining id, the
+    surviving robots' positions and the hour the free ones may set off
+    (:func:`robot_ready_h`); CP-SAT reschedules the remaining graph as it is and the model
     is asked only when that is infeasible (``ReplanRecord.escalated``). The result is checked
     against the scope rules (module docstring, "Scope guard"), its trace annotated with the
     clock it speaks and closed with a ``replan`` outcome step, and its schedule shifted by
@@ -489,6 +514,7 @@ def replan_after_event(
         req2, key=key, prior_graph=graph2, context=context, variant=variant,
         start_offset_h=0, locked=locked, required_tasks=graph2.ids(),
         start_with_prior=True, robot_positions=robot_positions(frame, event),
+        robot_ready_h=robot_ready_h(frame, event),
         reserved_ids=sorted(_failed_robots(frame, event)),
     )
     escalated = any(step.stage == "repair" for step in result.steps)
