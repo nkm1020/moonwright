@@ -1,0 +1,143 @@
+{
+ "brief": "crater_ramp",
+ "repeat": 1,
+ "requirements_sha": "b83ae1ceef",
+ "requirements": {
+  "site": {
+   "name": "LS-1",
+   "grid": [
+    40,
+    40
+   ],
+   "zones": [
+    {
+     "id": "Z1",
+     "center": [
+      20,
+      2
+     ],
+     "radius": 3
+    },
+    {
+     "id": "Z2",
+     "center": [
+      20,
+      15
+     ],
+     "radius": 3
+    },
+    {
+     "id": "Z3",
+     "center": [
+      20,
+      30
+     ],
+     "radius": 3
+    }
+   ],
+   "depot": [
+    20,
+    38
+   ]
+  },
+  "structures": [
+   {
+    "id": "S1",
+    "type": "ramp",
+    "zone": "Z1",
+    "operations": [
+     "excavate",
+     "haul",
+     "compact"
+    ],
+    "length_m": 40,
+    "width_m": 5,
+    "depth_m": 1.2,
+    "min_length_m": 10
+   },
+   {
+    "id": "S2",
+    "type": "turnaround",
+    "zone": "Z2",
+    "operations": [
+     "compact"
+    ],
+    "length_m": 10,
+    "width_m": 10
+   },
+   {
+    "id": "S3",
+    "type": "pad",
+    "zone": "Z3",
+    "operations": [
+     "compact"
+    ],
+    "length_m": 8,
+    "width_m": 8
+   }
+  ],
+  "robots": [
+   {
+    "id": "EX1",
+    "type": "excavator",
+    "battery_wh": 5000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "EX2",
+    "type": "excavator",
+    "battery_wh": 5000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "HL1",
+    "type": "hauler",
+    "battery_wh": 3000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "CP1",
+    "type": "compactor",
+    "battery_wh": 3500.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "SV1",
+    "type": "surveyor",
+    "battery_wh": 1500.0,
+    "speed_cells_per_h": 12.0
+   }
+  ],
+  "horizon_h": 192,
+  "constraints": [
+   "Segments cut strictly from the top down; a segment compacted before next opened",
+   "Surveyor checks grade of every segment before compaction",
+   "Only one robot may work inside a zone at a time"
+  ],
+  "source_brief": "# Access Ramp into Crater C-4\n\n**Site.** The rim of crater C-4, 6 m above the crater floor, 1.2 km from the landing pad. The wall is loose regolith over blocky material. The depot is on the rim; no recharging.\n\n**Structures.**\n\n1. Access ramp: 40 m long and 5 m wide, cut into the wall at a 15 percent grade (average cut depth 1.2 m, about 240 cubic metres) in four 10 m segments from the top down, with the cut from each segment hauled down as fill for the segment below.\n2. Rim turnaround: a level 10 m by 10 m apron at the top of the ramp, compacted so haulers can turn.\n3. Floor landing: a compacted 8 m by 8 m pad at the foot of the ramp.\n\n**Fleet.** EX1 and EX2 (excavators, 5000 Wh each), HL1 (hauler, 3000 Wh), CP1 (compactor, 3500 Wh) and SV1 (surveyor, 1500 Wh). Batteries are the whole budget.\n\n**Deadline.** 8 days.\n\n**Operational constraints.**\n\n- Segments are cut strictly from the top down; a segment is compacted before the next one is opened.\n- The surveyor checks the grade of every segment before compaction.\n- Only one robot may work inside a zone at a time.\n"
+ },
+ "ok": true,
+ "message": "3 structures, 5 robots, horizon 192h",
+ "payload": {
+  "zones": 3,
+  "grid": [
+   40,
+   40
+  ],
+  "depot": [
+   20,
+   38
+  ],
+  "warnings": [
+   "structure S1: lifts 4 -> 1: the brief's entry for S1 states no lift count we can read"
+  ]
+ },
+ "failure": null,
+ "usage": {
+  "model": "nvidia/Nemotron-3_5-Lightning",
+  "input_tokens": 3135,
+  "output_tokens": 473,
+  "latency_s": 2.92345012514852
+ },
+ "latency_s": 2.928
+}

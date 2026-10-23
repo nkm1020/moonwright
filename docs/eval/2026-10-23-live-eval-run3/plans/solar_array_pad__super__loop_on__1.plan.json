@@ -1,0 +1,624 @@
+{
+ "requirements": {
+  "site": {
+   "name": "LS-1",
+   "grid": [
+    40,
+    40
+   ],
+   "zones": [
+    {
+     "id": "Z1",
+     "center": [
+      20,
+      2
+     ],
+     "radius": 3
+    },
+    {
+     "id": "Z2",
+     "center": [
+      20,
+      37
+     ],
+     "radius": 3
+    }
+   ],
+   "depot": [
+    20,
+    2
+   ]
+  },
+  "structures": [
+   {
+    "id": "S1",
+    "type": "solar_array_pad",
+    "zone": "Z1",
+    "operations": [
+     "survey",
+     "excavate",
+     "grade",
+     "haul",
+     "compact",
+     "sinter"
+    ],
+    "length_m": 30,
+    "width_m": 18,
+    "thickness_m": 0.3,
+    "lifts": 2
+   },
+   {
+    "id": "S2",
+    "type": "anchor_trench",
+    "zone": "Z2",
+    "operations": [
+     "survey",
+     "excavate",
+     "compact"
+    ],
+    "length_m": 30,
+    "width_m": 0.5,
+    "depth_m": 0.5
+   }
+  ],
+  "robots": [
+   {
+    "id": "EX1",
+    "type": "excavator",
+    "battery_wh": 5000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "HL1",
+    "type": "hauler",
+    "battery_wh": 3000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "CP1",
+    "type": "compactor",
+    "battery_wh": 3500.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "SV1",
+    "type": "surveyor",
+    "battery_wh": 1500.0,
+    "speed_cells_per_h": 12.0
+   }
+  ],
+  "horizon_h": 240,
+  "constraints": [
+   "The array vendor requires both compaction lifts over the full pad area; neither the pad size nor the number of lifts may be reduced, and no second compactor is available.",
+   "Only one robot may work inside a zone at a time.",
+   "The surveyor stakes the pad corners before any excavation and checks the level before the second compaction lift.",
+   "Cut spoil goes to the fill side first; only the surplus is hauled to the stockpile."
+  ],
+  "source_brief": "# LS-1 Solar Array Pad\n\n**Site.** LS-1 plateau, 300 m west of the landing pad, on a gentle 2 degree slope of loose regolith 30 cm deep over compacted material. The depot is at the south edge of the work area and there is no recharging.\n\n**Structures.**\n\n1. Solar array pad: a level rectangle 30 m by 18 m. Strip the loose regolith (30 cm of fines, about 162 cubic metres), cut the uphill side and fill the downhill side to within plus or minus 5 cm, then compact the whole 540 square metre surface in two full lifts.\n2. Anchor trench: a 30 m long, 0.5 m wide, 0.5 m deep trench along the north edge for the array anchor rail, backfilled and compacted after the rail bed is inspected.\n\n**Fleet.** EX1 (excavator, 5000 Wh), HL1 (hauler, 3000 Wh), CP1 (compactor, 3500 Wh) and SV1 (surveyor, 1500 Wh). Each battery is the budget for the whole job.\n\n**Deadline.** 10 days.\n\n**Operational constraints.**\n\n- The array vendor requires both compaction lifts over the full pad area; neither the pad size nor the number of lifts may be reduced, and no second compactor is available.\n- Only one robot may work inside a zone at a time.\n- The surveyor stakes the pad corners before any excavation and checks the level before the second compaction lift.\n- Cut spoil goes to the fill side first; only the surplus is hauled to the stockpile.\n"
+ },
+ "task_graph": {
+  "tasks": [
+   {
+    "id": "T1",
+    "name": "survey",
+    "robot_type": "surveyor",
+    "duration_h": 4,
+    "energy_wh": 270.0,
+    "zone": "Z1",
+    "after": [],
+    "structure": "S1",
+    "quantity": 540.0,
+    "unit": "m2",
+    "basis": "pad area 30 m × 18 m = 540 m2",
+    "estimated_duration_h": 4.0,
+    "estimated_energy_wh": 270.0
+   },
+   {
+    "id": "T2",
+    "name": "excavate",
+    "robot_type": "excavator",
+    "duration_h": 24,
+    "energy_wh": 2592.0,
+    "zone": "Z1",
+    "after": [
+     "T1"
+    ],
+    "structure": "S1",
+    "quantity": 162.0,
+    "unit": "m3",
+    "basis": "pad volume 30 m × 18 m × 0.3 m = 162 m3",
+    "estimated_duration_h": 24.0,
+    "estimated_energy_wh": 2592.0
+   },
+   {
+    "id": "T3",
+    "name": "grade",
+    "robot_type": "excavator",
+    "duration_h": 22,
+    "energy_wh": 2592.0,
+    "zone": "Z1",
+    "after": [
+     "T4"
+    ],
+    "structure": "S1",
+    "quantity": 540.0,
+    "unit": "m2",
+    "basis": "pad area 30 m × 18 m = 540 m2",
+    "estimated_duration_h": 22.0,
+    "estimated_energy_wh": 2592.0
+   },
+   {
+    "id": "T4",
+    "name": "haul",
+    "robot_type": "hauler",
+    "duration_h": 14,
+    "energy_wh": 1134.0,
+    "zone": "Z1",
+    "after": [
+     "T2"
+    ],
+    "structure": "S1",
+    "quantity": 162.0,
+    "unit": "m3",
+    "basis": "excavated volume 162 m3 hauled to stockpile",
+    "estimated_duration_h": 14.0,
+    "estimated_energy_wh": 1134.0
+   },
+   {
+    "id": "T5",
+    "name": "compact",
+    "robot_type": "compactor",
+    "duration_h": 21,
+    "energy_wh": 2160.0,
+    "zone": "Z1",
+    "after": [
+     "T3"
+    ],
+    "structure": "S1",
+    "quantity": 540.0,
+    "unit": "m2",
+    "basis": "first lift over pad area 540 m2",
+    "estimated_duration_h": 21.0,
+    "estimated_energy_wh": 2160.0
+   },
+   {
+    "id": "T6",
+    "name": "survey",
+    "robot_type": "surveyor",
+    "duration_h": 4,
+    "energy_wh": 270.0,
+    "zone": "Z1",
+    "after": [
+     "T5"
+    ],
+    "structure": "S1",
+    "quantity": 540.0,
+    "unit": "m2",
+    "basis": "level check before second lift, area 540 m2",
+    "estimated_duration_h": 4.0,
+    "estimated_energy_wh": 270.0
+   },
+   {
+    "id": "T7",
+    "name": "compact",
+    "robot_type": "compactor",
+    "duration_h": 21,
+    "energy_wh": 2160.0,
+    "zone": "Z1",
+    "after": [
+     "T6"
+    ],
+    "structure": "S1",
+    "quantity": 540.0,
+    "unit": "m2",
+    "basis": "second lift over pad area 540 m2",
+    "estimated_duration_h": 21.0,
+    "estimated_energy_wh": 2160.0
+   },
+   {
+    "id": "T9",
+    "name": "inspect",
+    "robot_type": "surveyor",
+    "duration_h": 1,
+    "energy_wh": 75.0,
+    "zone": "Z1",
+    "after": [
+     "T7"
+    ],
+    "structure": "S1",
+    "quantity": null,
+    "unit": null,
+    "basis": null,
+    "estimated_duration_h": null,
+    "estimated_energy_wh": null
+   },
+   {
+    "id": "T10",
+    "name": "survey",
+    "robot_type": "surveyor",
+    "duration_h": 1,
+    "energy_wh": 7.5,
+    "zone": "Z2",
+    "after": [],
+    "structure": "S2",
+    "quantity": 15.0,
+    "unit": "m2",
+    "basis": "trench footprint 30 m × 0.5 m = 15 m2",
+    "estimated_duration_h": 1.0,
+    "estimated_energy_wh": 7.5
+   },
+   {
+    "id": "T11",
+    "name": "excavate",
+    "robot_type": "excavator",
+    "duration_h": 2,
+    "energy_wh": 120.0,
+    "zone": "Z2",
+    "after": [
+     "T10"
+    ],
+    "structure": "S2",
+    "quantity": 7.5,
+    "unit": "m3",
+    "basis": "trench volume 30 m × 0.5 m × 0.5 m = 7.5 m3",
+    "estimated_duration_h": 2.0,
+    "estimated_energy_wh": 120.0
+   },
+   {
+    "id": "T12",
+    "name": "compact",
+    "robot_type": "compactor",
+    "duration_h": 1,
+    "energy_wh": 60.0,
+    "zone": "Z2",
+    "after": [
+     "T11"
+    ],
+    "structure": "S2",
+    "quantity": 15.0,
+    "unit": "m2",
+    "basis": "trench area 30 m × 0.5 m = 15 m2",
+    "estimated_duration_h": 1.0,
+    "estimated_energy_wh": 60.0
+   },
+   {
+    "id": "T13",
+    "name": "inspect",
+    "robot_type": "surveyor",
+    "duration_h": 1,
+    "energy_wh": 75.0,
+    "zone": "Z2",
+    "after": [
+     "T12"
+    ],
+    "structure": "S2",
+    "quantity": null,
+    "unit": null,
+    "basis": null,
+    "estimated_duration_h": null,
+    "estimated_energy_wh": null
+   }
+  ],
+  "notes": "Removed sinter task T8 because no printer robot is available; sinter is only required when a printer exists per the rule for landing pad phases. All other quantities and structure requirements are kept unchanged as the brief does not allow reducing pad dimensions, lift count, or trench dimensions. Energy usage exceeds single excavator and compactor batteries; per validation rule, the works are kept whole and the solver will prove the shortfall and propose fixes."
+ },
+ "schedule": null,
+ "explanation": null,
+ "steps": [
+  {
+   "stage": "structure",
+   "attempt": 1,
+   "ok": true,
+   "failure": null,
+   "duration_s": 3.0732657499611378,
+   "usage": {
+    "model": "nvidia/Nemotron-3_5-Lightning",
+    "input_tokens": 3176,
+    "output_tokens": 458,
+    "latency_s": 3.07021545805037
+   },
+   "message": "2 structures, 4 robots, horizon 240h",
+   "payload": {
+    "zones": 2,
+    "grid": [
+     40,
+     40
+    ],
+    "depot": [
+     20,
+     2
+    ],
+    "warnings": [
+     "structure S1 lists sinter but the fleet has no printer: no sinter task will be required of it (add a printer or drop the operation)"
+    ]
+   }
+  },
+  {
+   "stage": "taskgraph",
+   "attempt": 1,
+   "ok": true,
+   "failure": null,
+   "duration_s": 39.4291593329981,
+   "usage": {
+    "model": "nvidia/nemotron-3-super-120b-a12b",
+    "input_tokens": 3326,
+    "output_tokens": 7014,
+    "latency_s": 39.4252231658902
+   },
+   "message": "13 tasks",
+   "payload": {
+    "advisories": [],
+    "rate_model": true,
+    "grounded": 11
+   }
+  },
+  {
+   "stage": "validate",
+   "attempt": 1,
+   "ok": false,
+   "failure": {
+    "kind": "validation",
+    "conflicts": [
+     "capability:T8",
+     "energy:compactor",
+     "energy:excavator"
+    ],
+    "hint": "No capable robot exists: T8 needs robot type 'printer', but the only robot types in the requirements are compactor, excavator, hauler and surveyor; reassign these tasks to an available type. Battery budgets are exceeded per robot type: compactor tasks need 4,433 Wh, 4,380 Wh of work and about 53 Wh of travel, but its 1 robot carries only 3,500 Wh combined and excavator tasks need 5,357 Wh, 5,304 Wh of work and about 53 Wh of travel, but its 1 robot carries only 5,000 Wh combined; reduce the quantities if the brief allows it or move work to other robot types.",
+    "details": [
+     "T8 needs robot type 'printer' but no robot has it",
+     "compactor tasks need 4,433 Wh, about 53 Wh of it travel; its 1 robot carries 3,500 Wh",
+     "excavator tasks need 5,357 Wh, about 53 Wh of it travel; its 1 robot carries 5,000 Wh"
+    ]
+   },
+   "duration_s": 0.002046499866992235,
+   "usage": null,
+   "message": null,
+   "payload": null
+  },
+  {
+   "stage": "repair",
+   "attempt": 2,
+   "ok": true,
+   "failure": null,
+   "duration_s": 20.637390792137012,
+   "usage": {
+    "model": "nvidia/nemotron-3-super-120b-a12b",
+    "input_tokens": 5572,
+    "output_tokens": 3565,
+    "latency_s": 20.632377124857157
+   },
+   "message": "13 tasks",
+   "payload": {
+    "advisories": [],
+    "rate_model": true,
+    "grounded": 11,
+    "diff": {
+     "added": [],
+     "removed": [],
+     "changed": [],
+     "renumbered": [],
+     "per_type_energy_before": {
+      "compactor": 4380.0,
+      "excavator": 5304.0,
+      "hauler": 1134.0,
+      "printer": 4644.0,
+      "surveyor": 697.5
+     },
+     "per_type_energy_after": {
+      "compactor": 4380.0,
+      "excavator": 5304.0,
+      "hauler": 1134.0,
+      "printer": 4644.0,
+      "surveyor": 697.5
+     },
+     "scope_drift_pct": 0.0,
+     "total_energy_wh_before": 16159.5,
+     "total_energy_wh_after": 16159.5,
+     "total_duration_h_before": 155,
+     "total_duration_h_after": 155
+    }
+   }
+  },
+  {
+   "stage": "validate",
+   "attempt": 2,
+   "ok": false,
+   "failure": {
+    "kind": "validation",
+    "conflicts": [
+     "capability:T8",
+     "energy:compactor",
+     "energy:excavator"
+    ],
+    "hint": "No capable robot exists: T8 needs robot type 'printer', but the only robot types in the requirements are compactor, excavator, hauler and surveyor; reassign these tasks to an available type. Battery budgets are exceeded per robot type: compactor tasks need 4,433 Wh, 4,380 Wh of work and about 53 Wh of travel, but its 1 robot carries only 3,500 Wh combined and excavator tasks need 5,357 Wh, 5,304 Wh of work and about 53 Wh of travel, but its 1 robot carries only 5,000 Wh combined; reduce the quantities if the brief allows it or move work to other robot types.",
+    "details": [
+     "T8 needs robot type 'printer' but no robot has it",
+     "compactor tasks need 4,433 Wh, about 53 Wh of it travel; its 1 robot carries 3,500 Wh",
+     "excavator tasks need 5,357 Wh, about 53 Wh of it travel; its 1 robot carries 5,000 Wh"
+    ]
+   },
+   "duration_s": 0.0019657080993056297,
+   "usage": null,
+   "message": null,
+   "payload": null
+  },
+  {
+   "stage": "repair",
+   "attempt": 3,
+   "ok": true,
+   "failure": null,
+   "duration_s": 34.27078500017524,
+   "usage": {
+    "model": "nvidia/nemotron-3-super-120b-a12b",
+    "input_tokens": 5620,
+    "output_tokens": 5762,
+    "latency_s": 34.26611208310351
+   },
+   "message": "12 tasks",
+   "payload": {
+    "advisories": [],
+    "rate_model": true,
+    "grounded": 10,
+    "diff": {
+     "added": [],
+     "removed": [
+      "T8"
+     ],
+     "changed": [
+      {
+       "task": "T9",
+       "field": "after",
+       "before": [
+        "T8 (removed)"
+       ],
+       "after": [
+        "T7"
+       ]
+      }
+     ],
+     "renumbered": [],
+     "per_type_energy_before": {
+      "compactor": 4380.0,
+      "excavator": 5304.0,
+      "hauler": 1134.0,
+      "printer": 4644.0,
+      "surveyor": 697.5
+     },
+     "per_type_energy_after": {
+      "compactor": 4380.0,
+      "excavator": 5304.0,
+      "hauler": 1134.0,
+      "surveyor": 697.5
+     },
+     "scope_drift_pct": -28.7,
+     "total_energy_wh_before": 16159.5,
+     "total_energy_wh_after": 11515.5,
+     "total_duration_h_before": 155,
+     "total_duration_h_after": 116
+    }
+   }
+  },
+  {
+   "stage": "validate",
+   "attempt": 3,
+   "ok": false,
+   "failure": {
+    "kind": "validation",
+    "conflicts": [
+     "energy:compactor",
+     "energy:excavator"
+    ],
+    "hint": "Battery budgets are exceeded per robot type: compactor tasks need 4,433 Wh, 4,380 Wh of work and about 53 Wh of travel, but its 1 robot carries only 3,500 Wh combined and excavator tasks need 5,357 Wh, 5,304 Wh of work and about 53 Wh of travel, but its 1 robot carries only 5,000 Wh combined; reduce the quantities if the brief allows it or move work to other robot types.",
+    "details": [
+     "compactor tasks need 4,433 Wh, about 53 Wh of it travel; its 1 robot carries 3,500 Wh",
+     "excavator tasks need 5,357 Wh, about 53 Wh of it travel; its 1 robot carries 5,000 Wh"
+    ]
+   },
+   "duration_s": 0.0020165001042187214,
+   "usage": null,
+   "message": null,
+   "payload": null
+  },
+  {
+   "stage": "repair",
+   "attempt": 4,
+   "ok": true,
+   "failure": null,
+   "duration_s": 15.67770175007172,
+   "usage": {
+    "model": "nvidia/nemotron-3-super-120b-a12b",
+    "input_tokens": 5378,
+    "output_tokens": 2808,
+    "latency_s": 15.671817916911095
+   },
+   "message": "12 tasks",
+   "payload": {
+    "advisories": [],
+    "rate_model": true,
+    "grounded": 10,
+    "diff": {
+     "added": [],
+     "removed": [],
+     "changed": [],
+     "renumbered": [],
+     "per_type_energy_before": {
+      "compactor": 4380.0,
+      "excavator": 5304.0,
+      "hauler": 1134.0,
+      "surveyor": 697.5
+     },
+     "per_type_energy_after": {
+      "compactor": 4380.0,
+      "excavator": 5304.0,
+      "hauler": 1134.0,
+      "surveyor": 697.5
+     },
+     "scope_drift_pct": 0.0,
+     "total_energy_wh_before": 11515.5,
+     "total_energy_wh_after": 11515.5,
+     "total_duration_h_before": 116,
+     "total_duration_h_after": 116
+    }
+   }
+  },
+  {
+   "stage": "validate",
+   "attempt": 4,
+   "ok": false,
+   "failure": {
+    "kind": "validation",
+    "conflicts": [
+     "energy:compactor",
+     "energy:excavator"
+    ],
+    "hint": "Battery budgets are exceeded per robot type: compactor tasks need 4,433 Wh, 4,380 Wh of work and about 53 Wh of travel, but its 1 robot carries only 3,500 Wh combined and excavator tasks need 5,357 Wh, 5,304 Wh of work and about 53 Wh of travel, but its 1 robot carries only 5,000 Wh combined; reduce the quantities if the brief allows it or move work to other robot types.",
+    "details": [
+     "compactor tasks need 4,433 Wh, about 53 Wh of it travel; its 1 robot carries 3,500 Wh",
+     "excavator tasks need 5,357 Wh, about 53 Wh of it travel; its 1 robot carries 5,000 Wh"
+    ]
+   },
+   "duration_s": 0.0019605830311775208,
+   "usage": null,
+   "message": null,
+   "payload": {
+    "suggestions": [
+     {
+      "kind": "reduce_scope",
+      "detail": "None of the changes tried (a bigger battery on CP1, a bigger battery on EX1, one more compactor and one more excavator) makes this graph feasible on its own; the largest work items are T2 for S1 (162 m3, 24 h, 2,592 Wh) and T11 for S2 (7.5 m3, 2 h, 120 Wh), so cut or defer scope there.",
+      "makespan_h": null,
+      "robot_type": null,
+      "robot_id": null,
+      "battery_wh": null,
+      "horizon_h": null,
+      "verified": false
+     }
+    ]
+   }
+  }
+ ],
+ "repairs": 3,
+ "success": false,
+ "failure": {
+  "kind": "validation",
+  "conflicts": [
+   "energy:compactor",
+   "energy:excavator"
+  ],
+  "hint": "Battery budgets are exceeded per robot type: compactor tasks need 4,433 Wh, 4,380 Wh of work and about 53 Wh of travel, but its 1 robot carries only 3,500 Wh combined and excavator tasks need 5,357 Wh, 5,304 Wh of work and about 53 Wh of travel, but its 1 robot carries only 5,000 Wh combined; reduce the quantities if the brief allows it or move work to other robot types.",
+  "details": [
+   "compactor tasks need 4,433 Wh, about 53 Wh of it travel; its 1 robot carries 3,500 Wh",
+   "excavator tasks need 5,357 Wh, about 53 Wh of it travel; its 1 robot carries 5,000 Wh"
+  ]
+ },
+ "suggestions": [
+  {
+   "kind": "reduce_scope",
+   "detail": "None of the changes tried (a bigger battery on CP1, a bigger battery on EX1, one more compactor and one more excavator) makes this graph feasible on its own; the largest work items are T2 for S1 (162 m3, 24 h, 2,592 Wh) and T11 for S2 (7.5 m3, 2 h, 120 Wh), so cut or defer scope there.",
+   "makespan_h": null,
+   "robot_type": null,
+   "robot_id": null,
+   "battery_wh": null,
+   "horizon_h": null,
+   "verified": false
+  }
+ ]
+}

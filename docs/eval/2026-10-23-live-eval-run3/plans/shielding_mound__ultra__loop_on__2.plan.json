@@ -1,0 +1,594 @@
+{
+ "requirements": {
+  "site": {
+   "name": "LS-1",
+   "grid": [
+    40,
+    40
+   ],
+   "zones": [
+    {
+     "id": "Z1",
+     "center": [
+      20,
+      2
+     ],
+     "radius": 3
+    },
+    {
+     "id": "Z2",
+     "center": [
+      30,
+      2
+     ],
+     "radius": 3
+    },
+    {
+     "id": "Z3",
+     "center": [
+      10,
+      35
+     ],
+     "radius": 3
+    }
+   ],
+   "depot": [
+    10,
+    35
+   ]
+  },
+  "structures": [
+   {
+    "id": "S1",
+    "type": "shielding_mound",
+    "zone": "Z1",
+    "operations": [
+     "excavate",
+     "haul",
+     "compact",
+     "sinter"
+    ],
+    "diameter_m": 4,
+    "height_m": 1.5,
+    "thickness_m": 1.5,
+    "lifts": 3
+   },
+   {
+    "id": "S2",
+    "type": "borrow_pit",
+    "zone": "Z2",
+    "operations": [
+     "excavate",
+     "grade"
+    ],
+    "length_m": 15,
+    "width_m": 10,
+    "depth_m": 1
+   }
+  ],
+  "robots": [
+   {
+    "id": "EX1",
+    "type": "excavator",
+    "battery_wh": 5000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "HL1",
+    "type": "hauler",
+    "battery_wh": 3000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "HL2",
+    "type": "hauler",
+    "battery_wh": 3000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "HL3",
+    "type": "hauler",
+    "battery_wh": 3000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "CP1",
+    "type": "compactor",
+    "battery_wh": 3500.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "SV1",
+    "type": "surveyor",
+    "battery_wh": 1500.0,
+    "speed_cells_per_h": 12.0
+   }
+  ],
+  "horizon_h": 216,
+  "constraints": [
+   "Each lift is compacted before the next lift is placed; the surveyor checks the final thickness.",
+   "Haulers do not enter the mound zone while the compactor is working in it.",
+   "Only one robot may work inside a zone at a time."
+  ],
+  "source_brief": "# Regolith Radiation Shielding over Habitat Module A\n\n**Site.** Habitat Module A is already in place on its foundation, 10 m long and 4 m in diameter, on firm ground 400 m north of the landing pad. A borrow area of loose regolith lies 80 m to the west. The depot is at the borrow area; no recharging.\n\n**Structures.**\n\n1. Shielding mound: cover the module with 1.5 m of regolith on the sides and 2 m on top, about 120 cubic metres of fill, placed in three compacted lifts from a borrow pit.\n2. Borrow pit: a 15 m by 10 m excavation 1 m deep that supplies the fill; its floor is graded afterwards so it can serve as a future storage pad.\n\n**Fleet.** EX1 (excavator, 5000 Wh), HL1, HL2 and HL3 (haulers, 3000 Wh each), CP1 (compactor, 3500 Wh) and SV1 (surveyor, 1500 Wh). Each battery is the budget for the whole job.\n\n**Deadline.** 9 days.\n\n**Operational constraints.**\n\n- Each lift is compacted before the next lift is placed; the surveyor checks the final thickness.\n- Haulers do not enter the mound zone while the compactor is working in it.\n- Only one robot may work inside a zone at a time.\n"
+ },
+ "task_graph": {
+  "tasks": [
+   {
+    "id": "T1",
+    "name": "excavate borrow pit S2",
+    "robot_type": "excavator",
+    "duration_h": 22,
+    "energy_wh": 2400.0,
+    "zone": "Z2",
+    "after": [],
+    "structure": "S2",
+    "quantity": 150.0,
+    "unit": "m3",
+    "basis": "15 m x 10 m x 1 m = 150 m3",
+    "estimated_duration_h": 22.0,
+    "estimated_energy_wh": 2400.0
+   },
+   {
+    "id": "T2",
+    "name": "strip/grade borrow pit floor S2",
+    "robot_type": "excavator",
+    "duration_h": 6,
+    "energy_wh": 720.0,
+    "zone": "Z2",
+    "after": [
+     "T1"
+    ],
+    "structure": "S2",
+    "quantity": 150.0,
+    "unit": "m2",
+    "basis": "15 m x 10 m = 150 m2",
+    "estimated_duration_h": 6.0,
+    "estimated_energy_wh": 720.0
+   },
+   {
+    "id": "T0",
+    "name": "excavate foundation S1",
+    "robot_type": "excavator",
+    "duration_h": 1,
+    "energy_wh": 40.2,
+    "zone": "Z1",
+    "after": [
+     "T2"
+    ],
+    "structure": "S1",
+    "quantity": 2.51,
+    "unit": "m3",
+    "basis": "pi*(2 m)^2 * 0.2 m = 2.51 m3",
+    "estimated_duration_h": 1.0,
+    "estimated_energy_wh": 40.16
+   },
+   {
+    "id": "T3",
+    "name": "strip/grade foundation S1",
+    "robot_type": "excavator",
+    "duration_h": 1,
+    "energy_wh": 60.3,
+    "zone": "Z1",
+    "after": [
+     "T0"
+    ],
+    "structure": "S1",
+    "quantity": 12.57,
+    "unit": "m2",
+    "basis": "pi*(2 m)^2 = 12.57 m2",
+    "estimated_duration_h": 1.0,
+    "estimated_energy_wh": 60.336
+   },
+   {
+    "id": "T4",
+    "name": "haul lift 1 fill to S1",
+    "robot_type": "hauler",
+    "duration_h": 1,
+    "energy_wh": 41.2,
+    "zone": "Z1",
+    "after": [
+     "T3"
+    ],
+    "structure": "S1",
+    "quantity": 5.89,
+    "unit": "m3",
+    "basis": "17.67 m3 / 3 = 5.89 m3 per lift",
+    "estimated_duration_h": 1.0,
+    "estimated_energy_wh": 41.23
+   },
+   {
+    "id": "T5",
+    "name": "compact lift 1 S1",
+    "robot_type": "compactor",
+    "duration_h": 1,
+    "energy_wh": 47.1,
+    "zone": "Z1",
+    "after": [
+     "T4"
+    ],
+    "structure": "S1",
+    "quantity": 11.78,
+    "unit": "m2",
+    "basis": "pi*(2^2 - 0.5^2) = 11.78 m2 per lift",
+    "estimated_duration_h": 1.0,
+    "estimated_energy_wh": 47.12
+   },
+   {
+    "id": "T6",
+    "name": "haul lift 2 fill to S1",
+    "robot_type": "hauler",
+    "duration_h": 1,
+    "energy_wh": 41.2,
+    "zone": "Z1",
+    "after": [
+     "T5"
+    ],
+    "structure": "S1",
+    "quantity": 5.89,
+    "unit": "m3",
+    "basis": "17.67 m3 / 3 = 5.89 m3 per lift",
+    "estimated_duration_h": 1.0,
+    "estimated_energy_wh": 41.23
+   },
+   {
+    "id": "T7",
+    "name": "compact lift 2 S1",
+    "robot_type": "compactor",
+    "duration_h": 1,
+    "energy_wh": 47.1,
+    "zone": "Z1",
+    "after": [
+     "T6"
+    ],
+    "structure": "S1",
+    "quantity": 11.78,
+    "unit": "m2",
+    "basis": "pi*(2^2 - 0.5^2) = 11.78 m2 per lift",
+    "estimated_duration_h": 1.0,
+    "estimated_energy_wh": 47.12
+   },
+   {
+    "id": "T8",
+    "name": "haul lift 3 fill to S1",
+    "robot_type": "hauler",
+    "duration_h": 1,
+    "energy_wh": 41.2,
+    "zone": "Z1",
+    "after": [
+     "T7"
+    ],
+    "structure": "S1",
+    "quantity": 5.89,
+    "unit": "m3",
+    "basis": "17.67 m3 / 3 = 5.89 m3 per lift",
+    "estimated_duration_h": 1.0,
+    "estimated_energy_wh": 41.23
+   },
+   {
+    "id": "T9",
+    "name": "compact lift 3 S1",
+    "robot_type": "compactor",
+    "duration_h": 1,
+    "energy_wh": 47.1,
+    "zone": "Z1",
+    "after": [
+     "T8"
+    ],
+    "structure": "S1",
+    "quantity": 11.78,
+    "unit": "m2",
+    "basis": "pi*(2^2 - 0.5^2) = 11.78 m2 per lift",
+    "estimated_duration_h": 1.0,
+    "estimated_energy_wh": 47.12
+   },
+   {
+    "id": "T10",
+    "name": "inspect final thickness S1",
+    "robot_type": "surveyor",
+    "duration_h": 1,
+    "energy_wh": 75.0,
+    "zone": "Z1",
+    "after": [
+     "T9"
+    ],
+    "structure": "S1",
+    "quantity": null,
+    "unit": null,
+    "basis": null,
+    "estimated_duration_h": null,
+    "estimated_energy_wh": null
+   }
+  ],
+  "notes": "Added excavate foundation task T0 for S1 to satisfy the excavate operation listed for the shielding mound. Sinter operation for S1 omitted because no printer robot is available in the fleet. The shielding mound is built as a circular berm (outer diameter 4 m, wall thickness 1.5 m, height 1.5 m) in 3 lifts. Haul tasks use material from the borrow pit S2 (150 m3 excavated). Only one robot works in a zone at a time; the long precedence chain fits well within the 216 h horizon."
+ },
+ "schedule": {
+  "entries": [
+   {
+    "task": "T1",
+    "robot": "EX1",
+    "start_h": 4,
+    "end_h": 26
+   },
+   {
+    "task": "T2",
+    "robot": "EX1",
+    "start_h": 30,
+    "end_h": 36
+   },
+   {
+    "task": "T0",
+    "robot": "EX1",
+    "start_h": 39,
+    "end_h": 40
+   },
+   {
+    "task": "T3",
+    "robot": "EX1",
+    "start_h": 43,
+    "end_h": 44
+   },
+   {
+    "task": "T4",
+    "robot": "HL3",
+    "start_h": 44,
+    "end_h": 45
+   },
+   {
+    "task": "T5",
+    "robot": "CP1",
+    "start_h": 45,
+    "end_h": 46
+   },
+   {
+    "task": "T6",
+    "robot": "HL1",
+    "start_h": 46,
+    "end_h": 47
+   },
+   {
+    "task": "T7",
+    "robot": "CP1",
+    "start_h": 49,
+    "end_h": 50
+   },
+   {
+    "task": "T8",
+    "robot": "HL3",
+    "start_h": 50,
+    "end_h": 51
+   },
+   {
+    "task": "T9",
+    "robot": "CP1",
+    "start_h": 53,
+    "end_h": 54
+   },
+   {
+    "task": "T10",
+    "robot": "SV1",
+    "start_h": 54,
+    "end_h": 55
+   }
+  ],
+  "makespan_h": 55,
+  "status": "optimal",
+  "objective_bound_h": 55,
+  "solve_time_s": 0.046183
+ },
+ "explanation": null,
+ "steps": [
+  {
+   "stage": "structure",
+   "attempt": 1,
+   "ok": true,
+   "failure": null,
+   "duration_s": 3.3869154998101294,
+   "usage": {
+    "model": "nvidia/Nemotron-3_5-Lightning",
+    "input_tokens": 3121,
+    "output_tokens": 481,
+    "latency_s": 3.3814972080290318
+   },
+   "message": "2 structures, 6 robots, horizon 216h",
+   "payload": {
+    "zones": 3,
+    "grid": [
+     40,
+     40
+    ],
+    "depot": [
+     10,
+     35
+    ],
+    "warnings": [
+     "structure S1 lists sinter but the fleet has no printer: no sinter task will be required of it (add a printer or drop the operation)"
+    ]
+   }
+  },
+  {
+   "stage": "taskgraph",
+   "attempt": 1,
+   "ok": true,
+   "failure": null,
+   "duration_s": 32.9462682090234,
+   "usage": {
+    "model": "nvidia/Nemotron-3-Ultra-550b-a55b",
+    "input_tokens": 3403,
+    "output_tokens": 10927,
+    "latency_s": 32.94295166619122
+   },
+   "message": "10 tasks",
+   "payload": {
+    "advisories": [],
+    "rate_model": true,
+    "grounded": 9
+   }
+  },
+  {
+   "stage": "validate",
+   "attempt": 1,
+   "ok": false,
+   "failure": {
+    "kind": "validation",
+    "conflicts": [
+     "scope:S1"
+    ],
+    "hint": "Structure coverage is incomplete: S1 (shielding_mound) lists excavate (an operation the brief asks for) but no task excavates it; add an excavator task tagged S1; every structure keeps its phases (landing pad: survey, excavate or grade, compact and sinter; berm: excavate or haul, then compact; road: grade and compact; foundation: excavate and compact; anything else at least one task; a phase is only required while the fleet has its robot type) and every operation a structure lists needs a task tagged with it, so add the missing work back as tasks tagged with the structure id, with quantity and unit.",
+    "details": [
+     "S1 (shielding_mound) lacks excavate task (its operations list excavate)"
+    ]
+   },
+   "duration_s": 0.0007001250050961971,
+   "usage": null,
+   "message": null,
+   "payload": null
+  },
+  {
+   "stage": "repair",
+   "attempt": 2,
+   "ok": true,
+   "failure": null,
+   "duration_s": 17.306961874943227,
+   "usage": {
+    "model": "nvidia/Nemotron-3-Ultra-550b-a55b",
+    "input_tokens": 5222,
+    "output_tokens": 5780,
+    "latency_s": 17.30116816679947
+   },
+   "message": "11 tasks",
+   "payload": {
+    "advisories": [],
+    "rate_model": true,
+    "grounded": 10,
+    "diff": {
+     "added": [
+      "T0"
+     ],
+     "removed": [],
+     "changed": [
+      {
+       "task": "T3",
+       "field": "after",
+       "before": [
+        "T2"
+       ],
+       "after": [
+        "T0"
+       ]
+      }
+     ],
+     "renumbered": [],
+     "per_type_energy_before": {
+      "compactor": 141.3,
+      "excavator": 3180.3,
+      "hauler": 123.6,
+      "surveyor": 75.0
+     },
+     "per_type_energy_after": {
+      "compactor": 141.3,
+      "excavator": 3220.5,
+      "hauler": 123.6,
+      "surveyor": 75.0
+     },
+     "scope_drift_pct": 1.1,
+     "total_energy_wh_before": 3520.2,
+     "total_energy_wh_after": 3560.4,
+     "total_duration_h_before": 36,
+     "total_duration_h_after": 37
+    }
+   }
+  },
+  {
+   "stage": "validate",
+   "attempt": 2,
+   "ok": true,
+   "failure": null,
+   "duration_s": 0.006821750197559595,
+   "usage": null,
+   "message": "11 tasks valid",
+   "payload": null
+  },
+  {
+   "stage": "schedule",
+   "attempt": 2,
+   "ok": true,
+   "failure": null,
+   "duration_s": 0.05460362508893013,
+   "usage": null,
+   "message": "makespan 55h (optimal)",
+   "payload": {
+    "makespan_h": 55,
+    "status": "optimal",
+    "verified": true,
+    "verification": {
+     "precedence_edges": 10,
+     "robot_rows": 6,
+     "zone_groups": 2,
+     "battery": [
+      {
+       "robot": "EX1",
+       "used_wh": 3244.794,
+       "work_wh": 3220.5,
+       "travel_wh": 24.294,
+       "budget_wh": 5000.0,
+       "pct": 64.9
+      },
+      {
+       "robot": "HL1",
+       "used_wh": 58.441,
+       "work_wh": 41.2,
+       "travel_wh": 17.241,
+       "budget_wh": 3000.0,
+       "pct": 1.9
+      },
+      {
+       "robot": "HL2",
+       "used_wh": 0.0,
+       "work_wh": 0.0,
+       "travel_wh": 0.0,
+       "budget_wh": 3000.0,
+       "pct": 0.0
+      },
+      {
+       "robot": "HL3",
+       "used_wh": 99.641,
+       "work_wh": 82.4,
+       "travel_wh": 17.241,
+       "budget_wh": 3000.0,
+       "pct": 3.3
+      },
+      {
+       "robot": "CP1",
+       "used_wh": 158.541,
+       "work_wh": 141.3,
+       "travel_wh": 17.241,
+       "budget_wh": 3500.0,
+       "pct": 4.5
+      },
+      {
+       "robot": "SV1",
+       "used_wh": 92.241,
+       "work_wh": 75.0,
+       "travel_wh": 17.241,
+       "budget_wh": 1500.0,
+       "pct": 6.1
+      }
+     ],
+     "tightest_robot": "EX1",
+     "horizon_used_h": 55,
+     "horizon_h": 216,
+     "status": "optimal",
+     "objective_bound_h": 55,
+     "solve_time_s": 0.046,
+     "travel_allowance": true,
+     "recheck": "independent check_schedule passed"
+    }
+   }
+  }
+ ],
+ "repairs": 1,
+ "success": true,
+ "failure": null,
+ "suggestions": []
+}

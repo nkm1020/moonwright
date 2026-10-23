@@ -1,0 +1,409 @@
+{
+ "requirements": {
+  "site": {
+   "name": "LS-1",
+   "grid": [
+    40,
+    40
+   ],
+   "zones": [
+    {
+     "id": "Z1",
+     "center": [
+      20,
+      2
+     ],
+     "radius": 3
+    },
+    {
+     "id": "Z2",
+     "center": [
+      20,
+      37
+     ],
+     "radius": 3
+    }
+   ],
+   "depot": [
+    20,
+    2
+   ]
+  },
+  "structures": [
+   {
+    "id": "S1",
+    "type": "borrow_strip",
+    "zone": "Z1",
+    "operations": [
+     "survey",
+     "excavate"
+    ],
+    "length_m": 20,
+    "width_m": 10,
+    "depth_m": 0.35,
+    "min_length_m": 20,
+    "min_width_m": 10,
+    "min_depth_m": 0.35
+   },
+   {
+    "id": "S2",
+    "type": "stockpile",
+    "zone": "Z2",
+    "operations": [
+     "haul",
+     "compact"
+    ],
+    "length_m": 25,
+    "width_m": 10,
+    "height_m": 2,
+    "min_length_m": 25,
+    "min_width_m": 10,
+    "min_height_m": 2
+   }
+  ],
+  "robots": [
+   {
+    "id": "EX1",
+    "type": "excavator",
+    "battery_wh": 5000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "HL1",
+    "type": "hauler",
+    "battery_wh": 3000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "HL2",
+    "type": "hauler",
+    "battery_wh": 3000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "CP1",
+    "type": "compactor",
+    "battery_wh": 3500.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "SV1",
+    "type": "surveyor",
+    "battery_wh": 1500.0,
+    "speed_cells_per_h": 12.0
+   }
+  ],
+  "horizon_h": 192,
+  "constraints": [
+   "Each strip is surveyed before excavation",
+   "Haulers alternate strips so excavator is never waiting",
+   "Only one robot may work inside a zone at a time"
+  ],
+  "source_brief": "# Regolith Feedstock Stockpile for ISRU\n\n**Site.** A regolith borrow field 200 m west of the ISRU plant, loose material 50 cm deep over firm ground, with the stockpile pad next to the plant. The depot is at the plant; no recharging.\n\n**Structures.**\n\n1. Borrow excavation: about 200 cubic metres of loose regolith taken from three 20 m by 10 m strips, 0.35 m deep each.\n2. Feedstock stockpile: the excavated material placed on the plant's stockpile pad in a windrow 25 m long, lightly compacted so it does not blow away during plant start-up.\n\n**Fleet.** EX1 (excavator, 5000 Wh), HL1 and HL2 (haulers, 3000 Wh each), CP1 (compactor, 3500 Wh) and SV1 (surveyor, 1500 Wh). Batteries are the whole budget.\n\n**Deadline.** 8 days.\n\n**Operational constraints.**\n\n- Each strip is surveyed before excavation so the plant can log the source material.\n- Haulers alternate strips so the excavator is never waiting for a hauler.\n- Only one robot may work inside a zone at a time.\n"
+ },
+ "task_graph": {
+  "tasks": [
+   {
+    "id": "T1",
+    "name": "survey S1 borrow strip",
+    "robot_type": "surveyor",
+    "duration_h": 2,
+    "energy_wh": 100.0,
+    "zone": "Z1",
+    "after": [],
+    "structure": "S1",
+    "quantity": 200.0,
+    "unit": "m2",
+    "basis": "20 m x 10 m = 200 m2",
+    "estimated_duration_h": 2.0,
+    "estimated_energy_wh": 100.0
+   },
+   {
+    "id": "T2",
+    "name": "excavate S1 borrow strip",
+    "robot_type": "excavator",
+    "duration_h": 10,
+    "energy_wh": 1120.0,
+    "zone": "Z1",
+    "after": [
+     "T1"
+    ],
+    "structure": "S1",
+    "quantity": 70.0,
+    "unit": "m3",
+    "basis": "20 m x 10 m x 0.35 m = 70 m3",
+    "estimated_duration_h": 10.0,
+    "estimated_energy_wh": 1120.0
+   },
+   {
+    "id": "T3",
+    "name": "haul S2 stockpile fill part 1",
+    "robot_type": "hauler",
+    "duration_h": 21,
+    "energy_wh": 1750.0,
+    "zone": "Z2",
+    "after": [
+     "T2"
+    ],
+    "structure": "S2",
+    "quantity": 250.0,
+    "unit": "m3",
+    "basis": "500 m3 / 2 = 250 m3",
+    "estimated_duration_h": 21.0,
+    "estimated_energy_wh": 1750.0
+   },
+   {
+    "id": "T4",
+    "name": "haul S2 stockpile fill part 2",
+    "robot_type": "hauler",
+    "duration_h": 21,
+    "energy_wh": 1750.0,
+    "zone": "Z2",
+    "after": [
+     "T3"
+    ],
+    "structure": "S2",
+    "quantity": 250.0,
+    "unit": "m3",
+    "basis": "500 m3 / 2 = 250 m3",
+    "estimated_duration_h": 21.0,
+    "estimated_energy_wh": 1750.0
+   },
+   {
+    "id": "T5",
+    "name": "compact S2 stockpile base",
+    "robot_type": "compactor",
+    "duration_h": 10,
+    "energy_wh": 1000.0,
+    "zone": "Z2",
+    "after": [
+     "T4"
+    ],
+    "structure": "S2",
+    "quantity": 250.0,
+    "unit": "m2",
+    "basis": "25 m x 10 m = 250 m2",
+    "estimated_duration_h": 10.0,
+    "estimated_energy_wh": 1000.0
+   },
+   {
+    "id": "T6",
+    "name": "inspect S1 borrow strip",
+    "robot_type": "surveyor",
+    "duration_h": 1,
+    "energy_wh": 75.0,
+    "zone": "Z1",
+    "after": [
+     "T2"
+    ],
+    "structure": "S1",
+    "quantity": null,
+    "unit": null,
+    "basis": null,
+    "estimated_duration_h": null,
+    "estimated_energy_wh": null
+   },
+   {
+    "id": "T7",
+    "name": "inspect S2 stockpile",
+    "robot_type": "surveyor",
+    "duration_h": 1,
+    "energy_wh": 75.0,
+    "zone": "Z2",
+    "after": [
+     "T5"
+    ],
+    "structure": "S2",
+    "quantity": null,
+    "unit": null,
+    "basis": null,
+    "estimated_duration_h": null,
+    "estimated_energy_wh": null
+   }
+  ],
+  "notes": "Planned haul volume for S2 stockpile is 500 m3, but borrow strip S1 only provides 70 m3. Additional regolith must be sourced from elsewhere or the stockpile will be underfilled."
+ },
+ "schedule": {
+  "entries": [
+   {
+    "task": "T1",
+    "robot": "SV1",
+    "start_h": 0,
+    "end_h": 2
+   },
+   {
+    "task": "T2",
+    "robot": "EX1",
+    "start_h": 2,
+    "end_h": 12
+   },
+   {
+    "task": "T3",
+    "robot": "HL2",
+    "start_h": 12,
+    "end_h": 33
+   },
+   {
+    "task": "T4",
+    "robot": "HL1",
+    "start_h": 33,
+    "end_h": 54
+   },
+   {
+    "task": "T5",
+    "robot": "CP1",
+    "start_h": 54,
+    "end_h": 64
+   },
+   {
+    "task": "T6",
+    "robot": "SV1",
+    "start_h": 12,
+    "end_h": 13
+   },
+   {
+    "task": "T7",
+    "robot": "SV1",
+    "start_h": 64,
+    "end_h": 65
+   }
+  ],
+  "makespan_h": 65,
+  "status": "optimal",
+  "objective_bound_h": 65,
+  "solve_time_s": 0.0029430000000000003
+ },
+ "explanation": null,
+ "steps": [
+  {
+   "stage": "structure",
+   "attempt": 1,
+   "ok": true,
+   "failure": null,
+   "duration_s": 3.1216723339166492,
+   "usage": {
+    "model": "nvidia/Nemotron-3_5-Lightning",
+    "input_tokens": 3093,
+    "output_tokens": 457,
+    "latency_s": 3.110803375020623
+   },
+   "message": "2 structures, 5 robots, horizon 192h",
+   "payload": {
+    "zones": 2,
+    "grid": [
+     40,
+     40
+    ],
+    "depot": [
+     20,
+     2
+    ],
+    "warnings": [
+     "structure S1: lifts 3 -> 1: the brief's entry for S1 states no lift count we can read"
+    ]
+   }
+  },
+  {
+   "stage": "taskgraph",
+   "attempt": 1,
+   "ok": true,
+   "failure": null,
+   "duration_s": 23.152758416952565,
+   "usage": {
+    "model": "nvidia/Nemotron-3-Ultra-550b-a55b",
+    "input_tokens": 3340,
+    "output_tokens": 6399,
+    "latency_s": 23.14873645803891
+   },
+   "message": "7 tasks",
+   "payload": {
+    "advisories": [],
+    "rate_model": true,
+    "grounded": 5
+   }
+  },
+  {
+   "stage": "validate",
+   "attempt": 1,
+   "ok": true,
+   "failure": null,
+   "duration_s": 0.0004029159899801016,
+   "usage": null,
+   "message": "7 tasks valid",
+   "payload": null
+  },
+  {
+   "stage": "schedule",
+   "attempt": 1,
+   "ok": true,
+   "failure": null,
+   "duration_s": 0.003647583071142435,
+   "usage": null,
+   "message": "makespan 65h (optimal)",
+   "payload": {
+    "makespan_h": 65,
+    "status": "optimal",
+    "verified": true,
+    "verification": {
+     "precedence_edges": 6,
+     "robot_rows": 5,
+     "zone_groups": 2,
+     "battery": [
+      {
+       "robot": "EX1",
+       "used_wh": 1120.0,
+       "work_wh": 1120.0,
+       "travel_wh": 0.0,
+       "budget_wh": 5000.0,
+       "pct": 22.4
+      },
+      {
+       "robot": "HL1",
+       "used_wh": 1767.5,
+       "work_wh": 1750.0,
+       "travel_wh": 17.5,
+       "budget_wh": 3000.0,
+       "pct": 58.9
+      },
+      {
+       "robot": "HL2",
+       "used_wh": 1767.5,
+       "work_wh": 1750.0,
+       "travel_wh": 17.5,
+       "budget_wh": 3000.0,
+       "pct": 58.9
+      },
+      {
+       "robot": "CP1",
+       "used_wh": 1017.5,
+       "work_wh": 1000.0,
+       "travel_wh": 17.5,
+       "budget_wh": 3500.0,
+       "pct": 29.1
+      },
+      {
+       "robot": "SV1",
+       "used_wh": 267.5,
+       "work_wh": 250.0,
+       "travel_wh": 17.5,
+       "budget_wh": 1500.0,
+       "pct": 17.8
+      }
+     ],
+     "tightest_robot": "HL1",
+     "horizon_used_h": 65,
+     "horizon_h": 192,
+     "status": "optimal",
+     "objective_bound_h": 65,
+     "solve_time_s": 0.003,
+     "travel_allowance": true,
+     "recheck": "independent check_schedule passed"
+    }
+   }
+  }
+ ],
+ "repairs": 0,
+ "success": true,
+ "failure": null,
+ "suggestions": []
+}

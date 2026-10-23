@@ -1,0 +1,1079 @@
+{
+ "requirements": {
+  "site": {
+   "name": "LS-1",
+   "grid": [
+    40,
+    40
+   ],
+   "zones": [
+    {
+     "id": "Z1",
+     "center": [
+      20,
+      38
+     ],
+     "radius": 3
+    },
+    {
+     "id": "Z2",
+     "center": [
+      20,
+      35
+     ],
+     "radius": 3
+    },
+    {
+     "id": "Z3",
+     "center": [
+      20,
+      32
+     ],
+     "radius": 3
+    },
+    {
+     "id": "Z4",
+     "center": [
+      20,
+      28
+     ],
+     "radius": 3
+    }
+   ],
+   "depot": [
+    20,
+    2
+   ]
+  },
+  "structures": [
+   {
+    "id": "S1",
+    "type": "stockpile",
+    "zone": "Z1",
+    "operations": [
+     "excavate",
+     "compact"
+    ],
+    "diameter_m": 12,
+    "depth_m": 0.5,
+    "thickness_m": 0.3
+   },
+   {
+    "id": "S2",
+    "type": "borrow_strip",
+    "zone": "Z2",
+    "operations": [
+     "haul",
+     "grade",
+     "compact"
+    ],
+    "length_m": 60,
+    "height_m": 1.2,
+    "width_m": 3,
+    "trench_width_m": 1.2,
+    "trench_depth_m": 0.8
+   },
+   {
+    "id": "S3",
+    "type": "borrow_pit",
+    "zone": "Z3",
+    "operations": [
+     "excavate"
+    ],
+    "length_m": 8,
+    "width_m": 8,
+    "depth_m": 0.9
+   }
+  ],
+  "robots": [
+   {
+    "id": "EX1",
+    "type": "excavator",
+    "battery_wh": 1750.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "EX2",
+    "type": "excavator",
+    "battery_wh": 1750.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "HL1",
+    "type": "hauler",
+    "battery_wh": 2000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "CP1",
+    "type": "compactor",
+    "battery_wh": 2000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "SV1",
+    "type": "surveyor",
+    "battery_wh": 1000.0,
+    "speed_cells_per_h": 12.0
+   }
+  ],
+  "horizon_h": 120,
+  "constraints": [
+   "Share the three digs between EX1 and EX2 so neither exceeds its remaining charge.",
+   "Only one robot may work inside a zone at a time.",
+   "SV1 stakes the pad and berm line before excavation and inspects the pad after compaction.",
+   "Berm compaction waits for fill from the pad bowl and the borrow pit."
+  ],
+  "source_brief": "# Pad Bowl, Key Trench and Borrow Pit on Depleted Excavators\n\n**Site.** The LS-1 plateau, 60 m south of the main landing pad: loose regolith 50 cm deep over firm material. The crew is on its second sortie of the day, so the excavators arrive with partly depleted batteries and there is no recharging before the end of the sortie. The depot is on the south edge of the work area.\n\n**Structures.**\n\n1. Beacon pad: a circular bowl 12 m in diameter excavated 0.5 m to firm regolith (about 57 cubic metres), subgrade compacted. No sintering this sortie.\n2. Dust berm: a 60 m straight berm on the north side, 1.2 m high and 3 m wide at the base, on a key trench 1.2 m wide and 0.8 m deep cut into firm material (about 58 cubic metres of trench), built from the pad spoil and the borrow pit, compacted in one lift.\n3. Borrow pit: 8 m by 8 m, 0.9 m deep (about 58 cubic metres), next to the berm line, supplying the rest of the berm fill.\n\n**Fleet.** EX1 and EX2 (excavators, 1750 Wh remaining each), HL1 (hauler, 2000 Wh remaining), CP1 (compactor, 2000 Wh remaining) and SV1 (surveyor, 1000 Wh remaining). These remaining charges are the whole budget for the sortie.\n\n**Deadline.** 5 days.\n\n**Operational constraints.**\n\n- The three digs are of similar size; share them between the two excavators so that neither is loaded beyond its remaining charge.\n- Only one robot may work inside a zone at a time.\n- The surveyor stakes the pad and the berm line before excavation and inspects the pad after compaction.\n- Berm compaction waits for the fill from the pad bowl and the borrow pit.\n"
+ },
+ "task_graph": {
+  "tasks": [
+   {
+    "id": "T8",
+    "name": "survey stake pad Z1",
+    "robot_type": "surveyor",
+    "duration_h": 1,
+    "energy_wh": 56.5,
+    "zone": "Z1",
+    "after": [],
+    "structure": "S1",
+    "quantity": 113.1,
+    "unit": "m2",
+    "basis": "113.1 m2 = pi*(6 m)^2 (pad area)",
+    "estimated_duration_h": null,
+    "estimated_energy_wh": null
+   },
+   {
+    "id": "T10",
+    "name": "inspect pad Z1",
+    "robot_type": "surveyor",
+    "duration_h": 1,
+    "energy_wh": 56.5,
+    "zone": "Z1",
+    "after": [
+     "T6"
+    ],
+    "structure": "S1",
+    "quantity": 113.1,
+    "unit": "m2",
+    "basis": "113.1 m2 = pi*(6 m)^2 (pad area)",
+    "estimated_duration_h": null,
+    "estimated_energy_wh": null
+   },
+   {
+    "id": "T9",
+    "name": "survey stake berm line Z2",
+    "robot_type": "surveyor",
+    "duration_h": 2,
+    "energy_wh": 90.0,
+    "zone": "Z2",
+    "after": [],
+    "structure": "S2",
+    "quantity": 180.0,
+    "unit": "m2",
+    "basis": "180 m2 = 60 m * 3 m (berm footprint)",
+    "estimated_duration_h": null,
+    "estimated_energy_wh": null
+   },
+   {
+    "id": "T4",
+    "name": "haul S2 fill Z2",
+    "robot_type": "hauler",
+    "duration_h": 9,
+    "energy_wh": 756.0,
+    "zone": "Z2",
+    "after": [
+     "T1",
+     "T1_2",
+     "T2",
+     "T2_2",
+     "T3",
+     "T3_2",
+     "T11",
+     "T11_2"
+    ],
+    "structure": "S2",
+    "quantity": 108.0,
+    "unit": "m3",
+    "basis": "108 m3 = 0.5 * 3 m * 1.2 m * 60 m (triangular cross-section)",
+    "estimated_duration_h": null,
+    "estimated_energy_wh": null
+   },
+   {
+    "id": "T6",
+    "name": "compact S1 Z1",
+    "robot_type": "compactor",
+    "duration_h": 5,
+    "energy_wh": 452.4,
+    "zone": "Z1",
+    "after": [
+     "T2",
+     "T2_2"
+    ],
+    "structure": "S1",
+    "quantity": 113.1,
+    "unit": "m2",
+    "basis": "113.1 m2 = pi*(6 m)^2 (pad base area)",
+    "estimated_duration_h": null,
+    "estimated_energy_wh": null
+   },
+   {
+    "id": "T7",
+    "name": "compact S2 Z2",
+    "robot_type": "compactor",
+    "duration_h": 7,
+    "energy_wh": 720.0,
+    "zone": "Z2",
+    "after": [
+     "T4"
+    ],
+    "structure": "S2",
+    "quantity": 180.0,
+    "unit": "m2",
+    "basis": "180 m2 = 60 m * 3 m (berm top area)",
+    "estimated_duration_h": null,
+    "estimated_energy_wh": null
+   },
+   {
+    "id": "T1",
+    "name": "excavate S1 part1 Z1",
+    "robot_type": "excavator",
+    "duration_h": 3,
+    "energy_wh": 240.0,
+    "zone": "Z1",
+    "after": [
+     "T8"
+    ],
+    "structure": "S1",
+    "quantity": 15.0,
+    "unit": "m3",
+    "basis": "15 m3 = half of part1 of S1 volume (pi*(6 m)^2*0.5 m = 56.55 m3)",
+    "estimated_duration_h": 3.0,
+    "estimated_energy_wh": 240.0
+   },
+   {
+    "id": "T1_2",
+    "name": "excavate S1 part1 Z1 (copy)",
+    "robot_type": "excavator",
+    "duration_h": 3,
+    "energy_wh": 240.0,
+    "zone": "Z1",
+    "after": [
+     "T8"
+    ],
+    "structure": "S1",
+    "quantity": 15.0,
+    "unit": "m3",
+    "basis": "15 m3 = half of part1 of S1 volume (pi*(6 m)^2*0.5 m = 56.55 m3)",
+    "estimated_duration_h": 3.0,
+    "estimated_energy_wh": 240.0
+   },
+   {
+    "id": "T2",
+    "name": "excavate S1 part2 Z1",
+    "robot_type": "excavator",
+    "duration_h": 2,
+    "energy_wh": 212.4,
+    "zone": "Z1",
+    "after": [
+     "T1",
+     "T1_2"
+    ],
+    "structure": "S1",
+    "quantity": 13.275,
+    "unit": "m3",
+    "basis": "13.275 m3 = half of remainder of S1 volume (pi*(6 m)^2*0.5 m = 56.55 m3)",
+    "estimated_duration_h": 2.0,
+    "estimated_energy_wh": 212.4
+   },
+   {
+    "id": "T2_2",
+    "name": "excavate S1 part2 Z1 (copy)",
+    "robot_type": "excavator",
+    "duration_h": 2,
+    "energy_wh": 212.4,
+    "zone": "Z1",
+    "after": [
+     "T1",
+     "T1_2"
+    ],
+    "structure": "S1",
+    "quantity": 13.275,
+    "unit": "m3",
+    "basis": "13.275 m3 = half of remainder of S1 volume (pi*(6 m)^2*0.5 m = 56.55 m3)",
+    "estimated_duration_h": 2.0,
+    "estimated_energy_wh": 212.4
+   },
+   {
+    "id": "T3",
+    "name": "excavate S3 Z3",
+    "robot_type": "excavator",
+    "duration_h": 5,
+    "energy_wh": 460.8,
+    "zone": "Z3",
+    "after": [],
+    "structure": "S3",
+    "quantity": 28.8,
+    "unit": "m3",
+    "basis": "28.8 m3 = half of S3 volume (8 m * 8 m * 0.9 m)",
+    "estimated_duration_h": 5.0,
+    "estimated_energy_wh": 460.8
+   },
+   {
+    "id": "T3_2",
+    "name": "excavate S3 Z3 (copy)",
+    "robot_type": "excavator",
+    "duration_h": 5,
+    "energy_wh": 460.8,
+    "zone": "Z3",
+    "after": [],
+    "structure": "S3",
+    "quantity": 28.8,
+    "unit": "m3",
+    "basis": "28.8 m3 = half of S3 volume (8 m * 8 m * 0.9 m)",
+    "estimated_duration_h": 5.0,
+    "estimated_energy_wh": 460.8
+   },
+   {
+    "id": "T5",
+    "name": "grade S2 part1 Z2",
+    "robot_type": "excavator",
+    "duration_h": 4,
+    "energy_wh": 422.4,
+    "zone": "Z2",
+    "after": [
+     "T9"
+    ],
+    "structure": "S2",
+    "quantity": 88.0,
+    "unit": "m2",
+    "basis": "88 m2 = half of 176 m2 = (88/180)*180 m2 (portion of berm top area)",
+    "estimated_duration_h": 4.0,
+    "estimated_energy_wh": 422.4
+   },
+   {
+    "id": "T5_2",
+    "name": "grade S2 part1 Z2 (copy)",
+    "robot_type": "excavator",
+    "duration_h": 4,
+    "energy_wh": 422.4,
+    "zone": "Z2",
+    "after": [
+     "T9"
+    ],
+    "structure": "S2",
+    "quantity": 88.0,
+    "unit": "m2",
+    "basis": "88 m2 = half of 176 m2 = (88/180)*180 m2 (portion of berm top area)",
+    "estimated_duration_h": 4.0,
+    "estimated_energy_wh": 422.4
+   },
+   {
+    "id": "T5b",
+    "name": "grade S2 part2 Z2",
+    "robot_type": "excavator",
+    "duration_h": 1,
+    "energy_wh": 9.6,
+    "zone": "Z2",
+    "after": [
+     "T5",
+     "T5_2"
+    ],
+    "structure": "S2",
+    "quantity": 2.0,
+    "unit": "m2",
+    "basis": "2 m2 = half of 4 m2 = remainder of berm top area (180-176)",
+    "estimated_duration_h": 1.0,
+    "estimated_energy_wh": 9.6
+   },
+   {
+    "id": "T5b_2",
+    "name": "grade S2 part2 Z2 (copy)",
+    "robot_type": "excavator",
+    "duration_h": 1,
+    "energy_wh": 9.6,
+    "zone": "Z2",
+    "after": [
+     "T5",
+     "T5_2"
+    ],
+    "structure": "S2",
+    "quantity": 2.0,
+    "unit": "m2",
+    "basis": "2 m2 = half of 4 m2 = remainder of berm top area (180-176)",
+    "estimated_duration_h": 1.0,
+    "estimated_energy_wh": 9.6
+   },
+   {
+    "id": "T11",
+    "name": "excavate S2 key trench Z2",
+    "robot_type": "excavator",
+    "duration_h": 4,
+    "energy_wh": 345.6,
+    "zone": "Z2",
+    "after": [
+     "T5b",
+     "T5b_2"
+    ],
+    "structure": "S2",
+    "quantity": 21.6,
+    "unit": "m3",
+    "basis": "21.6 m3 = half of remaining key trench excavation volume after grading (60 m * 1.2 m * 0.8 m - volume stripped by grade task)",
+    "estimated_duration_h": 4.0,
+    "estimated_energy_wh": 345.6
+   },
+   {
+    "id": "T11_2",
+    "name": "excavate S2 key trench Z2 (copy)",
+    "robot_type": "excavator",
+    "duration_h": 4,
+    "energy_wh": 345.6,
+    "zone": "Z2",
+    "after": [
+     "T5b",
+     "T5b_2"
+    ],
+    "structure": "S2",
+    "quantity": 21.6,
+    "unit": "m3",
+    "basis": "21.6 m3 = half of remaining key trench excavation volume after grading (60 m * 1.2 m * 0.8 m - volume stripped by grade task)",
+    "estimated_duration_h": 4.0,
+    "estimated_energy_wh": 345.6
+   }
+  ],
+  "notes": "Each original excavator task was split into two equal‑half tasks to allow the workload to be divided between EX1 and EX2 without exceeding either robot’s 1750 Wh battery. All other tasks remain unchanged, preserving the required scope."
+ },
+ "schedule": null,
+ "explanation": null,
+ "steps": [
+  {
+   "stage": "structure",
+   "attempt": 1,
+   "ok": true,
+   "failure": null,
+   "duration_s": 3.4079824169166386,
+   "usage": {
+    "model": "nvidia/Nemotron-3_5-Lightning",
+    "input_tokens": 3242,
+    "output_tokens": 626,
+    "latency_s": 3.4053818329703063
+   },
+   "message": "3 structures, 5 robots, horizon 120h",
+   "payload": {
+    "zones": 4,
+    "grid": [
+     40,
+     40
+    ],
+    "depot": [
+     20,
+     2
+    ],
+    "warnings": [
+     "zones Z1 and Z2 overlap (centres 3.0 cells apart, radii 3 + 3)",
+     "zones Z2 and Z3 overlap (centres 3.0 cells apart, radii 3 + 3)",
+     "zones Z3 and Z4 overlap (centres 4.0 cells apart, radii 3 + 3)"
+    ]
+   }
+  },
+  {
+   "stage": "taskgraph",
+   "attempt": 1,
+   "ok": true,
+   "failure": null,
+   "duration_s": 58.10288091702387,
+   "usage": {
+    "model": "nvidia/nemotron-3-super-120b-a12b",
+    "input_tokens": 3488,
+    "output_tokens": 9176,
+    "latency_s": 58.1007479170803
+   },
+   "message": "10 tasks",
+   "payload": {
+    "advisories": [
+     "volume:S2: its dimensions give 108 m3 (60 m long, 1.2 m high, 3 m wide at the base, triangular section) but its haul tasks (T4 216 m3) total 216 m3 (200 %): hauled twice over",
+     "volume:S2: its dimensions give 57.6 m3 (key trench 60 x 1.2 x 0.8 m) but its excavation tasks (T5 180 m2 counts 14.4 m3 at 0.2 m over the 72 m2 footprint) total only 14.4 m3 (25 %)",
+     "supply:S2: its hauls (T4 216 m3) move 216 m3, more than the 114.2 m3 the digs before them remove (S1 stockpile: T1, T2; S3 borrow pit: T3)"
+    ],
+    "rate_model": true,
+    "grounded": 10
+   }
+  },
+  {
+   "stage": "validate",
+   "attempt": 1,
+   "ok": false,
+   "failure": {
+    "kind": "validation",
+    "conflicts": [
+     "volume:S2"
+    ],
+    "hint": "S2 (borrow_strip) plans 14.4 of 57.6 m3: plan the remaining 43.2 m3 of the S2 key trench as excavator tasks in m3 (split above 60 m3) instead of shrinking the work; keep the m2 stripping only for the top 0.2 m.",
+    "details": [
+     "S2 (borrow_strip): its key trench is 60 x 1.2 x 0.8 m = 57.6 m3 of excavation; excavator tasks cover 14.4 m3 (25 %): T5 180 m2 counts 14.4 m3 at 0.2 m over the 72 m2 footprint"
+    ]
+   },
+   "duration_s": 0.0007004579529166222,
+   "usage": null,
+   "message": null,
+   "payload": {
+    "advisories": [
+     "volume:S2: its dimensions give 108 m3 (60 m long, 1.2 m high, 3 m wide at the base, triangular section) but its haul tasks (T4 216 m3) total 216 m3 (200 %): hauled twice over",
+     "volume:S2: its dimensions give 57.6 m3 (key trench 60 x 1.2 x 0.8 m) but its excavation tasks (T5 180 m2 counts 14.4 m3 at 0.2 m over the 72 m2 footprint) total only 14.4 m3 (25 %)",
+     "supply:S2: its hauls (T4 216 m3) move 216 m3, more than the 114.2 m3 the digs before them remove (S1 stockpile: T1, T2; S3 borrow pit: T3)"
+    ]
+   }
+  },
+  {
+   "stage": "repair",
+   "attempt": 2,
+   "ok": true,
+   "failure": null,
+   "duration_s": 57.981433666078374,
+   "usage": {
+    "model": "nvidia/nemotron-3-super-120b-a12b",
+    "input_tokens": 5553,
+    "output_tokens": 9883,
+    "latency_s": 57.979037292068824
+   },
+   "message": "11 tasks",
+   "payload": {
+    "advisories": [],
+    "rate_model": true,
+    "grounded": 4,
+    "diff": {
+     "added": [
+      "T11"
+     ],
+     "removed": [],
+     "changed": [
+      {
+       "task": "T2",
+       "field": "after",
+       "before": [
+        "T8"
+       ],
+       "after": [
+        "T1"
+       ]
+      },
+      {
+       "task": "T6",
+       "field": "after",
+       "before": [
+        "T1",
+        "T2"
+       ],
+       "after": [
+        "T2"
+       ]
+      },
+      {
+       "task": "T5",
+       "field": "after",
+       "before": [
+        "T4"
+       ],
+       "after": [
+        "T9"
+       ]
+      },
+      {
+       "task": "T4",
+       "field": "duration_h",
+       "before": 18,
+       "after": 9
+      },
+      {
+       "task": "T4",
+       "field": "energy_wh",
+       "before": 1512.0,
+       "after": 756.0
+      },
+      {
+       "task": "T4",
+       "field": "quantity",
+       "before": 216.0,
+       "after": 108.0
+      },
+      {
+       "task": "T4",
+       "field": "after",
+       "before": [
+        "T1",
+        "T2",
+        "T3"
+       ],
+       "after": [
+        "T1",
+        "T11",
+        "T2",
+        "T3"
+       ]
+      },
+      {
+       "task": "T7",
+       "field": "after",
+       "before": [
+        "T5"
+       ],
+       "after": [
+        "T4"
+       ]
+      },
+      {
+       "task": "T3",
+       "field": "after",
+       "before": [
+        "T8",
+        "T9"
+       ],
+       "after": []
+      }
+     ],
+     "renumbered": [],
+     "per_type_energy_before": {
+      "compactor": 1172.4,
+      "excavator": 2690.4,
+      "hauler": 1512.0,
+      "surveyor": 203.0
+     },
+     "per_type_energy_after": {
+      "compactor": 1172.4,
+      "excavator": 3381.6,
+      "hauler": 756.0,
+      "surveyor": 203.0
+     },
+     "scope_drift_pct": -1.2,
+     "total_energy_wh_before": 5577.8,
+     "total_energy_wh_after": 5513.0,
+     "total_duration_h_before": 60,
+     "total_duration_h_after": 58
+    }
+   }
+  },
+  {
+   "stage": "validate",
+   "attempt": 2,
+   "ok": true,
+   "failure": null,
+   "duration_s": 0.00071154092438519,
+   "usage": null,
+   "message": "11 tasks valid",
+   "payload": null
+  },
+  {
+   "stage": "schedule",
+   "attempt": 2,
+   "ok": false,
+   "failure": {
+    "kind": "infeasible",
+    "conflicts": [
+     "energy:EX1",
+     "energy:EX2"
+    ],
+    "hint": "EX1 and EX2 each have 1,750 Wh; the excavator tasks need 3,466 Wh in total, about 84 Wh of it travel, and cannot be split across 2 excavators (3,500 Wh combined) without exceeding one budget.",
+    "details": []
+   },
+   "duration_s": 0.01274895784445107,
+   "usage": null,
+   "message": null,
+   "payload": {
+    "budget": [
+     {
+      "kind": "type",
+      "subject": "excavator",
+      "robots": [
+       "EX1",
+       "EX2"
+      ],
+      "budget_wh": 3500.0,
+      "demanded_wh": 3465.6,
+      "travel_wh": 84.0
+     }
+    ]
+   }
+  },
+  {
+   "stage": "repair",
+   "attempt": 3,
+   "ok": true,
+   "failure": null,
+   "duration_s": 45.804350666934624,
+   "usage": {
+    "model": "nvidia/nemotron-3-super-120b-a12b",
+    "input_tokens": 5301,
+    "output_tokens": 6241,
+    "latency_s": 45.80179250007495
+   },
+   "message": "12 tasks",
+   "payload": {
+    "advisories": [],
+    "rate_model": true,
+    "grounded": 4,
+    "diff": {
+     "added": [
+      "T5",
+      "T5b"
+     ],
+     "removed": [
+      "T5"
+     ],
+     "changed": [],
+     "renumbered": [],
+     "per_type_energy_before": {
+      "compactor": 1172.4,
+      "excavator": 3381.6,
+      "hauler": 756.0,
+      "surveyor": 203.0
+     },
+     "per_type_energy_after": {
+      "compactor": 1172.4,
+      "excavator": 3381.6,
+      "hauler": 756.0,
+      "surveyor": 203.0
+     },
+     "scope_drift_pct": 0.0,
+     "total_energy_wh_before": 5513.0,
+     "total_energy_wh_after": 5513.0,
+     "total_duration_h_before": 58,
+     "total_duration_h_after": 59
+    }
+   }
+  },
+  {
+   "stage": "validate",
+   "attempt": 3,
+   "ok": true,
+   "failure": null,
+   "duration_s": 0.0008565420284867287,
+   "usage": null,
+   "message": "12 tasks valid",
+   "payload": null
+  },
+  {
+   "stage": "schedule",
+   "attempt": 3,
+   "ok": false,
+   "failure": {
+    "kind": "infeasible",
+    "conflicts": [
+     "energy:EX1",
+     "energy:EX2"
+    ],
+    "hint": "EX1 and EX2 each have 1,750 Wh; the excavator tasks need 3,482 Wh in total, about 101 Wh of it travel, and cannot be split across 2 excavators (3,500 Wh combined) without exceeding one budget.",
+    "details": []
+   },
+   "duration_s": 0.01727216597646475,
+   "usage": null,
+   "message": null,
+   "payload": {
+    "budget": [
+     {
+      "kind": "type",
+      "subject": "excavator",
+      "robots": [
+       "EX1",
+       "EX2"
+      ],
+      "budget_wh": 3500.0,
+      "demanded_wh": 3482.1,
+      "travel_wh": 100.5
+     }
+    ]
+   }
+  },
+  {
+   "stage": "repair",
+   "attempt": 4,
+   "ok": true,
+   "failure": null,
+   "duration_s": 97.32356329192407,
+   "usage": {
+    "model": "nvidia/nemotron-3-super-120b-a12b",
+    "input_tokens": 5552,
+    "output_tokens": 12876,
+    "latency_s": 97.31994958408177
+   },
+   "message": "18 tasks",
+   "payload": {
+    "advisories": [],
+    "rate_model": true,
+    "grounded": 12,
+    "diff": {
+     "added": [
+      "T1_2",
+      "T2_2",
+      "T3_2",
+      "T5_2",
+      "T5b_2",
+      "T11_2"
+     ],
+     "removed": [],
+     "changed": [
+      {
+       "task": "T4",
+       "field": "after",
+       "before": [
+        "T1",
+        "T11",
+        "T2",
+        "T3"
+       ],
+       "after": [
+        "T1",
+        "T11",
+        "T11_2",
+        "T1_2",
+        "T2",
+        "T2_2",
+        "T3",
+        "T3_2"
+       ]
+      },
+      {
+       "task": "T6",
+       "field": "after",
+       "before": [
+        "T2"
+       ],
+       "after": [
+        "T2",
+        "T2_2"
+       ]
+      },
+      {
+       "task": "T1",
+       "field": "duration_h",
+       "before": 5,
+       "after": 3
+      },
+      {
+       "task": "T1",
+       "field": "energy_wh",
+       "before": 480.0,
+       "after": 240.0
+      },
+      {
+       "task": "T1",
+       "field": "quantity",
+       "before": 30.0,
+       "after": 15.0
+      },
+      {
+       "task": "T2",
+       "field": "duration_h",
+       "before": 4,
+       "after": 2
+      },
+      {
+       "task": "T2",
+       "field": "energy_wh",
+       "before": 424.8,
+       "after": 212.4
+      },
+      {
+       "task": "T2",
+       "field": "quantity",
+       "before": 26.55,
+       "after": 13.275
+      },
+      {
+       "task": "T2",
+       "field": "after",
+       "before": [
+        "T1"
+       ],
+       "after": [
+        "T1",
+        "T1_2"
+       ]
+      },
+      {
+       "task": "T3",
+       "field": "duration_h",
+       "before": 9,
+       "after": 5
+      },
+      {
+       "task": "T3",
+       "field": "energy_wh",
+       "before": 921.6,
+       "after": 460.8
+      },
+      {
+       "task": "T3",
+       "field": "quantity",
+       "before": 57.6,
+       "after": 28.8
+      },
+      {
+       "task": "T5",
+       "field": "duration_h",
+       "before": 8,
+       "after": 4
+      },
+      {
+       "task": "T5",
+       "field": "energy_wh",
+       "before": 844.8,
+       "after": 422.4
+      },
+      {
+       "task": "T5",
+       "field": "quantity",
+       "before": 176.0,
+       "after": 88.0
+      },
+      {
+       "task": "T5b",
+       "field": "energy_wh",
+       "before": 19.2,
+       "after": 9.6
+      },
+      {
+       "task": "T5b",
+       "field": "quantity",
+       "before": 4.0,
+       "after": 2.0
+      },
+      {
+       "task": "T5b",
+       "field": "after",
+       "before": [
+        "T5"
+       ],
+       "after": [
+        "T5",
+        "T5_2"
+       ]
+      },
+      {
+       "task": "T11",
+       "field": "duration_h",
+       "before": 7,
+       "after": 4
+      },
+      {
+       "task": "T11",
+       "field": "energy_wh",
+       "before": 691.2,
+       "after": 345.6
+      },
+      {
+       "task": "T11",
+       "field": "quantity",
+       "before": 43.2,
+       "after": 21.6
+      },
+      {
+       "task": "T11",
+       "field": "after",
+       "before": [
+        "T5b"
+       ],
+       "after": [
+        "T5b",
+        "T5b_2"
+       ]
+      }
+     ],
+     "renumbered": [],
+     "per_type_energy_before": {
+      "compactor": 1172.4,
+      "excavator": 3381.6,
+      "hauler": 756.0,
+      "surveyor": 203.0
+     },
+     "per_type_energy_after": {
+      "compactor": 1172.4,
+      "excavator": 3381.6,
+      "hauler": 756.0,
+      "surveyor": 203.0
+     },
+     "scope_drift_pct": 0.0,
+     "total_energy_wh_before": 5513.0,
+     "total_energy_wh_after": 5513.0,
+     "total_duration_h_before": 59,
+     "total_duration_h_after": 63
+    }
+   }
+  },
+  {
+   "stage": "validate",
+   "attempt": 4,
+   "ok": false,
+   "failure": {
+    "kind": "validation",
+    "conflicts": [
+     "energy:excavator"
+    ],
+    "hint": "Battery budgets are exceeded per robot type: excavator tasks need 3,583 Wh, 3,382 Wh of work and about 201 Wh of travel, but its 2 robots carry only 3,500 Wh combined; reduce the quantities if the brief allows it or move work to other robot types.",
+    "details": [
+     "excavator tasks need 3,583 Wh, about 201 Wh of it travel; its 2 robots carry 3,500 Wh"
+    ]
+   },
+   "duration_s": 0.0009729168377816677,
+   "usage": null,
+   "message": null,
+   "payload": {
+    "suggestions": [
+     {
+      "kind": "raise_battery",
+      "detail": "EX1 needs 1,850 Wh (has 1,750 Wh): feasible at 54 h",
+      "makespan_h": 54,
+      "robot_type": "excavator",
+      "robot_id": "EX1",
+      "battery_wh": 1850.0,
+      "horizon_h": null,
+      "verified": true
+     },
+     {
+      "kind": "add_robot",
+      "detail": "one more excavator (EX3, 1,750 Wh like EX1): feasible at 44 h",
+      "makespan_h": 44,
+      "robot_type": "excavator",
+      "robot_id": "EX3",
+      "battery_wh": 1750.0,
+      "horizon_h": null,
+      "verified": true
+     }
+    ]
+   }
+  }
+ ],
+ "repairs": 3,
+ "success": false,
+ "failure": {
+  "kind": "validation",
+  "conflicts": [
+   "energy:excavator"
+  ],
+  "hint": "Battery budgets are exceeded per robot type: excavator tasks need 3,583 Wh, 3,382 Wh of work and about 201 Wh of travel, but its 2 robots carry only 3,500 Wh combined; reduce the quantities if the brief allows it or move work to other robot types.",
+  "details": [
+   "excavator tasks need 3,583 Wh, about 201 Wh of it travel; its 2 robots carry 3,500 Wh"
+  ]
+ },
+ "suggestions": [
+  {
+   "kind": "raise_battery",
+   "detail": "EX1 needs 1,850 Wh (has 1,750 Wh): feasible at 54 h",
+   "makespan_h": 54,
+   "robot_type": "excavator",
+   "robot_id": "EX1",
+   "battery_wh": 1850.0,
+   "horizon_h": null,
+   "verified": true
+  },
+  {
+   "kind": "add_robot",
+   "detail": "one more excavator (EX3, 1,750 Wh like EX1): feasible at 44 h",
+   "makespan_h": 44,
+   "robot_type": "excavator",
+   "robot_id": "EX3",
+   "battery_wh": 1750.0,
+   "horizon_h": null,
+   "verified": true
+  }
+ ]
+}

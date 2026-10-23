@@ -1,0 +1,133 @@
+{
+ "brief": "habitat_foundation",
+ "repeat": 1,
+ "requirements_sha": "a9c0ca13dd",
+ "requirements": {
+  "site": {
+   "name": "LS-1",
+   "grid": [
+    40,
+    40
+   ],
+   "zones": [
+    {
+     "id": "Z1",
+     "center": [
+      20,
+      20
+     ],
+     "radius": 5
+    },
+    {
+     "id": "Z2",
+     "center": [
+      38,
+      20
+     ],
+     "radius": 3
+    }
+   ],
+   "depot": [
+    38,
+    2
+   ]
+  },
+  "structures": [
+   {
+    "id": "F1",
+    "type": "foundation_pit",
+    "zone": "Z1",
+    "operations": [
+     "excavate",
+     "compact",
+     "sinter"
+    ],
+    "diameter_m": 12,
+    "length_m": 12,
+    "depth_m": 1.0,
+    "thickness_m": 0.2
+   },
+   {
+    "id": "D1",
+    "type": "perimeter_drainage_trench",
+    "zone": "Z2",
+    "operations": [
+     "excavate",
+     "haul",
+     "compact",
+     "survey"
+    ],
+    "length_m": 56,
+    "width_m": 0.4,
+    "depth_m": 0.6
+   }
+  ],
+  "robots": [
+   {
+    "id": "EX1",
+    "type": "excavator",
+    "battery_wh": 5000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "EX2",
+    "type": "excavator",
+    "battery_wh": 5000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "HL1",
+    "type": "hauler",
+    "battery_wh": 3000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "CP1",
+    "type": "compactor",
+    "battery_wh": 3500.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "PR1",
+    "type": "printer",
+    "battery_wh": 4000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "SV1",
+    "type": "surveyor",
+    "battery_wh": 1500.0,
+    "speed_cells_per_h": 12.0
+   }
+  ],
+  "horizon_h": 288,
+  "constraints": [
+   "Only one robot may work inside a zone at a time.",
+   "The printer cannot start the slab until the compactor has finished the pit base and the surveyor has checked it.",
+   "The trench must not be opened while an excavator is still working inside the pit."
+  ],
+  "source_brief": "# Habitat Module Foundation and Drainage\n\n**Site.** A 60 m by 60 m area of firm regolith 400 m north of the LS-1 landing pad. Surface fines are 20 cm deep. The depot is on the east edge; no recharging is available.\n\n**Structures.**\n\n1. Foundation pit: 12 m by 12 m, excavated 1.0 m deep with vertical sides, base levelled to plus or minus 3 cm and compacted, then a sintered 20 cm bearing slab printed over the base.\n2. Perimeter drainage and cable trench: 56 m around the pit, 0.4 m wide and 0.6 m deep, dug after the pit walls are stable and backfilled with compacted spoil once the cable bed is inspected.\n\n**Fleet.** EX1 and EX2 (excavators, 5000 Wh each), HL1 (hauler, 3000 Wh), CP1 (compactor, 3500 Wh), PR1 (printer, 4000 Wh) and SV1 (surveyor, 1500 Wh). Batteries are not recharged during the job.\n\n**Deadline.** 12 days.\n\n**Operational constraints.**\n\n- Only one robot may work inside a zone at a time.\n- The printer cannot start the slab until the compactor has finished the pit base and the surveyor has checked it.\n- The trench must not be opened while an excavator is still working inside the pit.\n"
+ },
+ "ok": true,
+ "message": "2 structures, 6 robots, horizon 288h",
+ "payload": {
+  "zones": 2,
+  "grid": [
+   40,
+   40
+  ],
+  "depot": [
+   38,
+   2
+  ],
+  "warnings": []
+ },
+ "failure": null,
+ "usage": {
+  "model": "nvidia/Nemotron-3_5-Lightning",
+  "input_tokens": 3138,
+  "output_tokens": 566,
+  "latency_s": 7.755334084155038
+ },
+ "latency_s": 7.759
+}
