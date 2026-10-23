@@ -1,0 +1,690 @@
+{
+ "requirements": {
+  "site": {
+   "name": "LS-1",
+   "grid": [
+    40,
+    40
+   ],
+   "zones": [
+    {
+     "id": "Z1",
+     "center": [
+      20,
+      2
+     ],
+     "radius": 3
+    },
+    {
+     "id": "Z2",
+     "center": [
+      20,
+      12
+     ],
+     "radius": 3
+    },
+    {
+     "id": "Z3",
+     "center": [
+      20,
+      22
+     ],
+     "radius": 3
+    }
+   ],
+   "depot": [
+    20,
+    2
+   ]
+  },
+  "structures": [
+   {
+    "id": "S1",
+    "type": "cable_trench",
+    "zone": "Z1",
+    "operations": [
+     "excavate",
+     "compact"
+    ],
+    "length_m": 150,
+    "width_m": 0.4,
+    "depth_m": 0.6,
+    "wall_slope": null,
+    "lifts": 1
+   },
+   {
+    "id": "S2",
+    "type": "earth_bridge",
+    "zone": "Z2",
+    "operations": [
+     "haul",
+     "compact"
+    ],
+    "length_m": 10,
+    "width_m": 4,
+    "thickness_m": 0.5,
+    "lifts": null,
+    "wall_slope": null
+   }
+  ],
+  "robots": [
+   {
+    "id": "EX1",
+    "type": "excavator",
+    "battery_wh": 5000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "HL1",
+    "type": "hauler",
+    "battery_wh": 3000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "CP1",
+    "type": "compactor",
+    "battery_wh": 3500.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "SV1",
+    "type": "surveyor",
+    "battery_wh": 1500.0,
+    "speed_cells_per_h": 12.0
+   }
+  ],
+  "horizon_h": 120,
+  "constraints": [
+   "Segments are cut in order from the array end; compactor beds a segment only after surveyor has checked its depth.",
+   "Earth bridge is built before segment two is cut through the depression.",
+   "Only one robot may work inside a zone at a time."
+  ],
+  "source_brief": "# Power Cable Trench to the Habitat Site\n\n**Site.** A 150 m corridor from the solar array pad to the habitat foundation, across loose regolith with scattered cobbles. The route crosses one shallow 10 m wide depression. The depot is at the array end; no recharging.\n\n**Structures.**\n\n1. Cable trench: 150 m long, 0.4 m wide, 0.6 m deep, cut in three 50 m segments so the cable crew can follow behind, with a compacted 10 cm bedding layer in each segment before the cable goes in.\n2. Depression crossing: a 10 m long, 4 m wide earth bridge of compacted fill, 0.5 m thick (about 20 cubic metres, taken from the trench spoil), across the depression so the trench keeps a steady depth.\n\n**Fleet.** EX1 (excavator, 5000 Wh), HL1 (hauler, 3000 Wh), CP1 (compactor, 3500 Wh) and SV1 (surveyor, 1500 Wh). Each battery is the whole job's budget.\n\n**Deadline.** 5 days.\n\n**Operational constraints.**\n\n- Segments are cut in order from the array end; the compactor beds a segment only after the surveyor has checked its depth.\n- The earth bridge is built before segment two is cut through the depression.\n- Only one robot may work inside a zone at a time.\n"
+ },
+ "task_graph": {
+  "tasks": [
+   {
+    "id": "T1",
+    "name": "survey S1 initial",
+    "robot_type": "surveyor",
+    "duration_h": 1,
+    "energy_wh": 30.0,
+    "zone": "Z1",
+    "after": [],
+    "structure": "S1",
+    "quantity": 60.0,
+    "unit": "m2",
+    "basis": "150 m * 0.4 m = 60 m2 (trench bottom area)",
+    "estimated_duration_h": null,
+    "estimated_energy_wh": null
+   },
+   {
+    "id": "T2",
+    "name": "excavate S1 segment1",
+    "robot_type": "excavator",
+    "duration_h": 3,
+    "energy_wh": 320.0,
+    "zone": "Z1",
+    "after": [
+     "T1"
+    ],
+    "structure": "S1",
+    "quantity": 20.0,
+    "unit": "m3",
+    "basis": "83.33 m * 0.4 m * 0.6 m = 20 m3 (segment1 volume for bridge supply)",
+    "estimated_duration_h": 3.0,
+    "estimated_energy_wh": 320.0
+   },
+   {
+    "id": "T3",
+    "name": "survey S1 segment1 depth",
+    "robot_type": "surveyor",
+    "duration_h": 1,
+    "energy_wh": 16.7,
+    "zone": "Z1",
+    "after": [
+     "T2"
+    ],
+    "structure": "S1",
+    "quantity": 33.333,
+    "unit": "m2",
+    "basis": "83.33 m * 0.4 m = 33.33 m2 (segment1 bottom area)",
+    "estimated_duration_h": 1.0,
+    "estimated_energy_wh": 16.6665
+   },
+   {
+    "id": "T4",
+    "name": "compact S1 segment1",
+    "robot_type": "compactor",
+    "duration_h": 2,
+    "energy_wh": 133.3,
+    "zone": "Z1",
+    "after": [
+     "T3"
+    ],
+    "structure": "S1",
+    "quantity": 33.333,
+    "unit": "m2",
+    "basis": "83.33 m * 0.4 m = 33.33 m2 (segment1 bottom area)",
+    "estimated_duration_h": 2.0,
+    "estimated_energy_wh": 133.333
+   },
+   {
+    "id": "T5",
+    "name": "excavate S1 segment2",
+    "robot_type": "excavator",
+    "duration_h": 3,
+    "energy_wh": 256.0,
+    "zone": "Z1",
+    "after": [
+     "T4",
+     "T10"
+    ],
+    "structure": "S1",
+    "quantity": 16.0,
+    "unit": "m3",
+    "basis": "66.67 m * 0.4 m * 0.6 m = 16 m3 (segment2 volume)",
+    "estimated_duration_h": 3.0,
+    "estimated_energy_wh": 256.0
+   },
+   {
+    "id": "T6",
+    "name": "survey S1 segment2 depth",
+    "robot_type": "surveyor",
+    "duration_h": 1,
+    "energy_wh": 13.3,
+    "zone": "Z1",
+    "after": [
+     "T5"
+    ],
+    "structure": "S1",
+    "quantity": 26.667,
+    "unit": "m2",
+    "basis": "66.67 m * 0.4 m = 26.67 m2 (segment2 bottom area)",
+    "estimated_duration_h": 1.0,
+    "estimated_energy_wh": 13.333
+   },
+   {
+    "id": "T7",
+    "name": "compact S1 segment2",
+    "robot_type": "compactor",
+    "duration_h": 2,
+    "energy_wh": 106.7,
+    "zone": "Z1",
+    "after": [
+     "T6"
+    ],
+    "structure": "S1",
+    "quantity": 26.667,
+    "unit": "m2",
+    "basis": "66.67 m * 0.4 m = 26.67 m2 (segment2 bottom area)",
+    "estimated_duration_h": 2.0,
+    "estimated_energy_wh": 106.667
+   },
+   {
+    "id": "T8",
+    "name": "haul S2",
+    "robot_type": "hauler",
+    "duration_h": 2,
+    "energy_wh": 140.0,
+    "zone": "Z2",
+    "after": [
+     "T2"
+    ],
+    "structure": "S2",
+    "quantity": 20.0,
+    "unit": "m3",
+    "basis": "10 m * 4 m * 0.5 m = 20 m3 (bridge volume)",
+    "estimated_duration_h": 2.0,
+    "estimated_energy_wh": 140.0
+   },
+   {
+    "id": "T9",
+    "name": "survey S2 depth",
+    "robot_type": "surveyor",
+    "duration_h": 1,
+    "energy_wh": 20.0,
+    "zone": "Z2",
+    "after": [
+     "T8"
+    ],
+    "structure": "S2",
+    "quantity": 40.0,
+    "unit": "m2",
+    "basis": "10 m * 4 m = 40 m2 (bridge area)",
+    "estimated_duration_h": 1.0,
+    "estimated_energy_wh": 20.0
+   },
+   {
+    "id": "T10",
+    "name": "compact S2",
+    "robot_type": "compactor",
+    "duration_h": 2,
+    "energy_wh": 160.0,
+    "zone": "Z2",
+    "after": [
+     "T9"
+    ],
+    "structure": "S2",
+    "quantity": 40.0,
+    "unit": "m2",
+    "basis": "10 m * 4 m = 40 m2 (bridge area)",
+    "estimated_duration_h": 2.0,
+    "estimated_energy_wh": 160.0
+   }
+  ],
+  "notes": "Split S1 trench excavation into two unequal segments (20 m3 and 16 m3) so the first segment supplies the 20 m3 needed for S2 earth bridge haul. Added supply dependency from T2 (excavate segment1) to T8 (haul S2). Ordered per constraints: bridge built (T10) before segment two excavation (T5). Enforced single-robot-per-zone sequencing in Z1 (T1->T2->T3->T4->T5->T6->T7) and Z2 (T8->T9->T10). All volumes match structure dimensions: S1 total excavation 36 m3, S2 haul 20 m3."
+ },
+ "schedule": {
+  "entries": [
+   {
+    "task": "T1",
+    "robot": "SV1",
+    "start_h": 0,
+    "end_h": 1
+   },
+   {
+    "task": "T2",
+    "robot": "EX1",
+    "start_h": 1,
+    "end_h": 4
+   },
+   {
+    "task": "T3",
+    "robot": "SV1",
+    "start_h": 4,
+    "end_h": 5
+   },
+   {
+    "task": "T4",
+    "robot": "CP1",
+    "start_h": 5,
+    "end_h": 7
+   },
+   {
+    "task": "T5",
+    "robot": "EX1",
+    "start_h": 10,
+    "end_h": 13
+   },
+   {
+    "task": "T6",
+    "robot": "SV1",
+    "start_h": 13,
+    "end_h": 14
+   },
+   {
+    "task": "T7",
+    "robot": "CP1",
+    "start_h": 14,
+    "end_h": 16
+   },
+   {
+    "task": "T8",
+    "robot": "HL1",
+    "start_h": 4,
+    "end_h": 6
+   },
+   {
+    "task": "T9",
+    "robot": "SV1",
+    "start_h": 6,
+    "end_h": 7
+   },
+   {
+    "task": "T10",
+    "robot": "CP1",
+    "start_h": 8,
+    "end_h": 10
+   }
+  ],
+  "makespan_h": 16,
+  "status": "optimal",
+  "objective_bound_h": 16,
+  "solve_time_s": 0.015392
+ },
+ "explanation": null,
+ "steps": [
+  {
+   "stage": "structure",
+   "attempt": 1,
+   "ok": true,
+   "failure": null,
+   "duration_s": 7.732917707879096,
+   "usage": {
+    "model": "nvidia/Nemotron-3_5-Lightning",
+    "input_tokens": 3129,
+    "output_tokens": 445,
+    "latency_s": 7.727312833070755
+   },
+   "message": "2 structures, 4 robots, horizon 120h",
+   "payload": {
+    "zones": 3,
+    "grid": [
+     40,
+     40
+    ],
+    "depot": [
+     20,
+     2
+    ],
+    "warnings": [
+     "structure S1: operations [excavate, compact] recovered from malformed keys ('operations_expected'); check them against the brief",
+     "structure S2: operations [haul, compact] recovered from malformed keys ('operations_expected'); check them against the brief",
+     "structure S1: lifts 3 -> 1: the brief's entry for S1 states 1 compaction lift"
+    ]
+   }
+  },
+  {
+   "stage": "taskgraph",
+   "attempt": 1,
+   "ok": true,
+   "failure": null,
+   "duration_s": 41.66471720812842,
+   "usage": {
+    "model": "nvidia/Nemotron-3-Ultra-550b-a55b",
+    "input_tokens": 3333,
+    "output_tokens": 11303,
+    "latency_s": 41.658641499932855
+   },
+   "message": "10 tasks",
+   "payload": {
+    "advisories": [],
+    "rate_model": true,
+    "grounded": 10
+   }
+  },
+  {
+   "stage": "validate",
+   "attempt": 1,
+   "ok": false,
+   "failure": {
+    "kind": "validation",
+    "conflicts": [
+     "supply:T6"
+    ],
+    "hint": "A haul cannot start before its material is dug: make T6 wait for the digs that supply it (every dig waits for it now: put the digs first); a haul part may wait for only the dig parts that remove what it moves, so split hauls to keep both chains short.",
+    "details": [
+     "T6 hauls 20 m3 for S2 (earth bridge) but waits for no excavation, so it could start before any material is dug"
+    ]
+   },
+   "duration_s": 0.002953500021249056,
+   "usage": null,
+   "message": null,
+   "payload": null
+  },
+  {
+   "stage": "repair",
+   "attempt": 2,
+   "ok": true,
+   "failure": null,
+   "duration_s": 31.951777665875852,
+   "usage": {
+    "model": "nvidia/Nemotron-3-Ultra-550b-a55b",
+    "input_tokens": 5109,
+    "output_tokens": 9125,
+    "latency_s": 31.940572540974244
+   },
+   "message": "10 tasks",
+   "payload": {
+    "advisories": [],
+    "rate_model": true,
+    "grounded": 9,
+    "diff": {
+     "added": [],
+     "removed": [],
+     "changed": [
+      {
+       "task": "T2",
+       "from": "T5",
+       "field": "energy_wh",
+       "before": 288.0,
+       "after": 320.0
+      },
+      {
+       "task": "T2",
+       "from": "T5",
+       "field": "quantity",
+       "before": 18.0,
+       "after": 20.0
+      },
+      {
+       "task": "T2",
+       "from": "T5",
+       "field": "after",
+       "before": [
+        "T7"
+       ],
+       "after": [
+        "T1"
+       ]
+      },
+      {
+       "task": "T3",
+       "from": "T9",
+       "field": "energy_wh",
+       "before": 15.0,
+       "after": 16.7
+      },
+      {
+       "task": "T3",
+       "from": "T9",
+       "field": "quantity",
+       "before": 30.0,
+       "after": 33.33
+      },
+      {
+       "task": "T4",
+       "from": "T10",
+       "field": "energy_wh",
+       "before": 120.0,
+       "after": 133.3
+      },
+      {
+       "task": "T4",
+       "from": "T10",
+       "field": "quantity",
+       "before": 30.0,
+       "after": 33.33
+      },
+      {
+       "task": "T5",
+       "from": "T2",
+       "field": "energy_wh",
+       "before": 288.0,
+       "after": 256.0
+      },
+      {
+       "task": "T5",
+       "from": "T2",
+       "field": "quantity",
+       "before": 18.0,
+       "after": 16.0
+      },
+      {
+       "task": "T5",
+       "from": "T2",
+       "field": "after",
+       "before": [
+        "T10"
+       ],
+       "after": [
+        "T10",
+        "T4"
+       ]
+      },
+      {
+       "task": "T6",
+       "from": "T3",
+       "field": "energy_wh",
+       "before": 15.0,
+       "after": 13.3
+      },
+      {
+       "task": "T6",
+       "from": "T3",
+       "field": "quantity",
+       "before": 30.0,
+       "after": 26.67
+      },
+      {
+       "task": "T7",
+       "from": "T4",
+       "field": "energy_wh",
+       "before": 120.0,
+       "after": 106.7
+      },
+      {
+       "task": "T7",
+       "from": "T4",
+       "field": "quantity",
+       "before": 30.0,
+       "after": 26.67
+      },
+      {
+       "task": "T8",
+       "from": "T6",
+       "field": "after",
+       "before": [
+        "T1"
+       ],
+       "after": [
+        "T2"
+       ]
+      }
+     ],
+     "renumbered": [
+      {
+       "from": "T5",
+       "to": "T2"
+      },
+      {
+       "from": "T9",
+       "to": "T3"
+      },
+      {
+       "from": "T10",
+       "to": "T4"
+      },
+      {
+       "from": "T2",
+       "to": "T5"
+      },
+      {
+       "from": "T3",
+       "to": "T6"
+      },
+      {
+       "from": "T4",
+       "to": "T7"
+      },
+      {
+       "from": "T6",
+       "to": "T8"
+      },
+      {
+       "from": "T7",
+       "to": "T9"
+      },
+      {
+       "from": "T8",
+       "to": "T10"
+      }
+     ],
+     "per_type_energy_before": {
+      "compactor": 400.0,
+      "excavator": 576.0,
+      "hauler": 140.0,
+      "surveyor": 80.0
+     },
+     "per_type_energy_after": {
+      "compactor": 400.0,
+      "excavator": 576.0,
+      "hauler": 140.0,
+      "surveyor": 80.0
+     },
+     "scope_drift_pct": 0.0,
+     "total_energy_wh_before": 1196.0,
+     "total_energy_wh_after": 1196.0,
+     "total_duration_h_before": 18,
+     "total_duration_h_after": 18
+    }
+   }
+  },
+  {
+   "stage": "validate",
+   "attempt": 2,
+   "ok": true,
+   "failure": null,
+   "duration_s": 0.0027523748576641083,
+   "usage": null,
+   "message": "10 tasks valid",
+   "payload": null
+  },
+  {
+   "stage": "schedule",
+   "attempt": 2,
+   "ok": true,
+   "failure": null,
+   "duration_s": 0.023751124972477555,
+   "usage": null,
+   "message": "makespan 16h (optimal)",
+   "payload": {
+    "makespan_h": 16,
+    "status": "optimal",
+    "verified": true,
+    "verification": {
+     "precedence_edges": 10,
+     "robot_rows": 4,
+     "zone_groups": 2,
+     "battery": [
+      {
+       "robot": "EX1",
+       "used_wh": 576.0,
+       "work_wh": 576.0,
+       "travel_wh": 0.0,
+       "budget_wh": 5000.0,
+       "pct": 11.5
+      },
+      {
+       "robot": "HL1",
+       "used_wh": 145.0,
+       "work_wh": 140.0,
+       "travel_wh": 5.0,
+       "budget_wh": 3000.0,
+       "pct": 4.8
+      },
+      {
+       "robot": "CP1",
+       "used_wh": 410.0,
+       "work_wh": 400.0,
+       "travel_wh": 10.0,
+       "budget_wh": 3500.0,
+       "pct": 11.7
+      },
+      {
+       "robot": "SV1",
+       "used_wh": 90.0,
+       "work_wh": 80.0,
+       "travel_wh": 10.0,
+       "budget_wh": 1500.0,
+       "pct": 6.0
+      }
+     ],
+     "tightest_robot": "CP1",
+     "horizon_used_h": 16,
+     "horizon_h": 120,
+     "status": "optimal",
+     "objective_bound_h": 16,
+     "solve_time_s": 0.015,
+     "travel_allowance": true,
+     "recheck": "independent check_schedule passed"
+    }
+   }
+  }
+ ],
+ "repairs": 1,
+ "success": true,
+ "failure": null,
+ "suggestions": []
+}

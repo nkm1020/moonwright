@@ -1,0 +1,141 @@
+{
+ "brief": "small_fleet_long_berm",
+ "repeat": 3,
+ "requirements_sha": "69c24b9cbb",
+ "requirements": {
+  "site": {
+   "name": "LS-1",
+   "grid": [
+    40,
+    40
+   ],
+   "zones": [
+    {
+     "id": "Z1",
+     "center": [
+      20,
+      38
+     ],
+     "radius": 4
+    },
+    {
+     "id": "Z2",
+     "center": [
+      20,
+      34
+     ],
+     "radius": 4
+    },
+    {
+     "id": "Z3",
+     "center": [
+      20,
+      30
+     ],
+     "radius": 4
+    },
+    {
+     "id": "Z4",
+     "center": [
+      20,
+      26
+     ],
+     "radius": 4
+    }
+   ],
+   "depot": [
+    20,
+    2
+   ]
+  },
+  "structures": [
+   {
+    "id": "B1",
+    "type": "protective_berm",
+    "zone": "Z1",
+    "operations": [
+     "grade"
+    ],
+    "length_m": 100,
+    "height_m": 2,
+    "width_m": 3.5,
+    "trench": "false",
+    "lifts": 2
+   },
+   {
+    "id": "S1",
+    "type": "borrow_strip",
+    "zone": "Z2",
+    "operations": [
+     "excavate"
+    ],
+    "length_m": 100,
+    "width_m": 6,
+    "depth_m": 0.6
+   }
+  ],
+  "robots": [
+   {
+    "id": "EX1",
+    "type": "excavator",
+    "battery_wh": 5000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "HL1",
+    "type": "hauler",
+    "battery_wh": 3000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "CP1",
+    "type": "compactor",
+    "battery_wh": 3500.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "SV1",
+    "type": "surveyor",
+    "battery_wh": 1500.0,
+    "speed_cells_per_h": 12.0
+   }
+  ],
+  "horizon_h": 336,
+  "constraints": [
+   "Berm length, height and borrow depth are fixed and may not be reduced.",
+   "Build berm in four 25 m sections with inspection after each section.",
+   "Compactor completes a lift before hauler places the next in the same section.",
+   "Only one robot may work inside a zone at a time."
+  ],
+  "source_brief": "# 100 m Protective Berm with a Minimal Fleet\n\n**Site.** The east edge of the LS-1 plateau, where a 100 m berm will shield the habitat area from landing plumes. Loose regolith 40 cm deep over firm material; the borrow strip reaches 0.6 m into firm ground. The depot is at the south end of the berm line; no recharging.\n\n**Structures.**\n\n1. Protective berm: 100 m long, 2 m high, 3.5 m wide at the base (about 350 cubic metres of fill), built from a borrow strip along its north side, placed and compacted in two lifts and inspected.\n2. Borrow strip: 100 m by 6 m excavation 0.6 m deep (about 360 cubic metres) that supplies the berm fill.\n\n**Fleet.** EX1 (excavator, 5000 Wh), HL1 (hauler, 3000 Wh), CP1 (compactor, 3500 Wh) and SV1 (surveyor, 1500 Wh). Each battery is the budget for the whole job and nothing can be recharged.\n\n**Deadline.** 14 days.\n\n**Operational constraints.**\n\n- The berm length and height are fixed by the plume analysis and the borrow depth by the firm layer: none of them may be reduced, and no second excavator is available this sortie.\n- Build the berm in four 25 m sections so a finished section can be inspected while the next is placed.\n- The compactor finishes a lift before the hauler places the next one in the same section.\n- Only one robot may work inside a zone at a time.\n"
+ },
+ "ok": true,
+ "message": "2 structures, 4 robots, horizon 336h",
+ "payload": {
+  "zones": 4,
+  "grid": [
+   40,
+   40
+  ],
+  "depot": [
+   20,
+   2
+  ],
+  "warnings": [
+   "structure B1: operations [grade] recovered from malformed keys ('operations [', 'compact', 'sinter'); check them against the brief",
+   "structure S1: operations [excavate] recovered from malformed keys ('operations ['); check them against the brief",
+   "zones Z1 and Z2 overlap (centres 4.0 cells apart, radii 4 + 4)",
+   "zones Z2 and Z3 overlap (centres 4.0 cells apart, radii 4 + 4)",
+   "zones Z3 and Z4 overlap (centres 4.0 cells apart, radii 4 + 4)",
+   "structure B1: lifts none -> 2: the brief's entry for B1 states 2 compaction lifts"
+  ]
+ },
+ "failure": null,
+ "usage": {
+  "model": "nvidia/Nemotron-3_5-Lightning",
+  "input_tokens": 3178,
+  "output_tokens": 465,
+  "latency_s": 3.1228879168629646
+ },
+ "latency_s": 3.132
+}

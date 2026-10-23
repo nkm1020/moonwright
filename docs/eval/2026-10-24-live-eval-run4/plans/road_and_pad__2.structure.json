@@ -1,0 +1,153 @@
+{
+ "brief": "road_and_pad",
+ "repeat": 2,
+ "requirements_sha": "3e438515e0",
+ "requirements": {
+  "site": {
+   "name": "LS-1",
+   "grid": [
+    40,
+    40
+   ],
+   "zones": [
+    {
+     "id": "Z1",
+     "center": [
+      20,
+      2
+     ],
+     "radius": 3
+    },
+    {
+     "id": "Z2",
+     "center": [
+      20,
+      37
+     ],
+     "radius": 3
+    },
+    {
+     "id": "Z3",
+     "center": [
+      37,
+      20
+     ],
+     "radius": 3
+    }
+   ],
+   "depot": [
+    20,
+    2
+   ]
+  },
+  "structures": [
+   {
+    "id": "S1",
+    "type": "road",
+    "zone": "Z1",
+    "operations": [
+     "grade",
+     "compact"
+    ],
+    "length_m": 200,
+    "width_m": 5
+   },
+   {
+    "id": "S2",
+    "type": "pad",
+    "zone": "Z2",
+    "operations": [
+     "excavate",
+     "compact",
+     "sinter"
+    ],
+    "diameter_m": 15,
+    "depth_m": 0.3
+   },
+   {
+    "id": "S3",
+    "type": "windrow",
+    "zone": "Z3",
+    "operations": [
+     "grade",
+     "compact"
+    ]
+   }
+  ],
+  "robots": [
+   {
+    "id": "EX1",
+    "type": "excavator",
+    "battery_wh": 5000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "EX2",
+    "type": "excavator",
+    "battery_wh": 5000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "HL1",
+    "type": "hauler",
+    "battery_wh": 3000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "CP1",
+    "type": "compactor",
+    "battery_wh": 3500.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "CP2",
+    "type": "compactor",
+    "battery_wh": 3500.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "PR1",
+    "type": "printer",
+    "battery_wh": 4000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "SV1",
+    "type": "surveyor",
+    "battery_wh": 1500.0,
+    "speed_cells_per_h": 12.0
+   }
+  ],
+  "horizon_h": 336,
+  "constraints": [
+   "Road segment one is compacted before segment two is graded so the haul route stays open.",
+   "The pad is excavated only after the surveyor has staked it and the road reaches it.",
+   "Only one robot may work inside a zone at a time."
+  ],
+  "source_brief": "# Service Road and Maintenance Pad\n\n**Site.** A 200 m corridor of loose regolith from the landing pad to a new maintenance area, ending in a 30 m by 30 m level patch. Fines are 30 cm deep. The depot is at the landing-pad end; no recharging.\n\n**Structures.**\n\n1. Service road: 200 m long, 5 m wide, graded in two 100 m segments, each compacted after grading.\n2. Maintenance pad: 15 m diameter, excavated 0.3 m, compacted, sintered 20 cm surface.\n3. Shoulder windrows: grading spoil pushed into continuous windrows on both shoulders and compacted lightly.\n\n**Fleet.** EX1 and EX2 (excavators, 5000 Wh each), HL1 (hauler, 3000 Wh), CP1 and CP2 (compactors, 3500 Wh each), PR1 (printer, 4000 Wh) and SV1 (surveyor, 1500 Wh). Batteries are not recharged.\n\n**Deadline.** 14 days.\n\n**Operational constraints.**\n\n- Road segment one is compacted before segment two is graded so the haul route stays open.\n- The pad is excavated only after the surveyor has staked it and the road reaches it.\n- Only one robot may work inside a zone at a time.\n"
+ },
+ "ok": true,
+ "message": "3 structures, 7 robots, horizon 336h",
+ "payload": {
+  "zones": 3,
+  "grid": [
+   40,
+   40
+  ],
+  "depot": [
+   20,
+   2
+  ],
+  "warnings": [
+   "structure S3 (windrow) has no dimensions: the planner sizes its tasks from numeric fields such as diameter_m, length_m, width_m, depth_m or height_m and never sees the brief, so add the brief's numbers before planning"
+  ]
+ },
+ "failure": null,
+ "usage": {
+  "model": "nvidia/Nemotron-3_5-Lightning",
+  "input_tokens": 3118,
+  "output_tokens": 504,
+  "latency_s": 2.864183541852981
+ },
+ "latency_s": 2.866
+}

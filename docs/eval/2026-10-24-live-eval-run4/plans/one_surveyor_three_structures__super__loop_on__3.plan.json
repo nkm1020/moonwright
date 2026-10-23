@@ -1,0 +1,891 @@
+{
+ "requirements": {
+  "site": {
+   "name": "LS-1",
+   "grid": [
+    40,
+    40
+   ],
+   "zones": [
+    {
+     "id": "Z1",
+     "center": [
+      2,
+      2
+     ],
+     "radius": 3
+    },
+    {
+     "id": "Z2",
+     "center": [
+      2,
+      37
+     ],
+     "radius": 3
+    },
+    {
+     "id": "Z3",
+     "center": [
+      38,
+      2
+     ],
+     "radius": 3
+    }
+   ],
+   "depot": [
+    20,
+    2
+   ]
+  },
+  "structures": [
+   {
+    "id": "H1",
+    "type": "hardstand",
+    "zone": "Z1",
+    "operations": [
+     "survey",
+     "grade",
+     "compact"
+    ],
+    "length_m": 12,
+    "width_m": 12
+   },
+   {
+    "id": "B1",
+    "type": "spoil_berm",
+    "zone": "Z2",
+    "operations": [
+     "haul",
+     "compact"
+    ],
+    "length_m": 40,
+    "height_m": 1.5
+   },
+   {
+    "id": "A1",
+    "type": "apron",
+    "zone": "Z3",
+    "operations": [
+     "survey",
+     "grade",
+     "compact",
+     "sinter"
+    ],
+    "length_m": 20,
+    "width_m": 10
+   }
+  ],
+  "robots": [
+   {
+    "id": "EX1",
+    "type": "excavator",
+    "battery_wh": 5000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "EX2",
+    "type": "excavator",
+    "battery_wh": 5000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "HL1",
+    "type": "hauler",
+    "battery_wh": 3000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "CP1",
+    "type": "compactor",
+    "battery_wh": 3500.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "PR1",
+    "type": "printer",
+    "battery_wh": 4000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "SV1",
+    "type": "surveyor",
+    "battery_wh": 1200.0,
+    "speed_cells_per_h": 12.0
+   }
+  ],
+  "horizon_h": 216,
+  "constraints": [
+   "Surveyor stakes and inspects each structure (six visits total); single surveyor battery must cover all visits.",
+   "Only one robot may work inside a zone at a time.",
+   "Printer may start work only after apron has been compacted and inspected."
+  ],
+  "source_brief": "# Three Structures, One Surveyor\n\n**Site.** The LS-1 plateau south area: firm regolith with 25 cm of fines across a 100 m by 60 m strip. Depot at the centre of the south edge; no recharging.\n\n**Structures.**\n\n1. Equipment hardstand: 12 m by 12 m, stripped of its 25 cm of fines, levelled and compacted (not sintered).\n2. Spoil containment berm: 40 m long, 1.5 m high, built from the hardstand's strip spoil and compacted.\n3. Rover charging apron: 10 m by 20 m, stripped, compacted and sintered 15 cm.\n\n**Fleet.** EX1 and EX2 (excavators, 5000 Wh each), HL1 (hauler, 3000 Wh), CP1 (compactor, 3500 Wh), PR1 (printer, 4000 Wh) and SV1 (surveyor, 1200 Wh). Batteries are the whole budget.\n\n**Deadline.** 9 days.\n\n**Operational constraints.**\n\n- Every structure is staked by the surveyor before earthwork starts and inspected by the surveyor after its last task; the single surveyor's battery must cover all six visits.\n- Only one robot may work inside a zone at a time.\n- The printer works only after the apron has been compacted and inspected.\n"
+ },
+ "task_graph": {
+  "tasks": [
+   {
+    "id": "T1",
+    "name": "survey H1",
+    "robot_type": "surveyor",
+    "duration_h": 1,
+    "energy_wh": 72.0,
+    "zone": "Z1",
+    "after": [],
+    "structure": "H1",
+    "quantity": 144.0,
+    "unit": "m2",
+    "basis": "12 m * 12 m = 144 m2",
+    "estimated_duration_h": null,
+    "estimated_energy_wh": null
+   },
+   {
+    "id": "T2",
+    "name": "grade H1",
+    "robot_type": "excavator",
+    "duration_h": 6,
+    "energy_wh": 691.2,
+    "zone": "Z1",
+    "after": [
+     "T1"
+    ],
+    "structure": "H1",
+    "quantity": 144.0,
+    "unit": "m2",
+    "basis": "12 m * 12 m = 144 m2",
+    "estimated_duration_h": null,
+    "estimated_energy_wh": null
+   },
+   {
+    "id": "T3",
+    "name": "compact H1",
+    "robot_type": "compactor",
+    "duration_h": 6,
+    "energy_wh": 576.0,
+    "zone": "Z1",
+    "after": [
+     "T2"
+    ],
+    "structure": "H1",
+    "quantity": 144.0,
+    "unit": "m2",
+    "basis": "12 m * 12 m = 144 m2",
+    "estimated_duration_h": null,
+    "estimated_energy_wh": null
+   },
+   {
+    "id": "T4",
+    "name": "inspect H1",
+    "robot_type": "surveyor",
+    "duration_h": 1,
+    "energy_wh": 72.0,
+    "zone": "Z1",
+    "after": [
+     "T3"
+    ],
+    "structure": "H1",
+    "quantity": 144.0,
+    "unit": "m2",
+    "basis": "12 m * 12 m = 144 m2",
+    "estimated_duration_h": null,
+    "estimated_energy_wh": null
+   },
+   {
+    "id": "T5",
+    "name": "survey A1",
+    "robot_type": "surveyor",
+    "duration_h": 2,
+    "energy_wh": 100.0,
+    "zone": "Z3",
+    "after": [],
+    "structure": "A1",
+    "quantity": 200.0,
+    "unit": "m2",
+    "basis": "20 m * 10 m = 200 m2",
+    "estimated_duration_h": null,
+    "estimated_energy_wh": null
+   },
+   {
+    "id": "T6",
+    "name": "grade A1",
+    "robot_type": "excavator",
+    "duration_h": 8,
+    "energy_wh": 960.0,
+    "zone": "Z3",
+    "after": [
+     "T5"
+    ],
+    "structure": "A1",
+    "quantity": 200.0,
+    "unit": "m2",
+    "basis": "20 m * 10 m = 200 m2",
+    "estimated_duration_h": null,
+    "estimated_energy_wh": null
+   },
+   {
+    "id": "T7",
+    "name": "compact A1",
+    "robot_type": "compactor",
+    "duration_h": 8,
+    "energy_wh": 800.0,
+    "zone": "Z3",
+    "after": [
+     "T6"
+    ],
+    "structure": "A1",
+    "quantity": 200.0,
+    "unit": "m2",
+    "basis": "20 m * 10 m = 200 m2",
+    "estimated_duration_h": null,
+    "estimated_energy_wh": null
+   },
+   {
+    "id": "T9",
+    "name": "inspect A1",
+    "robot_type": "surveyor",
+    "duration_h": 2,
+    "energy_wh": 100.0,
+    "zone": "Z3",
+    "after": [
+     "T7"
+    ],
+    "structure": "A1",
+    "quantity": 200.0,
+    "unit": "m2",
+    "basis": "20 m * 10 m = 200 m2",
+    "estimated_duration_h": null,
+    "estimated_energy_wh": null
+   },
+   {
+    "id": "T8",
+    "name": "sinter A1",
+    "robot_type": "printer",
+    "duration_h": 15,
+    "energy_wh": 1720.0,
+    "zone": "Z3",
+    "after": [
+     "T9"
+    ],
+    "structure": "A1",
+    "quantity": 200.0,
+    "unit": "m2",
+    "basis": "20 m * 10 m = 200 m2",
+    "estimated_duration_h": null,
+    "estimated_energy_wh": null
+   },
+   {
+    "id": "T10",
+    "name": "survey B1",
+    "robot_type": "surveyor",
+    "duration_h": 1,
+    "energy_wh": 30.0,
+    "zone": "Z2",
+    "after": [],
+    "structure": "B1",
+    "quantity": 60.0,
+    "unit": "m2",
+    "basis": "40 m * 1.5 m = 60 m2",
+    "estimated_duration_h": null,
+    "estimated_energy_wh": null
+   },
+   {
+    "id": "T11",
+    "name": "haul B1",
+    "robot_type": "hauler",
+    "duration_h": 4,
+    "energy_wh": 315.0,
+    "zone": "Z2",
+    "after": [
+     "T10",
+     "T2"
+    ],
+    "structure": "B1",
+    "quantity": 45.0,
+    "unit": "m3",
+    "basis": "40 m * 1.5 m * 1.5 m / 2 = 45 m3",
+    "estimated_duration_h": null,
+    "estimated_energy_wh": null
+   },
+   {
+    "id": "T12",
+    "name": "compact B1",
+    "robot_type": "compactor",
+    "duration_h": 3,
+    "energy_wh": 240.0,
+    "zone": "Z2",
+    "after": [
+     "T11",
+     "T14"
+    ],
+    "structure": "B1",
+    "quantity": 60.0,
+    "unit": "m2",
+    "basis": "40 m * 1.5 m = 60 m2",
+    "estimated_duration_h": null,
+    "estimated_energy_wh": null
+   },
+   {
+    "id": "T13",
+    "name": "inspect B1",
+    "robot_type": "surveyor",
+    "duration_h": 1,
+    "energy_wh": 30.0,
+    "zone": "Z2",
+    "after": [
+     "T12"
+    ],
+    "structure": "B1",
+    "quantity": 60.0,
+    "unit": "m2",
+    "basis": "40 m * 1.5 m = 60 m2",
+    "estimated_duration_h": null,
+    "estimated_energy_wh": null
+   },
+   {
+    "id": "T14",
+    "name": "haul B1",
+    "robot_type": "hauler",
+    "duration_h": 4,
+    "energy_wh": 315.0,
+    "zone": "Z2",
+    "after": [
+     "T10",
+     "T6",
+     "T11"
+    ],
+    "structure": "B1",
+    "quantity": 45.0,
+    "unit": "m3",
+    "basis": "40 m * 1.5 m * 1.5 m / 2 = 45 m3",
+    "estimated_duration_h": 4.0,
+    "estimated_energy_wh": 315.0
+   }
+  ],
+  "notes": "Increased B1 haul volume to 90 m3 split into two 45 m3 hauler tasks (T11,T14) each waiting for survey and the supplying excavation (T2 for T11, T6 for T14) and serialized to respect zone exclusivity; updated T12 to wait for both hauls; all other tasks unchanged."
+ },
+ "schedule": {
+  "entries": [
+   {
+    "task": "T1",
+    "robot": "SV1",
+    "start_h": 7,
+    "end_h": 8
+   },
+   {
+    "task": "T2",
+    "robot": "EX2",
+    "start_h": 8,
+    "end_h": 14
+   },
+   {
+    "task": "T3",
+    "robot": "CP1",
+    "start_h": 23,
+    "end_h": 29
+   },
+   {
+    "task": "T4",
+    "robot": "SV1",
+    "start_h": 29,
+    "end_h": 30
+   },
+   {
+    "task": "T5",
+    "robot": "SV1",
+    "start_h": 2,
+    "end_h": 4
+   },
+   {
+    "task": "T6",
+    "robot": "EX1",
+    "start_h": 4,
+    "end_h": 12
+   },
+   {
+    "task": "T7",
+    "robot": "CP1",
+    "start_h": 12,
+    "end_h": 20
+   },
+   {
+    "task": "T9",
+    "robot": "SV1",
+    "start_h": 20,
+    "end_h": 22
+   },
+   {
+    "task": "T8",
+    "robot": "PR1",
+    "start_h": 22,
+    "end_h": 37
+   },
+   {
+    "task": "T10",
+    "robot": "SV1",
+    "start_h": 11,
+    "end_h": 12
+   },
+   {
+    "task": "T11",
+    "robot": "HL1",
+    "start_h": 14,
+    "end_h": 18
+   },
+   {
+    "task": "T12",
+    "robot": "CP1",
+    "start_h": 32,
+    "end_h": 35
+   },
+   {
+    "task": "T13",
+    "robot": "SV1",
+    "start_h": 35,
+    "end_h": 36
+   },
+   {
+    "task": "T14",
+    "robot": "HL1",
+    "start_h": 18,
+    "end_h": 22
+   }
+  ],
+  "makespan_h": 37,
+  "status": "optimal",
+  "objective_bound_h": 37,
+  "solve_time_s": 0.033676000000000005
+ },
+ "explanation": null,
+ "steps": [
+  {
+   "stage": "structure",
+   "attempt": 1,
+   "ok": true,
+   "failure": null,
+   "duration_s": 3.2276206670794636,
+   "usage": {
+    "model": "nvidia/Nemotron-3_5-Lightning",
+    "input_tokens": 3127,
+    "output_tokens": 501,
+    "latency_s": 3.2242318340577185
+   },
+   "message": "3 structures, 6 robots, horizon 216h",
+   "payload": {
+    "zones": 3,
+    "grid": [
+     40,
+     40
+    ],
+    "depot": [
+     20,
+     2
+    ],
+    "warnings": []
+   }
+  },
+  {
+   "stage": "taskgraph",
+   "attempt": 1,
+   "ok": true,
+   "failure": null,
+   "duration_s": 110.77050000010058,
+   "usage": {
+    "model": "nvidia/nemotron-3-super-120b-a12b",
+    "input_tokens": 3451,
+    "output_tokens": 13417,
+    "latency_s": 110.76844816701487
+   },
+   "message": "13 tasks",
+   "payload": {
+    "advisories": [],
+    "rate_model": true,
+    "grounded": 0
+   }
+  },
+  {
+   "stage": "validate",
+   "attempt": 1,
+   "ok": false,
+   "failure": {
+    "kind": "validation",
+    "conflicts": [
+     "capability:T1",
+     "capability:T10",
+     "capability:T11",
+     "capability:T12",
+     "capability:T13",
+     "capability:T2",
+     "capability:T3",
+     "capability:T4",
+     "capability:T5",
+     "capability:T6",
+     "capability:T7",
+     "capability:T8",
+     "capability:T9",
+     "scope:A1",
+     "scope:B1",
+     "scope:H1"
+    ],
+    "hint": "No capable robot exists: T12, T3 and T7 need robot type 'CP1', T2 needs robot type 'EX1', T6 needs robot type 'EX2', T11 needs robot type 'HL1', T8 needs robot type 'PR1' and T1, T10, T13, T4, T5 and T9 need robot type 'SV1', but the only robot types in the requirements are compactor, excavator, hauler, printer and surveyor; reassign these tasks to an available type. Structure coverage is incomplete: A1 (apron) lists survey (the brief asks for \"The printer works only after the apron has been compacted and inspected\") but no task surveys or inspects it, grade (the brief asks for \"stripped\") but no task grades it, compact (the brief asks for \"compacted and sintered 15 cm\") but no task compacts it and sinter (the brief asks for \"compacted and sintered 15 cm\") but no task sinters it; add surveyor, excavator, compactor and printer tasks tagged A1, B1 (spoil_berm) lists haul (the brief asks for \"Spoil containment berm\") but no task hauls to it and compact (the brief asks for \"built from the hardstand's strip spoil and compacted\") but no task compacts it; add hauler and compactor tasks tagged B1 and H1 (hardstand) lists survey (an operation the brief asks for) but no task surveys or inspects it, grade (the brief asks for \"stripped of its 25 cm of fines\") but no task grades it and compact (the brief asks for \"levelled and compacted\") but no task compacts it; add surveyor, excavator and compactor tasks tagged H1; every structure keeps its phases (landing pad: survey, excavate or grade, compact and sinter; berm: excavate or haul, then compact; road: grade and compact; foundation: excavate and compact; anything else at least one task; a phase is only required while the fleet has its robot type) and every operation a structure lists needs a task tagged with it, so add the missing work back as tasks tagged with the structure id, with quantity and unit.",
+    "details": [
+     "T1 needs robot type 'SV1' but no robot has it",
+     "T10 needs robot type 'SV1' but no robot has it",
+     "T11 needs robot type 'HL1' but no robot has it",
+     "T12 needs robot type 'CP1' but no robot has it",
+     "T13 needs robot type 'SV1' but no robot has it",
+     "T2 needs robot type 'EX1' but no robot has it",
+     "T3 needs robot type 'CP1' but no robot has it",
+     "T4 needs robot type 'SV1' but no robot has it",
+     "T5 needs robot type 'SV1' but no robot has it",
+     "T6 needs robot type 'EX2' but no robot has it",
+     "T7 needs robot type 'CP1' but no robot has it",
+     "T8 needs robot type 'PR1' but no robot has it",
+     "T9 needs robot type 'SV1' but no robot has it",
+     "A1 (apron) lacks survey, grade, compact and sinter tasks (its operations list survey, grade, compact and sinter)",
+     "B1 (spoil_berm) lacks haul and compact tasks (its operations list haul and compact)",
+     "H1 (hardstand) lacks survey, grade and compact tasks (its operations list survey, grade and compact)"
+    ]
+   },
+   "duration_s": 0.001372750150039792,
+   "usage": null,
+   "message": null,
+   "payload": null
+  },
+  {
+   "stage": "repair",
+   "attempt": 2,
+   "ok": true,
+   "failure": null,
+   "duration_s": 33.15498829097487,
+   "usage": {
+    "model": "nvidia/nemotron-3-super-120b-a12b",
+    "input_tokens": 6212,
+    "output_tokens": 4593,
+    "latency_s": 33.1503560829442
+   },
+   "message": "13 tasks",
+   "payload": {
+    "advisories": [
+     "volume:B1: its dimensions give 90 m3 (40 m long, 1.5 m high, 1:1 slopes) but its haul tasks (T11 45 m3) total only 45 m3 (50 %)"
+    ],
+    "rate_model": true,
+    "grounded": 13,
+    "diff": {
+     "added": [],
+     "removed": [],
+     "changed": [
+      {
+       "task": "T1",
+       "field": "robot_type",
+       "before": "SV1",
+       "after": "surveyor"
+      },
+      {
+       "task": "T2",
+       "field": "robot_type",
+       "before": "EX1",
+       "after": "excavator"
+      },
+      {
+       "task": "T3",
+       "field": "robot_type",
+       "before": "CP1",
+       "after": "compactor"
+      },
+      {
+       "task": "T4",
+       "field": "robot_type",
+       "before": "SV1",
+       "after": "surveyor"
+      },
+      {
+       "task": "T5",
+       "field": "robot_type",
+       "before": "SV1",
+       "after": "surveyor"
+      },
+      {
+       "task": "T6",
+       "field": "robot_type",
+       "before": "EX2",
+       "after": "excavator"
+      },
+      {
+       "task": "T7",
+       "field": "robot_type",
+       "before": "CP1",
+       "after": "compactor"
+      },
+      {
+       "task": "T9",
+       "field": "robot_type",
+       "before": "SV1",
+       "after": "surveyor"
+      },
+      {
+       "task": "T9",
+       "field": "after",
+       "before": [
+        "T8"
+       ],
+       "after": [
+        "T7"
+       ]
+      },
+      {
+       "task": "T8",
+       "field": "robot_type",
+       "before": "PR1",
+       "after": "printer"
+      },
+      {
+       "task": "T8",
+       "field": "after",
+       "before": [
+        "T7"
+       ],
+       "after": [
+        "T9"
+       ]
+      },
+      {
+       "task": "T10",
+       "field": "robot_type",
+       "before": "SV1",
+       "after": "surveyor"
+      },
+      {
+       "task": "T11",
+       "field": "robot_type",
+       "before": "HL1",
+       "after": "hauler"
+      },
+      {
+       "task": "T12",
+       "field": "robot_type",
+       "before": "CP1",
+       "after": "compactor"
+      },
+      {
+       "task": "T13",
+       "field": "robot_type",
+       "before": "SV1",
+       "after": "surveyor"
+      }
+     ],
+     "renumbered": [],
+     "per_type_energy_before": {
+      "CP1": 1616.0,
+      "EX1": 691.2,
+      "EX2": 960.0,
+      "HL1": 315.0,
+      "PR1": 1720.0,
+      "SV1": 404.0
+     },
+     "per_type_energy_after": {
+      "compactor": 1616.0,
+      "excavator": 1651.2,
+      "hauler": 315.0,
+      "printer": 1720.0,
+      "surveyor": 404.0
+     },
+     "scope_drift_pct": 0.0,
+     "total_energy_wh_before": 5706.2,
+     "total_energy_wh_after": 5706.2,
+     "total_duration_h_before": 58,
+     "total_duration_h_after": 58
+    }
+   }
+  },
+  {
+   "stage": "validate",
+   "attempt": 2,
+   "ok": false,
+   "failure": {
+    "kind": "validation",
+    "conflicts": [
+     "volume:B1",
+     "supply:T11"
+    ],
+    "hint": "B1 (spoil_berm) plans 45 of 90 m3: plan the remaining 45 m3 of B1 as hauler tasks in m3 (split above 60 m3), each after the excavation its fill comes from (a borrow dig in m3 when no structure's spoil supplies it), instead of shrinking the work. A haul cannot start before its material is dug: make T11 wait for the digs that supply it (H1 hardstand: T2; A1 apron: T6); a haul part may wait for only the dig parts that remove what it moves, so split hauls to keep both chains short.",
+    "details": [
+     "B1 (spoil_berm): dimensions 40 m long, 1.5 m high, 1:1 slopes = 90 m3 of fill; hauler tasks cover 45 m3 (50 %): T11 45 m3",
+     "T11 hauls 45 m3 for B1 (spoil berm) but waits for no excavation, so it could start before any material is dug"
+    ]
+   },
+   "duration_s": 0.003123125061392784,
+   "usage": null,
+   "message": null,
+   "payload": {
+    "advisories": [
+     "volume:B1: its dimensions give 90 m3 (40 m long, 1.5 m high, 1:1 slopes) but its haul tasks (T11 45 m3) total only 45 m3 (50 %)"
+    ]
+   }
+  },
+  {
+   "stage": "repair",
+   "attempt": 3,
+   "ok": true,
+   "failure": null,
+   "duration_s": 53.94538687518798,
+   "usage": {
+    "model": "nvidia/nemotron-3-super-120b-a12b",
+    "input_tokens": 5733,
+    "output_tokens": 7013,
+    "latency_s": 53.93551308312453
+   },
+   "message": "14 tasks",
+   "payload": {
+    "advisories": [
+     "supply:B1: its hauls (T11 45 m3, T14 45 m3) move 90 m3, more than the 68.8 m3 the digs before them remove (H1 hardstand: T2; A1 apron: T6; an m2 strip counts 0.2 m)"
+    ],
+    "rate_model": true,
+    "grounded": 1,
+    "diff": {
+     "added": [
+      "T14"
+     ],
+     "removed": [],
+     "changed": [
+      {
+       "task": "T11",
+       "field": "after",
+       "before": [
+        "T10"
+       ],
+       "after": [
+        "T10",
+        "T2"
+       ]
+      },
+      {
+       "task": "T12",
+       "field": "after",
+       "before": [
+        "T11"
+       ],
+       "after": [
+        "T11",
+        "T14"
+       ]
+      }
+     ],
+     "renumbered": [],
+     "per_type_energy_before": {
+      "compactor": 1616.0,
+      "excavator": 1651.2,
+      "hauler": 315.0,
+      "printer": 1720.0,
+      "surveyor": 404.0
+     },
+     "per_type_energy_after": {
+      "compactor": 1616.0,
+      "excavator": 1651.2,
+      "hauler": 630.0,
+      "printer": 1720.0,
+      "surveyor": 404.0
+     },
+     "scope_drift_pct": 5.5,
+     "total_energy_wh_before": 5706.2,
+     "total_energy_wh_after": 6021.2,
+     "total_duration_h_before": 58,
+     "total_duration_h_after": 62
+    }
+   }
+  },
+  {
+   "stage": "validate",
+   "attempt": 3,
+   "ok": true,
+   "failure": null,
+   "duration_s": 0.003202333115041256,
+   "usage": null,
+   "message": "14 tasks valid",
+   "payload": {
+    "advisories": [
+     "supply:B1: its hauls (T11 45 m3, T14 45 m3) move 90 m3, more than the 68.8 m3 the digs before them remove (H1 hardstand: T2; A1 apron: T6; an m2 strip counts 0.2 m)"
+    ]
+   }
+  },
+  {
+   "stage": "schedule",
+   "attempt": 3,
+   "ok": true,
+   "failure": null,
+   "duration_s": 0.044661167077720165,
+   "usage": null,
+   "message": "makespan 37h (optimal)",
+   "payload": {
+    "makespan_h": 37,
+    "status": "optimal",
+    "verified": true,
+    "verification": {
+     "precedence_edges": 15,
+     "robot_rows": 6,
+     "zone_groups": 3,
+     "battery": [
+      {
+       "robot": "EX1",
+       "used_wh": 969.0,
+       "work_wh": 960.0,
+       "travel_wh": 9.0,
+       "budget_wh": 5000.0,
+       "pct": 19.4
+      },
+      {
+       "robot": "EX2",
+       "used_wh": 700.2,
+       "work_wh": 691.2,
+       "travel_wh": 9.0,
+       "budget_wh": 5000.0,
+       "pct": 14.0
+      },
+      {
+       "robot": "HL1",
+       "used_wh": 649.679,
+       "work_wh": 630.0,
+       "travel_wh": 19.679,
+       "budget_wh": 3000.0,
+       "pct": 21.7
+      },
+      {
+       "robot": "CP1",
+       "used_wh": 1660.5,
+       "work_wh": 1616.0,
+       "travel_wh": 44.5,
+       "budget_wh": 3500.0,
+       "pct": 47.4
+      },
+      {
+       "robot": "PR1",
+       "used_wh": 1729.0,
+       "work_wh": 1720.0,
+       "travel_wh": 9.0,
+       "budget_wh": 4000.0,
+       "pct": 43.2
+      },
+      {
+       "robot": "SV1",
+       "used_wh": 509.105,
+       "work_wh": 404.0,
+       "travel_wh": 105.105,
+       "budget_wh": 1200.0,
+       "pct": 42.4
+      }
+     ],
+     "tightest_robot": "CP1",
+     "horizon_used_h": 37,
+     "horizon_h": 216,
+     "status": "optimal",
+     "objective_bound_h": 37,
+     "solve_time_s": 0.034,
+     "travel_allowance": true,
+     "recheck": "independent check_schedule passed"
+    }
+   }
+  }
+ ],
+ "repairs": 2,
+ "success": true,
+ "failure": null,
+ "suggestions": []
+}

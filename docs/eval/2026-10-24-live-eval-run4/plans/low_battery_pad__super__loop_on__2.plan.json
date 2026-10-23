@@ -1,0 +1,481 @@
+{
+ "requirements": {
+  "site": {
+   "name": "LS-1",
+   "grid": [
+    40,
+    40
+   ],
+   "zones": [
+    {
+     "id": "Z1",
+     "center": [
+      20,
+      38
+     ],
+     "radius": 3
+    },
+    {
+     "id": "Z2",
+     "center": [
+      20,
+      2
+     ],
+     "radius": 2
+    }
+   ],
+   "depot": [
+    20,
+    2
+   ]
+  },
+  "structures": [
+   {
+    "id": "S1",
+    "type": "landing_pad_bowl",
+    "zone": "Z1",
+    "operations": [
+     "excavate",
+     "compact"
+    ],
+    "diameter_m": 20,
+    "depth_m": 0.5,
+    "min_diameter_m": 12
+   },
+   {
+    "id": "S2",
+    "type": "spool_stockpile",
+    "zone": "Z2",
+    "operations": [
+     "haul",
+     "compact"
+    ]
+   }
+  ],
+  "robots": [
+   {
+    "id": "EX1",
+    "type": "excavator",
+    "battery_wh": 1800.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "HL1",
+    "type": "hauler",
+    "battery_wh": 2000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "CP1",
+    "type": "compactor",
+    "battery_wh": 2000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "SV1",
+    "type": "surveyor",
+    "battery_wh": 1000.0,
+    "speed_cells_per_h": 12.0
+   }
+  ],
+  "horizon_h": 168,
+  "constraints": [
+   "Only one robot may work inside a zone at a time.",
+   "Surveyor checks bowl depth before compaction.",
+   "Plan only what remaining batteries can finish; smaller first phase acceptable if full bowl does not fit."
+  ],
+  "source_brief": "# Landing Pad Bowl with Depleted Batteries\n\n**Site.** The LS-1 landing pad footprint, loose regolith 40 cm deep over firm material, depot on the south edge. The fleet arrives with partly depleted batteries and there is no recharging.\n\n**Structures.**\n\n1. Landing pad bowl: 20 m diameter, excavated 0.5 m to firm regolith (about 157 cubic metres over the full footprint), subgrade compacted. Sintering is a later job.\n2. Spoil stockpile: pad spoil placed in a compact pile 30 m north of the pad, shaped so it can later become berm fill.\n\n**Fleet.** EX1 (excavator, 1800 Wh remaining), HL1 (hauler, 2000 Wh remaining), CP1 (compactor, 2000 Wh remaining) and SV1 (surveyor, 1000 Wh remaining). These remaining charges are the whole budget.\n\n**Deadline.** 7 days.\n\n**Operational constraints.**\n\n- Plan only what the remaining batteries can actually finish; a smaller first phase that reaches firm regolith over the central 12 m (or any diameter between 12 m and 20 m that fits) is acceptable if the full bowl does not fit, and the stockpile and compaction shrink with it.\n- Only one robot may work inside a zone at a time.\n- The surveyor checks the bowl depth before compaction.\n"
+ },
+ "task_graph": {
+  "tasks": [
+   {
+    "id": "T1",
+    "name": "excavate S1 bowl",
+    "robot_type": "excavator",
+    "duration_h": 16,
+    "energy_wh": 1776.0,
+    "zone": "Z1",
+    "after": [],
+    "structure": "S1",
+    "quantity": 111.0,
+    "unit": "m3",
+    "basis": "Adjusted quantity to fit excavator battery (111 m3 yields 1776 Wh; smaller first phase acceptable per brief)",
+    "estimated_duration_h": 16.0,
+    "estimated_energy_wh": 1776.0
+   },
+   {
+    "id": "T2",
+    "name": "survey depth check S1",
+    "robot_type": "surveyor",
+    "duration_h": 1,
+    "energy_wh": 75.0,
+    "zone": "Z1",
+    "after": [
+     "T1"
+    ],
+    "structure": "S1",
+    "quantity": null,
+    "unit": null,
+    "basis": null,
+    "estimated_duration_h": null,
+    "estimated_energy_wh": null
+   },
+   {
+    "id": "T3",
+    "name": "haul spoil to S2 stockpile",
+    "robot_type": "hauler",
+    "duration_h": 10,
+    "energy_wh": 784.0,
+    "zone": "Z2",
+    "after": [
+     "T1"
+    ],
+    "structure": "S2",
+    "quantity": 112.0,
+    "unit": "m3",
+    "basis": "Volume excavated from S1 bowl: 112 m3",
+    "estimated_duration_h": 10.0,
+    "estimated_energy_wh": 784.0
+   },
+   {
+    "id": "T4",
+    "name": "compact S1 landing pad",
+    "robot_type": "compactor",
+    "duration_h": 13,
+    "energy_wh": 1256.0,
+    "zone": "Z1",
+    "after": [
+     "T2"
+    ],
+    "structure": "S1",
+    "quantity": 314.0,
+    "unit": "m2",
+    "basis": "Footprint area of S1 bowl: pi*(10 m)^2 =314 m2",
+    "estimated_duration_h": 13.0,
+    "estimated_energy_wh": 1256.0
+   },
+   {
+    "id": "T5",
+    "name": "compact S2 stockpile",
+    "robot_type": "compactor",
+    "duration_h": 7,
+    "energy_wh": 720.0,
+    "zone": "Z2",
+    "after": [
+     "T3"
+    ],
+    "structure": "S2",
+    "quantity": 180.0,
+    "unit": "m2",
+    "basis": "Adjusted area to stay within compactor battery after travel allowance (180 m2 yields 720 Wh)",
+    "estimated_duration_h": 7.0,
+    "estimated_energy_wh": 720.0
+   },
+   {
+    "id": "T6",
+    "name": "inspect S1 landing pad",
+    "robot_type": "surveyor",
+    "duration_h": 1,
+    "energy_wh": 75.0,
+    "zone": "Z1",
+    "after": [
+     "T4"
+    ],
+    "structure": "S1",
+    "quantity": null,
+    "unit": null,
+    "basis": null,
+    "estimated_duration_h": null,
+    "estimated_energy_wh": null
+   },
+   {
+    "id": "T7",
+    "name": "inspect S2 stockpile",
+    "robot_type": "surveyor",
+    "duration_h": 1,
+    "energy_wh": 75.0,
+    "zone": "Z2",
+    "after": [
+     "T5"
+    ],
+    "structure": "S2",
+    "quantity": null,
+    "unit": null,
+    "basis": null,
+    "estimated_duration_h": null,
+    "estimated_energy_wh": null
+   }
+  ],
+  "notes": null
+ },
+ "schedule": {
+  "entries": [
+   {
+    "task": "T1",
+    "robot": "EX1",
+    "start_h": 3,
+    "end_h": 19
+   },
+   {
+    "task": "T2",
+    "robot": "SV1",
+    "start_h": 19,
+    "end_h": 20
+   },
+   {
+    "task": "T3",
+    "robot": "HL1",
+    "start_h": 19,
+    "end_h": 29
+   },
+   {
+    "task": "T4",
+    "robot": "CP1",
+    "start_h": 39,
+    "end_h": 52
+   },
+   {
+    "task": "T5",
+    "robot": "CP1",
+    "start_h": 29,
+    "end_h": 36
+   },
+   {
+    "task": "T6",
+    "robot": "SV1",
+    "start_h": 52,
+    "end_h": 53
+   },
+   {
+    "task": "T7",
+    "robot": "SV1",
+    "start_h": 36,
+    "end_h": 37
+   }
+  ],
+  "makespan_h": 53,
+  "status": "optimal",
+  "objective_bound_h": 53,
+  "solve_time_s": 0.004707
+ },
+ "explanation": null,
+ "steps": [
+  {
+   "stage": "structure",
+   "attempt": 1,
+   "ok": true,
+   "failure": null,
+   "duration_s": 3.1955499169416726,
+   "usage": {
+    "model": "nvidia/Nemotron-3_5-Lightning",
+    "input_tokens": 3121,
+    "output_tokens": 357,
+    "latency_s": 3.191793374950066
+   },
+   "message": "2 structures, 4 robots, horizon 168h",
+   "payload": {
+    "zones": 2,
+    "grid": [
+     40,
+     40
+    ],
+    "depot": [
+     20,
+     2
+    ],
+    "warnings": [
+     "structure S1: min_diameter_m none -> 12: the brief allows \"any diameter between 12 m and 20 m that fits\"",
+     "structure S2: length_m 30 dropped: the brief's entry for S2 states 30 m only as a distance (\"30 m north of the pad\")"
+    ]
+   }
+  },
+  {
+   "stage": "taskgraph",
+   "attempt": 1,
+   "ok": true,
+   "failure": null,
+   "duration_s": 85.96513462509029,
+   "usage": {
+    "model": "nvidia/nemotron-3-super-120b-a12b",
+    "input_tokens": 3232,
+    "output_tokens": 10657,
+    "latency_s": 85.96152537502348
+   },
+   "message": "7 tasks",
+   "payload": {
+    "advisories": [],
+    "rate_model": true,
+    "grounded": 4
+   }
+  },
+  {
+   "stage": "validate",
+   "attempt": 1,
+   "ok": false,
+   "failure": {
+    "kind": "validation",
+    "conflicts": [
+     "energy_task:T1",
+     "energy:compactor"
+    ],
+    "hint": "No single robot can power T1 (1,792 Wh of work plus at least 18 Wh of travel, 1,810 Wh against the largest excavator battery of 1,800 Wh); split such tasks into smaller quantities or move the work to another robot type. The fleet's 1 excavator carries 1,800 Wh in all, so splitting T1 alone cannot fit it: keep the full work unless the brief allows less. Battery budgets are exceeded per robot type: compactor tasks need at least 2,018 Wh, 2,000 Wh of work and 18 Wh of travel, but its 1 robot carries only 2,000 Wh combined; reduce the quantities if the brief allows it or move work to other robot types.",
+    "details": [
+     "T1 needs at least 1,810 Wh, 18 Wh of it travel, but the largest excavator battery is 1,800 Wh",
+     "compactor tasks need at least 2,018 Wh, 18 Wh of it travel; its 1 robot carries 2,000 Wh"
+    ]
+   },
+   "duration_s": 0.0014597498811781406,
+   "usage": null,
+   "message": null,
+   "payload": null
+  },
+  {
+   "stage": "repair",
+   "attempt": 2,
+   "ok": true,
+   "failure": null,
+   "duration_s": 20.9981032081414,
+   "usage": {
+    "model": "nvidia/nemotron-3-super-120b-a12b",
+    "input_tokens": 4518,
+    "output_tokens": 2765,
+    "latency_s": 20.99485750007443
+   },
+   "message": "7 tasks",
+   "payload": {
+    "advisories": [],
+    "rate_model": true,
+    "grounded": 4,
+    "diff": {
+     "added": [],
+     "removed": [],
+     "changed": [
+      {
+       "task": "T1",
+       "field": "energy_wh",
+       "before": 1792.0,
+       "after": 1776.0
+      },
+      {
+       "task": "T1",
+       "field": "quantity",
+       "before": 112.0,
+       "after": 111.0
+      },
+      {
+       "task": "T5",
+       "field": "duration_h",
+       "before": 8,
+       "after": 7
+      },
+      {
+       "task": "T5",
+       "field": "energy_wh",
+       "before": 744.0,
+       "after": 720.0
+      },
+      {
+       "task": "T5",
+       "field": "quantity",
+       "before": 186.0,
+       "after": 180.0
+      }
+     ],
+     "renumbered": [],
+     "per_type_energy_before": {
+      "compactor": 2000.0,
+      "excavator": 1792.0,
+      "hauler": 784.0,
+      "surveyor": 225.0
+     },
+     "per_type_energy_after": {
+      "compactor": 1976.0,
+      "excavator": 1776.0,
+      "hauler": 784.0,
+      "surveyor": 225.0
+     },
+     "scope_drift_pct": -0.8,
+     "total_energy_wh_before": 4801.0,
+     "total_energy_wh_after": 4761.0,
+     "total_duration_h_before": 50,
+     "total_duration_h_after": 49
+    }
+   }
+  },
+  {
+   "stage": "validate",
+   "attempt": 2,
+   "ok": true,
+   "failure": null,
+   "duration_s": 0.0009129999671131372,
+   "usage": null,
+   "message": "7 tasks valid",
+   "payload": null
+  },
+  {
+   "stage": "schedule",
+   "attempt": 2,
+   "ok": true,
+   "failure": null,
+   "duration_s": 0.006177292205393314,
+   "usage": null,
+   "message": "makespan 53h (optimal)",
+   "payload": {
+    "makespan_h": 53,
+    "status": "optimal",
+    "verified": true,
+    "verification": {
+     "precedence_edges": 6,
+     "robot_rows": 4,
+     "zone_groups": 2,
+     "battery": [
+      {
+       "robot": "EX1",
+       "used_wh": 1794.0,
+       "work_wh": 1776.0,
+       "travel_wh": 18.0,
+       "budget_wh": 1800.0,
+       "pct": 99.7
+      },
+      {
+       "robot": "HL1",
+       "used_wh": 784.0,
+       "work_wh": 784.0,
+       "travel_wh": 0.0,
+       "budget_wh": 2000.0,
+       "pct": 39.2
+      },
+      {
+       "robot": "CP1",
+       "used_wh": 1994.0,
+       "work_wh": 1976.0,
+       "travel_wh": 18.0,
+       "budget_wh": 2000.0,
+       "pct": 99.7
+      },
+      {
+       "robot": "SV1",
+       "used_wh": 279.0,
+       "work_wh": 225.0,
+       "travel_wh": 54.0,
+       "budget_wh": 1000.0,
+       "pct": 27.9
+      }
+     ],
+     "tightest_robot": "EX1",
+     "horizon_used_h": 53,
+     "horizon_h": 168,
+     "status": "optimal",
+     "objective_bound_h": 53,
+     "solve_time_s": 0.005,
+     "travel_allowance": true,
+     "recheck": "independent check_schedule passed"
+    }
+   }
+  }
+ ],
+ "repairs": 1,
+ "success": true,
+ "failure": null,
+ "suggestions": []
+}

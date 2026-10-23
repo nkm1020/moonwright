@@ -1,0 +1,2114 @@
+{
+ "requirements": {
+  "site": {
+   "name": "LS-1",
+   "grid": [
+    40,
+    40
+   ],
+   "zones": [
+    {
+     "id": "Z1",
+     "center": [
+      20,
+      38
+     ],
+     "radius": 4
+    },
+    {
+     "id": "Z2",
+     "center": [
+      20,
+      34
+     ],
+     "radius": 4
+    },
+    {
+     "id": "Z3",
+     "center": [
+      20,
+      30
+     ],
+     "radius": 4
+    },
+    {
+     "id": "Z4",
+     "center": [
+      20,
+      26
+     ],
+     "radius": 4
+    }
+   ],
+   "depot": [
+    20,
+    2
+   ]
+  },
+  "structures": [
+   {
+    "id": "B1",
+    "type": "protective_berm",
+    "zone": "Z1",
+    "operations": [
+     "excavate",
+     "grade",
+     "haul",
+     "compact",
+     "survey"
+    ],
+    "length_m": 100,
+    "height_m": 2,
+    "width_m": 3.5,
+    "lifts": 2,
+    "wall_slope": "1:1"
+   },
+   {
+    "id": "B2",
+    "type": "borrow_strip",
+    "zone": "Z2",
+    "operations": [
+     "excavate",
+     "grade"
+    ],
+    "length_m": 100,
+    "width_m": 6,
+    "depth_m": 0.6
+   }
+  ],
+  "robots": [
+   {
+    "id": "EX1",
+    "type": "excavator",
+    "battery_wh": 5000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "HL1",
+    "type": "hauler",
+    "battery_wh": 3000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "CP1",
+    "type": "compactor",
+    "battery_wh": 3500.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "SV1",
+    "type": "surveyor",
+    "battery_wh": 1500.0,
+    "speed_cells_per_h": 12.0
+   }
+  ],
+  "horizon_h": 336,
+  "constraints": [
+   "Berm length, height, and borrow depth are fixed and may not be reduced.",
+   "Berm built in four 25 m sections with inspection after each section.",
+   "Compactor completes a lift before hauler places the next in the same section.",
+   "Only one robot may work inside a zone at a time."
+  ],
+  "source_brief": "# 100 m Protective Berm with a Minimal Fleet\n\n**Site.** The east edge of the LS-1 plateau, where a 100 m berm will shield the habitat area from landing plumes. Loose regolith 40 cm deep over firm material; the borrow strip reaches 0.6 m into firm ground. The depot is at the south end of the berm line; no recharging.\n\n**Structures.**\n\n1. Protective berm: 100 m long, 2 m high, 3.5 m wide at the base (about 350 cubic metres of fill), built from a borrow strip along its north side, placed and compacted in two lifts and inspected.\n2. Borrow strip: 100 m by 6 m excavation 0.6 m deep (about 360 cubic metres) that supplies the berm fill.\n\n**Fleet.** EX1 (excavator, 5000 Wh), HL1 (hauler, 3000 Wh), CP1 (compactor, 3500 Wh) and SV1 (surveyor, 1500 Wh). Each battery is the budget for the whole job and nothing can be recharged.\n\n**Deadline.** 14 days.\n\n**Operational constraints.**\n\n- The berm length and height are fixed by the plume analysis and the borrow depth by the firm layer: none of them may be reduced, and no second excavator is available this sortie.\n- Build the berm in four 25 m sections so a finished section can be inspected while the next is placed.\n- The compactor finishes a lift before the hauler places the next one in the same section.\n- Only one robot may work inside a zone at a time.\n"
+ },
+ "task_graph": {
+  "tasks": [
+   {
+    "id": "T1",
+    "name": "survey B1 stakeout",
+    "robot_type": "surveyor",
+    "duration_h": 3,
+    "energy_wh": 175.0,
+    "zone": "Z1",
+    "after": [],
+    "structure": "B1",
+    "quantity": 350.0,
+    "unit": "m2",
+    "basis": "100 m * 3.5 m = 350 m2",
+    "estimated_duration_h": 3.0,
+    "estimated_energy_wh": 175.0
+   },
+   {
+    "id": "T2",
+    "name": "excavate B1 foundation trench",
+    "robot_type": "excavator",
+    "duration_h": 8,
+    "energy_wh": 800.0,
+    "zone": "Z1",
+    "after": [
+     "T1"
+    ],
+    "structure": "B1",
+    "quantity": 50.0,
+    "unit": "m3",
+    "basis": "100 m * 1 m * 0.5 m = 50 m3",
+    "estimated_duration_h": 8.0,
+    "estimated_energy_wh": 800.0
+   },
+   {
+    "id": "T3",
+    "name": "grade B1 foundation",
+    "robot_type": "excavator",
+    "duration_h": 14,
+    "energy_wh": 1680.0,
+    "zone": "Z1",
+    "after": [
+     "T2"
+    ],
+    "structure": "B1",
+    "quantity": 350.0,
+    "unit": "m2",
+    "basis": "100 m * 3.5 m = 350 m2",
+    "estimated_duration_h": 14.0,
+    "estimated_energy_wh": 1680.0
+   },
+   {
+    "id": "T4",
+    "name": "excavate B2 borrow strip part 1",
+    "robot_type": "excavator",
+    "duration_h": 9,
+    "energy_wh": 960.0,
+    "zone": "Z2",
+    "after": [
+     "T3"
+    ],
+    "structure": "B2",
+    "quantity": 60.0,
+    "unit": "m3",
+    "basis": "240 m3 / 4 = 60 m3 per part (0.4 m depth over 100 m * 6 m)",
+    "estimated_duration_h": 9.0,
+    "estimated_energy_wh": 960.0
+   },
+   {
+    "id": "T5",
+    "name": "excavate B2 borrow strip part 2",
+    "robot_type": "excavator",
+    "duration_h": 9,
+    "energy_wh": 960.0,
+    "zone": "Z2",
+    "after": [
+     "T4"
+    ],
+    "structure": "B2",
+    "quantity": 60.0,
+    "unit": "m3",
+    "basis": "240 m3 / 4 = 60 m3 per part",
+    "estimated_duration_h": 9.0,
+    "estimated_energy_wh": 960.0
+   },
+   {
+    "id": "T6",
+    "name": "excavate B2 borrow strip part 3",
+    "robot_type": "excavator",
+    "duration_h": 9,
+    "energy_wh": 960.0,
+    "zone": "Z2",
+    "after": [
+     "T5"
+    ],
+    "structure": "B2",
+    "quantity": 60.0,
+    "unit": "m3",
+    "basis": "240 m3 / 4 = 60 m3 per part",
+    "estimated_duration_h": 9.0,
+    "estimated_energy_wh": 960.0
+   },
+   {
+    "id": "T7",
+    "name": "excavate B2 borrow strip part 4",
+    "robot_type": "excavator",
+    "duration_h": 9,
+    "energy_wh": 960.0,
+    "zone": "Z2",
+    "after": [
+     "T6"
+    ],
+    "structure": "B2",
+    "quantity": 60.0,
+    "unit": "m3",
+    "basis": "240 m3 / 4 = 60 m3 per part",
+    "estimated_duration_h": 9.0,
+    "estimated_energy_wh": 960.0
+   },
+   {
+    "id": "T8",
+    "name": "grade B2 borrow strip",
+    "robot_type": "excavator",
+    "duration_h": 24,
+    "energy_wh": 2880.0,
+    "zone": "Z2",
+    "after": [
+     "T7"
+    ],
+    "structure": "B2",
+    "quantity": 600.0,
+    "unit": "m2",
+    "basis": "100 m * 6 m = 600 m2 (top 0.2 m strip yields 120 m3)",
+    "estimated_duration_h": 24.0,
+    "estimated_energy_wh": 2880.0
+   },
+   {
+    "id": "T9",
+    "name": "haul section 1 lift 1",
+    "robot_type": "hauler",
+    "duration_h": 4,
+    "energy_wh": 306.2,
+    "zone": "Z1",
+    "after": [
+     "T8"
+    ],
+    "structure": "B1",
+    "quantity": 43.75,
+    "unit": "m3",
+    "basis": "350 m3 / 8 = 43.75 m3 per lift per section",
+    "estimated_duration_h": 4.0,
+    "estimated_energy_wh": 306.25
+   },
+   {
+    "id": "T10",
+    "name": "compact section 1 lift 1",
+    "robot_type": "compactor",
+    "duration_h": 4,
+    "energy_wh": 350.0,
+    "zone": "Z1",
+    "after": [
+     "T9"
+    ],
+    "structure": "B1",
+    "quantity": 87.5,
+    "unit": "m2",
+    "basis": "25 m * 3.5 m = 87.5 m2 (lift 1 footprint)",
+    "estimated_duration_h": 4.0,
+    "estimated_energy_wh": 350.0
+   },
+   {
+    "id": "T11",
+    "name": "haul section 1 lift 2",
+    "robot_type": "hauler",
+    "duration_h": 4,
+    "energy_wh": 306.2,
+    "zone": "Z1",
+    "after": [
+     "T10"
+    ],
+    "structure": "B1",
+    "quantity": 43.75,
+    "unit": "m3",
+    "basis": "350 m3 / 8 = 43.75 m3 per lift per section",
+    "estimated_duration_h": 4.0,
+    "estimated_energy_wh": 306.25
+   },
+   {
+    "id": "T12",
+    "name": "compact section 1 lift 2",
+    "robot_type": "compactor",
+    "duration_h": 2,
+    "energy_wh": 175.0,
+    "zone": "Z1",
+    "after": [
+     "T11"
+    ],
+    "structure": "B1",
+    "quantity": 43.75,
+    "unit": "m2",
+    "basis": "25 m * 1.75 m = 43.75 m2 (lift 2 footprint)",
+    "estimated_duration_h": 2.0,
+    "estimated_energy_wh": 175.0
+   },
+   {
+    "id": "T13",
+    "name": "inspect section 1",
+    "robot_type": "surveyor",
+    "duration_h": 1,
+    "energy_wh": 43.8,
+    "zone": "Z1",
+    "after": [
+     "T12"
+    ],
+    "structure": "B1",
+    "quantity": 87.5,
+    "unit": "m2",
+    "basis": "25 m * 3.5 m = 87.5 m2",
+    "estimated_duration_h": 1.0,
+    "estimated_energy_wh": 43.75
+   },
+   {
+    "id": "T14",
+    "name": "haul section 2 lift 1",
+    "robot_type": "hauler",
+    "duration_h": 4,
+    "energy_wh": 306.2,
+    "zone": "Z1",
+    "after": [
+     "T13"
+    ],
+    "structure": "B1",
+    "quantity": 43.75,
+    "unit": "m3",
+    "basis": "350 m3 / 8 = 43.75 m3 per lift per section",
+    "estimated_duration_h": 4.0,
+    "estimated_energy_wh": 306.25
+   },
+   {
+    "id": "T15",
+    "name": "compact section 2 lift 1",
+    "robot_type": "compactor",
+    "duration_h": 4,
+    "energy_wh": 350.0,
+    "zone": "Z1",
+    "after": [
+     "T14"
+    ],
+    "structure": "B1",
+    "quantity": 87.5,
+    "unit": "m2",
+    "basis": "25 m * 3.5 m = 87.5 m2 (lift 1 footprint)",
+    "estimated_duration_h": 4.0,
+    "estimated_energy_wh": 350.0
+   },
+   {
+    "id": "T16",
+    "name": "haul section 2 lift 2",
+    "robot_type": "hauler",
+    "duration_h": 4,
+    "energy_wh": 306.2,
+    "zone": "Z1",
+    "after": [
+     "T15"
+    ],
+    "structure": "B1",
+    "quantity": 43.75,
+    "unit": "m3",
+    "basis": "350 m3 / 8 = 43.75 m3 per lift per section",
+    "estimated_duration_h": 4.0,
+    "estimated_energy_wh": 306.25
+   },
+   {
+    "id": "T17",
+    "name": "compact section 2 lift 2",
+    "robot_type": "compactor",
+    "duration_h": 2,
+    "energy_wh": 175.0,
+    "zone": "Z1",
+    "after": [
+     "T16"
+    ],
+    "structure": "B1",
+    "quantity": 43.75,
+    "unit": "m2",
+    "basis": "25 m * 1.75 m = 43.75 m2 (lift 2 footprint)",
+    "estimated_duration_h": 2.0,
+    "estimated_energy_wh": 175.0
+   },
+   {
+    "id": "T18",
+    "name": "inspect section 2",
+    "robot_type": "surveyor",
+    "duration_h": 1,
+    "energy_wh": 43.8,
+    "zone": "Z1",
+    "after": [
+     "T17"
+    ],
+    "structure": "B1",
+    "quantity": 87.5,
+    "unit": "m2",
+    "basis": "25 m * 3.5 m = 87.5 m2",
+    "estimated_duration_h": 1.0,
+    "estimated_energy_wh": 43.75
+   },
+   {
+    "id": "T19",
+    "name": "haul section 3 lift 1",
+    "robot_type": "hauler",
+    "duration_h": 4,
+    "energy_wh": 306.2,
+    "zone": "Z1",
+    "after": [
+     "T18"
+    ],
+    "structure": "B1",
+    "quantity": 43.75,
+    "unit": "m3",
+    "basis": "350 m3 / 8 = 43.75 m3 per lift per section",
+    "estimated_duration_h": 4.0,
+    "estimated_energy_wh": 306.25
+   },
+   {
+    "id": "T20",
+    "name": "compact section 3 lift 1",
+    "robot_type": "compactor",
+    "duration_h": 4,
+    "energy_wh": 350.0,
+    "zone": "Z1",
+    "after": [
+     "T19"
+    ],
+    "structure": "B1",
+    "quantity": 87.5,
+    "unit": "m2",
+    "basis": "25 m * 3.5 m = 87.5 m2 (lift 1 footprint)",
+    "estimated_duration_h": 4.0,
+    "estimated_energy_wh": 350.0
+   },
+   {
+    "id": "T21",
+    "name": "haul section 3 lift 2",
+    "robot_type": "hauler",
+    "duration_h": 4,
+    "energy_wh": 306.2,
+    "zone": "Z1",
+    "after": [
+     "T20"
+    ],
+    "structure": "B1",
+    "quantity": 43.75,
+    "unit": "m3",
+    "basis": "350 m3 / 8 = 43.75 m3 per lift per section",
+    "estimated_duration_h": 4.0,
+    "estimated_energy_wh": 306.25
+   },
+   {
+    "id": "T22",
+    "name": "compact section 3 lift 2",
+    "robot_type": "compactor",
+    "duration_h": 2,
+    "energy_wh": 175.0,
+    "zone": "Z1",
+    "after": [
+     "T21"
+    ],
+    "structure": "B1",
+    "quantity": 43.75,
+    "unit": "m2",
+    "basis": "25 m * 1.75 m = 43.75 m2 (lift 2 footprint)",
+    "estimated_duration_h": 2.0,
+    "estimated_energy_wh": 175.0
+   },
+   {
+    "id": "T23",
+    "name": "inspect section 3",
+    "robot_type": "surveyor",
+    "duration_h": 1,
+    "energy_wh": 43.8,
+    "zone": "Z1",
+    "after": [
+     "T22"
+    ],
+    "structure": "B1",
+    "quantity": 87.5,
+    "unit": "m2",
+    "basis": "25 m * 3.5 m = 87.5 m2",
+    "estimated_duration_h": 1.0,
+    "estimated_energy_wh": 43.75
+   },
+   {
+    "id": "T24",
+    "name": "haul section 4 lift 1",
+    "robot_type": "hauler",
+    "duration_h": 4,
+    "energy_wh": 306.2,
+    "zone": "Z1",
+    "after": [
+     "T23"
+    ],
+    "structure": "B1",
+    "quantity": 43.75,
+    "unit": "m3",
+    "basis": "350 m3 / 8 = 43.75 m3 per lift per section",
+    "estimated_duration_h": 4.0,
+    "estimated_energy_wh": 306.25
+   },
+   {
+    "id": "T25",
+    "name": "compact section 4 lift 1",
+    "robot_type": "compactor",
+    "duration_h": 4,
+    "energy_wh": 350.0,
+    "zone": "Z1",
+    "after": [
+     "T24"
+    ],
+    "structure": "B1",
+    "quantity": 87.5,
+    "unit": "m2",
+    "basis": "25 m * 3.5 m = 87.5 m2 (lift 1 footprint)",
+    "estimated_duration_h": 4.0,
+    "estimated_energy_wh": 350.0
+   },
+   {
+    "id": "T26",
+    "name": "haul section 4 lift 2",
+    "robot_type": "hauler",
+    "duration_h": 4,
+    "energy_wh": 306.2,
+    "zone": "Z1",
+    "after": [
+     "T25"
+    ],
+    "structure": "B1",
+    "quantity": 43.75,
+    "unit": "m3",
+    "basis": "350 m3 / 8 = 43.75 m3 per lift per section",
+    "estimated_duration_h": 4.0,
+    "estimated_energy_wh": 306.25
+   },
+   {
+    "id": "T27",
+    "name": "compact section 4 lift 2",
+    "robot_type": "compactor",
+    "duration_h": 2,
+    "energy_wh": 175.0,
+    "zone": "Z1",
+    "after": [
+     "T26"
+    ],
+    "structure": "B1",
+    "quantity": 43.75,
+    "unit": "m2",
+    "basis": "25 m * 1.75 m = 43.75 m2 (lift 2 footprint)",
+    "estimated_duration_h": 2.0,
+    "estimated_energy_wh": 175.0
+   },
+   {
+    "id": "T28",
+    "name": "inspect section 4",
+    "robot_type": "surveyor",
+    "duration_h": 1,
+    "energy_wh": 43.8,
+    "zone": "Z1",
+    "after": [
+     "T27"
+    ],
+    "structure": "B1",
+    "quantity": 87.5,
+    "unit": "m2",
+    "basis": "25 m * 3.5 m = 87.5 m2",
+    "estimated_duration_h": 1.0,
+    "estimated_energy_wh": 43.75
+   }
+  ],
+  "notes": "Resolved volume:B2 by adding four excavator tasks (T4-T7) for the remaining 240 m3 of borrow strip excavation (split into 60 m3 parts, each under battery). Kept grade task T8 for 600 m2 (covers top 0.2 m = 120 m3). Resolved supply:T2 by changing foundation trench excavation to excavator task T2 (50 m3) and making all berm haul tasks (T9, T11, T14, T16, T19, T21, T24, T26) depend on completion of B2 excavation and grading (T8). Resolved energy:hauler by removing erroneous hauler excavation tasks; hauler now only moves 350 m3 fill (8 lifts * 43.75 m3) totaling 2450 Wh, within HL1's 3000 Wh budget. Excavator total energy (9200 Wh) exceeds its 5000 Wh battery; this shortfall is noted for the solver. All structure operations covered: B1 survey, excavate, grade, haul, compact, inspect; B2 excavate, grade. Zone concurrency respected by sequential zoning."
+ },
+ "schedule": null,
+ "explanation": null,
+ "steps": [
+  {
+   "stage": "structure",
+   "attempt": 1,
+   "ok": true,
+   "failure": null,
+   "duration_s": 3.168355665868148,
+   "usage": {
+    "model": "nvidia/Nemotron-3_5-Lightning",
+    "input_tokens": 3178,
+    "output_tokens": 465,
+    "latency_s": 3.1588991251774132
+   },
+   "message": "2 structures, 4 robots, horizon 336h",
+   "payload": {
+    "zones": 4,
+    "grid": [
+     40,
+     40
+    ],
+    "depot": [
+     20,
+     2
+    ],
+    "warnings": [
+     "structure B1: operations [excavate, grade, haul, compact, survey] recovered from malformed keys ('operations excavate grade haul compact survey'); check them against the brief",
+     "structure B2: operations [excavate, grade] recovered from malformed keys ('operations excavate grade'); check them against the brief",
+     "zones Z1 and Z2 overlap (centres 4.0 cells apart, radii 4 + 4)",
+     "zones Z2 and Z3 overlap (centres 4.0 cells apart, radii 4 + 4)",
+     "zones Z3 and Z4 overlap (centres 4.0 cells apart, radii 4 + 4)",
+     "structure B1 lists excavate but the brief line about it asks for haul, not excavate: no excavate task will be required of it (drop the operation on the requirements card if the brief does not want it)"
+    ]
+   }
+  },
+  {
+   "stage": "taskgraph",
+   "attempt": 1,
+   "ok": true,
+   "failure": null,
+   "duration_s": 90.12179625011049,
+   "usage": {
+    "model": "nvidia/Nemotron-3-Ultra-550b-a55b",
+    "input_tokens": 3385,
+    "output_tokens": 27034,
+    "latency_s": 90.10691383294761
+   },
+   "message": "26 tasks",
+   "payload": {
+    "advisories": [
+     "volume:B1: its dimensions give 350 m3 (100 m long, 2 m high, 3.5 m wide at the base, triangular section) but its haul tasks (T4 162.5 m3, T6 112.5 m3, T9 162.5 m3, T11 112.5 m3, T14 162.5 m3, T16 112.5 m3, T19 162.5 m3, T21 112.5 m3) total 1,100 m3 (314 %): hauled 3.1 times over, a double count"
+    ],
+    "rate_model": true,
+    "grounded": 26
+   }
+  },
+  {
+   "stage": "validate",
+   "attempt": 1,
+   "ok": false,
+   "failure": {
+    "kind": "validation",
+    "conflicts": [
+     "volume:B1",
+     "supply:T6",
+     "supply:T9",
+     "supply:T11",
+     "supply:T14",
+     "supply:T16",
+     "supply:T19",
+     "supply:T21",
+     "energy:compactor",
+     "energy:excavator",
+     "energy:hauler"
+    ],
+    "hint": "B1 (protective_berm) plans 1,100 m3 of hauls for its 350 m3 protective berm: cut the B1 hauls to 350 m3 in total (for example 8 x 43.8 m3), each part still waiting for the dig part that feeds it; never add a dig the brief does not ask for. A haul cannot start before its material is dug: make T6, T9, T11, T14, T16, T19 and T21 wait for more of the digs that supply them (B2 borrow strip: T24, T25); a haul part may wait for only the dig parts that remove what it moves, so split hauls to keep both chains short. Battery budgets are exceeded per robot type: compactor tasks need at least 3,618 Wh, 3,600 Wh of work and 18 Wh of travel, but its 1 robot carries only 3,500 Wh combined, excavator tasks need at least 13,058 Wh, 13,040 Wh of work and 18 Wh of travel, but its 1 robot carries only 5,000 Wh combined and hauler tasks need at least 7,718 Wh, 7,700 Wh of work and 18 Wh of travel, but its 1 robot carries only 3,000 Wh combined; reduce the quantities if the brief allows it or move work to other robot types.",
+    "details": [
+     "B1 (protective_berm): dimensions 100 m long, 2 m high, 3.5 m wide at the base, triangular section = 350 m3 of fill; hauler tasks move 1,100 m3 (314 %), a double count: T4 162.5 m3, T6 112.5 m3, T9 162.5 m3, T11 112.5 m3, T14 162.5 m3, T16 112.5 m3, T19 162.5 m3, T21 112.5 m3 (parts split a body's m3, they do not each repeat it)",
+     "T6 hauls 112.5 m3 for B1 (protective berm), 275 m3 with the hauls before it (T4), but the digs before it remove only 200 m3 (B1 protective berm: T2, T3; an m2 strip counts 0.2 m), so it could start before all of its material is dug",
+     "T9 hauls 162.5 m3 for B1 (protective berm), 437.5 m3 with the hauls before it (T4, T6), but the digs before it remove only 200 m3 (B1 protective berm: T2, T3; an m2 strip counts 0.2 m), so it could start before all of its material is dug",
+     "T11 hauls 112.5 m3 for B1 (protective berm), 550 m3 with the hauls before it (T4, T6, T9), but the digs before it remove only 200 m3 (B1 protective berm: T2, T3; an m2 strip counts 0.2 m), so it could start before all of its material is dug",
+     "T14 hauls 162.5 m3 for B1 (protective berm), 712.5 m3 with the hauls before it (T4, T6, T9, T11), but the digs before it remove only 200 m3 (B1 protective berm: T2, T3; an m2 strip counts 0.2 m), so it could start before all of its material is dug",
+     "T16 hauls 112.5 m3 for B1 (protective berm), 825 m3 with the hauls before it (T4, T6, T9, T11 and 1 more), but the digs before it remove only 200 m3 (B1 protective berm: T2, T3; an m2 strip counts 0.2 m), so it could start before all of its material is dug",
+     "T19 hauls 162.5 m3 for B1 (protective berm), 987.5 m3 with the hauls before it (T4, T6, T9, T11 and 2 more), but the digs before it remove only 200 m3 (B1 protective berm: T2, T3; an m2 strip counts 0.2 m), so it could start before all of its material is dug",
+     "T21 hauls 112.5 m3 for B1 (protective berm), 1,100 m3 with the hauls before it (T4, T6, T9, T11 and 3 more), but the digs before it remove only 200 m3 (B1 protective berm: T2, T3; an m2 strip counts 0.2 m), so it could start before all of its material is dug",
+     "compactor tasks need at least 3,618 Wh, 18 Wh of it travel; its 1 robot carries 3,500 Wh",
+     "excavator tasks need at least 13,058 Wh, 18 Wh of it travel; its 1 robot carries 5,000 Wh",
+     "hauler tasks need at least 7,718 Wh, 18 Wh of it travel; its 1 robot carries 3,000 Wh"
+    ]
+   },
+   "duration_s": 0.006764041958376765,
+   "usage": null,
+   "message": null,
+   "payload": {
+    "advisories": [
+     "volume:B1: its dimensions give 350 m3 (100 m long, 2 m high, 3.5 m wide at the base, triangular section) but its haul tasks (T4 162.5 m3, T6 112.5 m3, T9 162.5 m3, T11 112.5 m3, T14 162.5 m3, T16 112.5 m3, T19 162.5 m3, T21 112.5 m3) total 1,100 m3 (314 %): hauled 3.1 times over, a double count"
+    ]
+   }
+  },
+  {
+   "stage": "repair",
+   "attempt": 2,
+   "ok": true,
+   "failure": null,
+   "duration_s": 267.5633763750084,
+   "usage": {
+    "model": "nvidia/Nemotron-3-Ultra-550b-a55b",
+    "input_tokens": 18044,
+    "output_tokens": 57010,
+    "latency_s": 267.5349617090542
+   },
+   "message": "32 tasks",
+   "payload": {
+    "advisories": [],
+    "rate_model": true,
+    "grounded": 31,
+    "diff": {
+     "added": [
+      "T4",
+      "T5",
+      "T6",
+      "T7",
+      "T8",
+      "T9",
+      "T10",
+      "T11"
+     ],
+     "removed": [
+      "T24",
+      "T25"
+     ],
+     "changed": [
+      {
+       "task": "T1",
+       "field": "name",
+       "before": "survey B1 area",
+       "after": "survey B1 stakeout"
+      },
+      {
+       "task": "T1",
+       "field": "duration_h",
+       "before": 5,
+       "after": 3
+      },
+      {
+       "task": "T1",
+       "field": "energy_wh",
+       "before": 375.0,
+       "after": 175.0
+      },
+      {
+       "task": "T1",
+       "field": "quantity",
+       "before": 750.0,
+       "after": 350.0
+      },
+      {
+       "task": "T2",
+       "field": "name",
+       "before": "excavate foundation trench",
+       "after": "excavate B1 foundation trench"
+      },
+      {
+       "task": "T3",
+       "field": "name",
+       "before": "grade foundation",
+       "after": "grade B1 foundation"
+      },
+      {
+       "task": "T3",
+       "field": "duration_h",
+       "before": 30,
+       "after": 14
+      },
+      {
+       "task": "T3",
+       "field": "energy_wh",
+       "before": 3600.0,
+       "after": 1680.0
+      },
+      {
+       "task": "T3",
+       "field": "quantity",
+       "before": 750.0,
+       "after": 350.0
+      },
+      {
+       "task": "T12",
+       "from": "T26",
+       "field": "name",
+       "before": "grade borrow strip",
+       "after": "grade B2 borrow strip"
+      },
+      {
+       "task": "T13",
+       "from": "T4",
+       "field": "duration_h",
+       "before": 14,
+       "after": 4
+      },
+      {
+       "task": "T13",
+       "from": "T4",
+       "field": "energy_wh",
+       "before": 1137.5,
+       "after": 306.2
+      },
+      {
+       "task": "T13",
+       "from": "T4",
+       "field": "quantity",
+       "before": 162.5,
+       "after": 43.75
+      },
+      {
+       "task": "T13",
+       "from": "T4",
+       "field": "after",
+       "before": [
+        "T3"
+       ],
+       "after": [
+        "T3",
+        "T4"
+       ]
+      },
+      {
+       "task": "T14",
+       "from": "T5",
+       "field": "duration_h",
+       "before": 6,
+       "after": 4
+      },
+      {
+       "task": "T14",
+       "from": "T5",
+       "field": "energy_wh",
+       "before": 550.0,
+       "after": 350.0
+      },
+      {
+       "task": "T14",
+       "from": "T5",
+       "field": "quantity",
+       "before": 137.5,
+       "after": 87.5
+      },
+      {
+       "task": "T15",
+       "from": "T6",
+       "field": "duration_h",
+       "before": 10,
+       "after": 4
+      },
+      {
+       "task": "T15",
+       "from": "T6",
+       "field": "energy_wh",
+       "before": 787.5,
+       "after": 306.2
+      },
+      {
+       "task": "T15",
+       "from": "T6",
+       "field": "quantity",
+       "before": 112.5,
+       "after": 43.75
+      },
+      {
+       "task": "T15",
+       "from": "T6",
+       "field": "after",
+       "before": [
+        "T14"
+       ],
+       "after": [
+        "T14",
+        "T5"
+       ]
+      },
+      {
+       "task": "T16",
+       "from": "T7",
+       "field": "duration_h",
+       "before": 4,
+       "after": 2
+      },
+      {
+       "task": "T16",
+       "from": "T7",
+       "field": "energy_wh",
+       "before": 350.0,
+       "after": 175.0
+      },
+      {
+       "task": "T16",
+       "from": "T7",
+       "field": "quantity",
+       "before": 87.5,
+       "after": 43.75
+      },
+      {
+       "task": "T17",
+       "from": "T8",
+       "field": "duration_h",
+       "before": 2,
+       "after": 1
+      },
+      {
+       "task": "T17",
+       "from": "T8",
+       "field": "energy_wh",
+       "before": 93.8,
+       "after": 43.8
+      },
+      {
+       "task": "T17",
+       "from": "T8",
+       "field": "quantity",
+       "before": 187.5,
+       "after": 87.5
+      },
+      {
+       "task": "T18",
+       "from": "T9",
+       "field": "duration_h",
+       "before": 14,
+       "after": 4
+      },
+      {
+       "task": "T18",
+       "from": "T9",
+       "field": "energy_wh",
+       "before": 1137.5,
+       "after": 306.2
+      },
+      {
+       "task": "T18",
+       "from": "T9",
+       "field": "quantity",
+       "before": 162.5,
+       "after": 43.75
+      },
+      {
+       "task": "T18",
+       "from": "T9",
+       "field": "after",
+       "before": [
+        "T17"
+       ],
+       "after": [
+        "T17",
+        "T6"
+       ]
+      },
+      {
+       "task": "T19",
+       "from": "T10",
+       "field": "duration_h",
+       "before": 6,
+       "after": 4
+      },
+      {
+       "task": "T19",
+       "from": "T10",
+       "field": "energy_wh",
+       "before": 550.0,
+       "after": 350.0
+      },
+      {
+       "task": "T19",
+       "from": "T10",
+       "field": "quantity",
+       "before": 137.5,
+       "after": 87.5
+      },
+      {
+       "task": "T20",
+       "from": "T11",
+       "field": "duration_h",
+       "before": 10,
+       "after": 4
+      },
+      {
+       "task": "T20",
+       "from": "T11",
+       "field": "energy_wh",
+       "before": 787.5,
+       "after": 306.2
+      },
+      {
+       "task": "T20",
+       "from": "T11",
+       "field": "quantity",
+       "before": 112.5,
+       "after": 43.75
+      },
+      {
+       "task": "T20",
+       "from": "T11",
+       "field": "after",
+       "before": [
+        "T19"
+       ],
+       "after": [
+        "T19",
+        "T7"
+       ]
+      },
+      {
+       "task": "T21",
+       "from": "T12",
+       "field": "duration_h",
+       "before": 4,
+       "after": 2
+      },
+      {
+       "task": "T21",
+       "from": "T12",
+       "field": "energy_wh",
+       "before": 350.0,
+       "after": 175.0
+      },
+      {
+       "task": "T21",
+       "from": "T12",
+       "field": "quantity",
+       "before": 87.5,
+       "after": 43.75
+      },
+      {
+       "task": "T22",
+       "from": "T13",
+       "field": "duration_h",
+       "before": 2,
+       "after": 1
+      },
+      {
+       "task": "T22",
+       "from": "T13",
+       "field": "energy_wh",
+       "before": 93.8,
+       "after": 43.8
+      },
+      {
+       "task": "T22",
+       "from": "T13",
+       "field": "quantity",
+       "before": 187.5,
+       "after": 87.5
+      },
+      {
+       "task": "T23",
+       "from": "T14",
+       "field": "duration_h",
+       "before": 14,
+       "after": 4
+      },
+      {
+       "task": "T23",
+       "from": "T14",
+       "field": "energy_wh",
+       "before": 1137.5,
+       "after": 306.2
+      },
+      {
+       "task": "T23",
+       "from": "T14",
+       "field": "quantity",
+       "before": 162.5,
+       "after": 43.75
+      },
+      {
+       "task": "T23",
+       "from": "T14",
+       "field": "after",
+       "before": [
+        "T22"
+       ],
+       "after": [
+        "T22",
+        "T8"
+       ]
+      },
+      {
+       "task": "T24",
+       "from": "T15",
+       "field": "duration_h",
+       "before": 6,
+       "after": 4
+      },
+      {
+       "task": "T24",
+       "from": "T15",
+       "field": "energy_wh",
+       "before": 550.0,
+       "after": 350.0
+      },
+      {
+       "task": "T24",
+       "from": "T15",
+       "field": "quantity",
+       "before": 137.5,
+       "after": 87.5
+      },
+      {
+       "task": "T25",
+       "from": "T16",
+       "field": "duration_h",
+       "before": 10,
+       "after": 4
+      },
+      {
+       "task": "T25",
+       "from": "T16",
+       "field": "energy_wh",
+       "before": 787.5,
+       "after": 306.2
+      },
+      {
+       "task": "T25",
+       "from": "T16",
+       "field": "quantity",
+       "before": 112.5,
+       "after": 43.75
+      },
+      {
+       "task": "T25",
+       "from": "T16",
+       "field": "after",
+       "before": [
+        "T24"
+       ],
+       "after": [
+        "T24",
+        "T9"
+       ]
+      },
+      {
+       "task": "T26",
+       "from": "T17",
+       "field": "duration_h",
+       "before": 4,
+       "after": 2
+      },
+      {
+       "task": "T26",
+       "from": "T17",
+       "field": "energy_wh",
+       "before": 350.0,
+       "after": 175.0
+      },
+      {
+       "task": "T26",
+       "from": "T17",
+       "field": "quantity",
+       "before": 87.5,
+       "after": 43.75
+      },
+      {
+       "task": "T27",
+       "from": "T18",
+       "field": "duration_h",
+       "before": 2,
+       "after": 1
+      },
+      {
+       "task": "T27",
+       "from": "T18",
+       "field": "energy_wh",
+       "before": 93.8,
+       "after": 43.8
+      },
+      {
+       "task": "T27",
+       "from": "T18",
+       "field": "quantity",
+       "before": 187.5,
+       "after": 87.5
+      },
+      {
+       "task": "T28",
+       "from": "T19",
+       "field": "duration_h",
+       "before": 14,
+       "after": 4
+      },
+      {
+       "task": "T28",
+       "from": "T19",
+       "field": "energy_wh",
+       "before": 1137.5,
+       "after": 306.2
+      },
+      {
+       "task": "T28",
+       "from": "T19",
+       "field": "quantity",
+       "before": 162.5,
+       "after": 43.75
+      },
+      {
+       "task": "T28",
+       "from": "T19",
+       "field": "after",
+       "before": [
+        "T27"
+       ],
+       "after": [
+        "T10",
+        "T27"
+       ]
+      },
+      {
+       "task": "T29",
+       "from": "T20",
+       "field": "duration_h",
+       "before": 6,
+       "after": 4
+      },
+      {
+       "task": "T29",
+       "from": "T20",
+       "field": "energy_wh",
+       "before": 550.0,
+       "after": 350.0
+      },
+      {
+       "task": "T29",
+       "from": "T20",
+       "field": "quantity",
+       "before": 137.5,
+       "after": 87.5
+      },
+      {
+       "task": "T30",
+       "from": "T21",
+       "field": "duration_h",
+       "before": 10,
+       "after": 4
+      },
+      {
+       "task": "T30",
+       "from": "T21",
+       "field": "energy_wh",
+       "before": 787.5,
+       "after": 306.2
+      },
+      {
+       "task": "T30",
+       "from": "T21",
+       "field": "quantity",
+       "before": 112.5,
+       "after": 43.75
+      },
+      {
+       "task": "T30",
+       "from": "T21",
+       "field": "after",
+       "before": [
+        "T29"
+       ],
+       "after": [
+        "T11",
+        "T29"
+       ]
+      },
+      {
+       "task": "T31",
+       "from": "T22",
+       "field": "duration_h",
+       "before": 4,
+       "after": 2
+      },
+      {
+       "task": "T31",
+       "from": "T22",
+       "field": "energy_wh",
+       "before": 350.0,
+       "after": 175.0
+      },
+      {
+       "task": "T31",
+       "from": "T22",
+       "field": "quantity",
+       "before": 87.5,
+       "after": 43.75
+      },
+      {
+       "task": "T32",
+       "from": "T23",
+       "field": "duration_h",
+       "before": 2,
+       "after": 1
+      },
+      {
+       "task": "T32",
+       "from": "T23",
+       "field": "energy_wh",
+       "before": 93.8,
+       "after": 43.8
+      },
+      {
+       "task": "T32",
+       "from": "T23",
+       "field": "quantity",
+       "before": 187.5,
+       "after": 87.5
+      }
+     ],
+     "renumbered": [
+      {
+       "from": "T26",
+       "to": "T12"
+      },
+      {
+       "from": "T4",
+       "to": "T13"
+      },
+      {
+       "from": "T5",
+       "to": "T14"
+      },
+      {
+       "from": "T6",
+       "to": "T15"
+      },
+      {
+       "from": "T7",
+       "to": "T16"
+      },
+      {
+       "from": "T8",
+       "to": "T17"
+      },
+      {
+       "from": "T9",
+       "to": "T18"
+      },
+      {
+       "from": "T10",
+       "to": "T19"
+      },
+      {
+       "from": "T11",
+       "to": "T20"
+      },
+      {
+       "from": "T12",
+       "to": "T21"
+      },
+      {
+       "from": "T13",
+       "to": "T22"
+      },
+      {
+       "from": "T14",
+       "to": "T23"
+      },
+      {
+       "from": "T15",
+       "to": "T24"
+      },
+      {
+       "from": "T16",
+       "to": "T25"
+      },
+      {
+       "from": "T17",
+       "to": "T26"
+      },
+      {
+       "from": "T18",
+       "to": "T27"
+      },
+      {
+       "from": "T19",
+       "to": "T28"
+      },
+      {
+       "from": "T20",
+       "to": "T29"
+      },
+      {
+       "from": "T21",
+       "to": "T30"
+      },
+      {
+       "from": "T22",
+       "to": "T31"
+      },
+      {
+       "from": "T23",
+       "to": "T32"
+      }
+     ],
+     "per_type_energy_before": {
+      "compactor": 3600.0,
+      "excavator": 13040.0,
+      "hauler": 7700.0,
+      "surveyor": 750.2
+     },
+     "per_type_energy_after": {
+      "compactor": 2100.0,
+      "excavator": 11120.0,
+      "hauler": 2449.6,
+      "surveyor": 350.2
+     },
+     "scope_drift_pct": -36.2,
+     "total_energy_wh_before": 25090.2,
+     "total_energy_wh_after": 16019.8,
+     "total_duration_h_before": 263,
+     "total_duration_h_after": 165
+    }
+   }
+  },
+  {
+   "stage": "validate",
+   "attempt": 2,
+   "ok": false,
+   "failure": {
+    "kind": "validation",
+    "conflicts": [
+     "energy:excavator"
+    ],
+    "hint": "Battery budgets are exceeded per robot type: excavator tasks need at least 11,138 Wh, 11,120 Wh of work and 18 Wh of travel, but its 1 robot carries only 5,000 Wh combined; reduce the quantities if the brief allows it or move work to other robot types.",
+    "details": [
+     "excavator tasks need at least 11,138 Wh, 18 Wh of it travel; its 1 robot carries 5,000 Wh"
+    ]
+   },
+   "duration_s": 0.006750874919816852,
+   "usage": null,
+   "message": null,
+   "payload": null
+  },
+  {
+   "stage": "repair",
+   "attempt": 3,
+   "ok": true,
+   "failure": null,
+   "duration_s": 126.6891842498444,
+   "usage": {
+    "model": "nvidia/Nemotron-3-Ultra-550b-a55b",
+    "input_tokens": 8864,
+    "output_tokens": 28910,
+    "latency_s": 126.6745299170725
+   },
+   "message": "32 tasks",
+   "payload": {
+    "advisories": [
+     "estimate:T2: model said 8 h / 800 Wh, rate model gives 5 h / 350 Wh (-56%)",
+     "estimate:T4: model said 7 h / 720 Wh, rate model gives 4 h / 315 Wh (-56%)",
+     "estimate:T5: model said 7 h / 720 Wh, rate model gives 4 h / 315 Wh (-56%)",
+     "estimate:T6: model said 7 h / 720 Wh, rate model gives 4 h / 315 Wh (-56%)",
+     "estimate:T7: model said 7 h / 720 Wh, rate model gives 4 h / 315 Wh (-56%)",
+     "estimate:T8: model said 7 h / 720 Wh, rate model gives 4 h / 315 Wh (-56%)",
+     "estimate:T9: model said 7 h / 720 Wh, rate model gives 4 h / 315 Wh (-56%)",
+     "estimate:T10: model said 7 h / 720 Wh, rate model gives 4 h / 315 Wh (-56%)",
+     "estimate:T11: model said 7 h / 720 Wh, rate model gives 4 h / 315 Wh (-56%)",
+     "volume:B2: its dimensions give 360 m3 (100 x 6 x 0.6 m) but its excavation tasks (T12 600 m2 counts 120 m3 at 0.2 m) total only 120 m3 (33 %)",
+     "supply:B2: its hauls (T4 45 m3, T5 45 m3, T6 45 m3, T7 45 m3 and 4 more) move 360 m3, more than the 70 m3 the digs before them remove (B1 protective berm: T3; an m2 strip counts 0.2 m)"
+    ],
+    "rate_model": true,
+    "grounded": 32,
+    "diff": {
+     "added": [],
+     "removed": [],
+     "changed": [
+      {
+       "task": "T2",
+       "field": "duration_h",
+       "before": 8,
+       "after": 5
+      },
+      {
+       "task": "T2",
+       "field": "energy_wh",
+       "before": 800.0,
+       "after": 350.0
+      },
+      {
+       "task": "T2",
+       "field": "robot_type",
+       "before": "excavator",
+       "after": "hauler"
+      },
+      {
+       "task": "T4",
+       "field": "duration_h",
+       "before": 7,
+       "after": 4
+      },
+      {
+       "task": "T4",
+       "field": "energy_wh",
+       "before": 720.0,
+       "after": 315.0
+      },
+      {
+       "task": "T4",
+       "field": "robot_type",
+       "before": "excavator",
+       "after": "hauler"
+      },
+      {
+       "task": "T5",
+       "field": "duration_h",
+       "before": 7,
+       "after": 4
+      },
+      {
+       "task": "T5",
+       "field": "energy_wh",
+       "before": 720.0,
+       "after": 315.0
+      },
+      {
+       "task": "T5",
+       "field": "robot_type",
+       "before": "excavator",
+       "after": "hauler"
+      },
+      {
+       "task": "T6",
+       "field": "duration_h",
+       "before": 7,
+       "after": 4
+      },
+      {
+       "task": "T6",
+       "field": "energy_wh",
+       "before": 720.0,
+       "after": 315.0
+      },
+      {
+       "task": "T6",
+       "field": "robot_type",
+       "before": "excavator",
+       "after": "hauler"
+      },
+      {
+       "task": "T7",
+       "field": "duration_h",
+       "before": 7,
+       "after": 4
+      },
+      {
+       "task": "T7",
+       "field": "energy_wh",
+       "before": 720.0,
+       "after": 315.0
+      },
+      {
+       "task": "T7",
+       "field": "robot_type",
+       "before": "excavator",
+       "after": "hauler"
+      },
+      {
+       "task": "T8",
+       "field": "duration_h",
+       "before": 7,
+       "after": 4
+      },
+      {
+       "task": "T8",
+       "field": "energy_wh",
+       "before": 720.0,
+       "after": 315.0
+      },
+      {
+       "task": "T8",
+       "field": "robot_type",
+       "before": "excavator",
+       "after": "hauler"
+      },
+      {
+       "task": "T9",
+       "field": "duration_h",
+       "before": 7,
+       "after": 4
+      },
+      {
+       "task": "T9",
+       "field": "energy_wh",
+       "before": 720.0,
+       "after": 315.0
+      },
+      {
+       "task": "T9",
+       "field": "robot_type",
+       "before": "excavator",
+       "after": "hauler"
+      },
+      {
+       "task": "T10",
+       "field": "duration_h",
+       "before": 7,
+       "after": 4
+      },
+      {
+       "task": "T10",
+       "field": "energy_wh",
+       "before": 720.0,
+       "after": 315.0
+      },
+      {
+       "task": "T10",
+       "field": "robot_type",
+       "before": "excavator",
+       "after": "hauler"
+      },
+      {
+       "task": "T11",
+       "field": "duration_h",
+       "before": 7,
+       "after": 4
+      },
+      {
+       "task": "T11",
+       "field": "energy_wh",
+       "before": 720.0,
+       "after": 315.0
+      },
+      {
+       "task": "T11",
+       "field": "robot_type",
+       "before": "excavator",
+       "after": "hauler"
+      }
+     ],
+     "renumbered": [],
+     "per_type_energy_before": {
+      "compactor": 2100.0,
+      "excavator": 11120.0,
+      "hauler": 2449.6,
+      "surveyor": 350.2
+     },
+     "per_type_energy_after": {
+      "compactor": 2100.0,
+      "excavator": 4560.0,
+      "hauler": 5319.6,
+      "surveyor": 350.2
+     },
+     "scope_drift_pct": -23.0,
+     "total_energy_wh_before": 16019.8,
+     "total_energy_wh_after": 12329.8,
+     "total_duration_h_before": 165,
+     "total_duration_h_after": 138
+    }
+   }
+  },
+  {
+   "stage": "validate",
+   "attempt": 3,
+   "ok": false,
+   "failure": {
+    "kind": "validation",
+    "conflicts": [
+     "volume:B2",
+     "supply:T2",
+     "energy:hauler"
+    ],
+    "hint": "B2 (borrow_strip) plans 120 of 360 m3: plan the remaining 240 m3 of B2 as excavator tasks in m3 (split above 60 m3) instead of shrinking the work; keep the m2 stripping only for the top 0.2 m. A haul cannot start before its material is dug: make T2 wait for the digs that supply it (every dig waits for it now: put the digs first); a haul part may wait for only the dig parts that remove what it moves, so split hauls to keep both chains short. Battery budgets are exceeded per robot type: hauler tasks need at least 5,338 Wh, 5,320 Wh of work and 18 Wh of travel, but its 1 robot carries only 3,000 Wh combined; reduce the quantities if the brief allows it or move work to other robot types.",
+    "details": [
+     "B2 (borrow_strip): dimensions 100 x 6 x 0.6 m = 360 m3 of excavation; excavator tasks cover 120 m3 (33 %): T12 600 m2 counts 120 m3 at 0.2 m",
+     "T2 hauls 50 m3 for B1 (protective berm) but waits for no excavation, so it could start before any material is dug",
+     "hauler tasks need at least 5,338 Wh, 18 Wh of it travel; its 1 robot carries 3,000 Wh"
+    ]
+   },
+   "duration_s": 0.006449458887800574,
+   "usage": null,
+   "message": null,
+   "payload": {
+    "advisories": [
+     "estimate:T2: model said 8 h / 800 Wh, rate model gives 5 h / 350 Wh (-56%)",
+     "estimate:T4: model said 7 h / 720 Wh, rate model gives 4 h / 315 Wh (-56%)",
+     "estimate:T5: model said 7 h / 720 Wh, rate model gives 4 h / 315 Wh (-56%)",
+     "estimate:T6: model said 7 h / 720 Wh, rate model gives 4 h / 315 Wh (-56%)",
+     "estimate:T7: model said 7 h / 720 Wh, rate model gives 4 h / 315 Wh (-56%)",
+     "estimate:T8: model said 7 h / 720 Wh, rate model gives 4 h / 315 Wh (-56%)",
+     "estimate:T9: model said 7 h / 720 Wh, rate model gives 4 h / 315 Wh (-56%)",
+     "estimate:T10: model said 7 h / 720 Wh, rate model gives 4 h / 315 Wh (-56%)",
+     "estimate:T11: model said 7 h / 720 Wh, rate model gives 4 h / 315 Wh (-56%)",
+     "volume:B2: its dimensions give 360 m3 (100 x 6 x 0.6 m) but its excavation tasks (T12 600 m2 counts 120 m3 at 0.2 m) total only 120 m3 (33 %)",
+     "supply:B2: its hauls (T4 45 m3, T5 45 m3, T6 45 m3, T7 45 m3 and 4 more) move 360 m3, more than the 70 m3 the digs before them remove (B1 protective berm: T3; an m2 strip counts 0.2 m)"
+    ]
+   }
+  },
+  {
+   "stage": "repair",
+   "attempt": 4,
+   "ok": true,
+   "failure": null,
+   "duration_s": 83.29903966700658,
+   "usage": {
+    "model": "nvidia/Nemotron-3-Ultra-550b-a55b",
+    "input_tokens": 9433,
+    "output_tokens": 19898,
+    "latency_s": 83.28531970782205
+   },
+   "message": "28 tasks",
+   "payload": {
+    "advisories": [],
+    "rate_model": true,
+    "grounded": 28,
+    "diff": {
+     "added": [],
+     "removed": [
+      "T8",
+      "T9",
+      "T10",
+      "T11"
+     ],
+     "changed": [
+      {
+       "task": "T2",
+       "field": "duration_h",
+       "before": 5,
+       "after": 8
+      },
+      {
+       "task": "T2",
+       "field": "energy_wh",
+       "before": 350.0,
+       "after": 800.0
+      },
+      {
+       "task": "T2",
+       "field": "robot_type",
+       "before": "hauler",
+       "after": "excavator"
+      },
+      {
+       "task": "T4",
+       "field": "duration_h",
+       "before": 4,
+       "after": 9
+      },
+      {
+       "task": "T4",
+       "field": "energy_wh",
+       "before": 315.0,
+       "after": 960.0
+      },
+      {
+       "task": "T4",
+       "field": "quantity",
+       "before": 45.0,
+       "after": 60.0
+      },
+      {
+       "task": "T4",
+       "field": "robot_type",
+       "before": "hauler",
+       "after": "excavator"
+      },
+      {
+       "task": "T5",
+       "field": "duration_h",
+       "before": 4,
+       "after": 9
+      },
+      {
+       "task": "T5",
+       "field": "energy_wh",
+       "before": 315.0,
+       "after": 960.0
+      },
+      {
+       "task": "T5",
+       "field": "quantity",
+       "before": 45.0,
+       "after": 60.0
+      },
+      {
+       "task": "T5",
+       "field": "robot_type",
+       "before": "hauler",
+       "after": "excavator"
+      },
+      {
+       "task": "T6",
+       "field": "duration_h",
+       "before": 4,
+       "after": 9
+      },
+      {
+       "task": "T6",
+       "field": "energy_wh",
+       "before": 315.0,
+       "after": 960.0
+      },
+      {
+       "task": "T6",
+       "field": "quantity",
+       "before": 45.0,
+       "after": 60.0
+      },
+      {
+       "task": "T6",
+       "field": "robot_type",
+       "before": "hauler",
+       "after": "excavator"
+      },
+      {
+       "task": "T7",
+       "field": "duration_h",
+       "before": 4,
+       "after": 9
+      },
+      {
+       "task": "T7",
+       "field": "energy_wh",
+       "before": 315.0,
+       "after": 960.0
+      },
+      {
+       "task": "T7",
+       "field": "quantity",
+       "before": 45.0,
+       "after": 60.0
+      },
+      {
+       "task": "T7",
+       "field": "robot_type",
+       "before": "hauler",
+       "after": "excavator"
+      },
+      {
+       "task": "T8",
+       "from": "T12",
+       "field": "after",
+       "before": [
+        "T11 (removed)"
+       ],
+       "after": [
+        "T7"
+       ]
+      },
+      {
+       "task": "T9",
+       "from": "T13",
+       "field": "after",
+       "before": [
+        "T3",
+        "T4"
+       ],
+       "after": [
+        "T8"
+       ]
+      },
+      {
+       "task": "T11",
+       "from": "T15",
+       "field": "after",
+       "before": [
+        "T10",
+        "T5"
+       ],
+       "after": [
+        "T10"
+       ]
+      },
+      {
+       "task": "T14",
+       "from": "T18",
+       "field": "after",
+       "before": [
+        "T13",
+        "T6"
+       ],
+       "after": [
+        "T13"
+       ]
+      },
+      {
+       "task": "T16",
+       "from": "T20",
+       "field": "after",
+       "before": [
+        "T15",
+        "T7"
+       ],
+       "after": [
+        "T15"
+       ]
+      },
+      {
+       "task": "T19",
+       "from": "T23",
+       "field": "after",
+       "before": [
+        "T18",
+        "T8 (removed)"
+       ],
+       "after": [
+        "T18"
+       ]
+      },
+      {
+       "task": "T21",
+       "from": "T25",
+       "field": "after",
+       "before": [
+        "T20",
+        "T9 (removed)"
+       ],
+       "after": [
+        "T20"
+       ]
+      },
+      {
+       "task": "T24",
+       "from": "T28",
+       "field": "after",
+       "before": [
+        "T10 (removed)",
+        "T23"
+       ],
+       "after": [
+        "T23"
+       ]
+      },
+      {
+       "task": "T26",
+       "from": "T30",
+       "field": "after",
+       "before": [
+        "T11 (removed)",
+        "T25"
+       ],
+       "after": [
+        "T25"
+       ]
+      }
+     ],
+     "renumbered": [
+      {
+       "from": "T12",
+       "to": "T8"
+      },
+      {
+       "from": "T13",
+       "to": "T9"
+      },
+      {
+       "from": "T14",
+       "to": "T10"
+      },
+      {
+       "from": "T15",
+       "to": "T11"
+      },
+      {
+       "from": "T16",
+       "to": "T12"
+      },
+      {
+       "from": "T17",
+       "to": "T13"
+      },
+      {
+       "from": "T18",
+       "to": "T14"
+      },
+      {
+       "from": "T19",
+       "to": "T15"
+      },
+      {
+       "from": "T20",
+       "to": "T16"
+      },
+      {
+       "from": "T21",
+       "to": "T17"
+      },
+      {
+       "from": "T22",
+       "to": "T18"
+      },
+      {
+       "from": "T23",
+       "to": "T19"
+      },
+      {
+       "from": "T24",
+       "to": "T20"
+      },
+      {
+       "from": "T25",
+       "to": "T21"
+      },
+      {
+       "from": "T26",
+       "to": "T22"
+      },
+      {
+       "from": "T27",
+       "to": "T23"
+      },
+      {
+       "from": "T28",
+       "to": "T24"
+      },
+      {
+       "from": "T29",
+       "to": "T25"
+      },
+      {
+       "from": "T30",
+       "to": "T26"
+      },
+      {
+       "from": "T31",
+       "to": "T27"
+      },
+      {
+       "from": "T32",
+       "to": "T28"
+      }
+     ],
+     "per_type_energy_before": {
+      "compactor": 2100.0,
+      "excavator": 4560.0,
+      "hauler": 5319.6,
+      "surveyor": 350.2
+     },
+     "per_type_energy_after": {
+      "compactor": 2100.0,
+      "excavator": 9200.0,
+      "hauler": 2449.6,
+      "surveyor": 350.2
+     },
+     "scope_drift_pct": 14.4,
+     "total_energy_wh_before": 12329.8,
+     "total_energy_wh_after": 14099.8,
+     "total_duration_h_before": 138,
+     "total_duration_h_after": 145
+    }
+   }
+  },
+  {
+   "stage": "validate",
+   "attempt": 4,
+   "ok": false,
+   "failure": {
+    "kind": "validation",
+    "conflicts": [
+     "energy:excavator"
+    ],
+    "hint": "Battery budgets are exceeded per robot type: excavator tasks need at least 9,218 Wh, 9,200 Wh of work and 18 Wh of travel, but its 1 robot carries only 5,000 Wh combined; reduce the quantities if the brief allows it or move work to other robot types.",
+    "details": [
+     "excavator tasks need at least 9,218 Wh, 18 Wh of it travel; its 1 robot carries 5,000 Wh"
+    ]
+   },
+   "duration_s": 0.0062111669685691595,
+   "usage": null,
+   "message": null,
+   "payload": {
+    "suggestions": [
+     {
+      "kind": "raise_battery",
+      "detail": "EX1 needs 9,250 Wh (has 5,000 Wh): feasible at 149 h",
+      "makespan_h": 149,
+      "robot_type": "excavator",
+      "robot_id": "EX1",
+      "battery_wh": 9250.0,
+      "horizon_h": null,
+      "verified": true
+     },
+     {
+      "kind": "add_robot",
+      "detail": "one more excavator (EX2, 5,000 Wh like EX1): feasible at 148 h",
+      "makespan_h": 148,
+      "robot_type": "excavator",
+      "robot_id": "EX2",
+      "battery_wh": 5000.0,
+      "horizon_h": null,
+      "verified": true
+     }
+    ]
+   }
+  }
+ ],
+ "repairs": 3,
+ "success": false,
+ "failure": {
+  "kind": "validation",
+  "conflicts": [
+   "energy:excavator"
+  ],
+  "hint": "Battery budgets are exceeded per robot type: excavator tasks need at least 9,218 Wh, 9,200 Wh of work and 18 Wh of travel, but its 1 robot carries only 5,000 Wh combined; reduce the quantities if the brief allows it or move work to other robot types.",
+  "details": [
+   "excavator tasks need at least 9,218 Wh, 18 Wh of it travel; its 1 robot carries 5,000 Wh"
+  ]
+ },
+ "suggestions": [
+  {
+   "kind": "raise_battery",
+   "detail": "EX1 needs 9,250 Wh (has 5,000 Wh): feasible at 149 h",
+   "makespan_h": 149,
+   "robot_type": "excavator",
+   "robot_id": "EX1",
+   "battery_wh": 9250.0,
+   "horizon_h": null,
+   "verified": true
+  },
+  {
+   "kind": "add_robot",
+   "detail": "one more excavator (EX2, 5,000 Wh like EX1): feasible at 148 h",
+   "makespan_h": 148,
+   "robot_type": "excavator",
+   "robot_id": "EX2",
+   "battery_wh": 5000.0,
+   "horizon_h": null,
+   "verified": true
+  }
+ ]
+}
