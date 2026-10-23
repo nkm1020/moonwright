@@ -10,6 +10,12 @@
  * Phase 3c additions: Structure.operations (the phases the brief asks for), Suggestion /
  * PlanResult.suggestions (solver-proven advice when no repair can work; the final failed step
  * carries the same list in its payload) and the `volume:<structure>` advisory.
+ *
+ * Phase 3d: RepairDiff.renumbered and changed[].from (the backend pairs tasks across a
+ * renumbering), `name` / `structure` / `unit` as diffed fields, BudgetRow on a failed schedule
+ * step's payload (the numbers behind its energy core). Phase 3e: the `volume:<structure>`
+ * validation conflict, `schema:json` / `schema:shape` for rejected model answers, and the
+ * `min_<dimension>_m` structure extras (the smallest size a brief allows).
  */
 
 // ------------------------------------------------------------------ F1 requirements
@@ -53,7 +59,12 @@ export const OPERATION_LABELS: Record<Operation, string> = {
 
 /** Extra numeric keys (diameter_m, length_m, width_m, depth_m, height_m, thickness_m, and
  *  trench_width_m / trench_depth_m for the key trench under a berm) are the structure's
- *  dimensions; `operations` is not one (format.ts NON_DIMENSION_KEYS skips it). */
+ *  dimensions; `operations` is not one (format.ts NON_DIMENSION_KEYS skips it). A brief that
+ *  lets the work shrink ("any diameter between 12 m and 20 m") adds `min_<dimension>_m`
+ *  beside the regular key (min_diameter_m, min_depth_m, min_length_m, min_width_m,
+ *  min_height_m: the smallest size the brief allows, phase 3e); the validator's volume check
+ *  takes its floor from them. They are dimensions like the others (editable, round-tripped to
+ *  POST /plan); format.ts minDimension / dimPhrase read them ("min diameter 12 m"). */
 export interface Structure {
   id: string;
   type: string;
@@ -157,7 +168,9 @@ export interface Failure {
   details: string[];
 }
 
-/** Conflict id prefixes and what they mean (for chips / tooltips). */
+/** Conflict id prefixes and what they mean (for chips / tooltips). A few ids are complete
+ *  words rather than prefixes (`schema:json`, `schema:shape`): look a conflict up through
+ *  conflictMeaning (format.ts), which tries the whole id before its prefix. */
 export const CONFLICT_PREFIXES: Record<string, string> = {
   precedence: "precedence edge cannot be honoured",
   energy: "battery budget exceeded",
@@ -170,7 +183,10 @@ export const CONFLICT_PREFIXES: Record<string, string> = {
   cycle: "precedence cycle",
   energy_task: "single task exceeds every battery",
   horizon_path: "critical path exceeds the horizon",
-  schema: "LLM output failed schema validation",
+  schema: "model answer failed schema validation",
+  /** phase 3e: a rejected model answer, by what went wrong on its asks */
+  "schema:json": "answer cut off or not valid JSON",
+  "schema:shape": "answer did not match the schema",
   missing: "required task missing from the graph",
   unknown: "scheduled task not in the graph",
   duration: "entry length differs from task duration",
@@ -179,6 +195,8 @@ export const CONFLICT_PREFIXES: Record<string, string> = {
   scope: "structure lacks a required phase or lost every task",
   locked: "task underway at the event redefined by the repair",
   quantity: "physical task without a priced quantity",
+  /** phase 3e: the plan's m³ fall below 70 % of the smallest volume the dimensions allow */
+  volume: "planned volume below the structure's dimensions",
 };
 
 export function conflictPrefix(conflict: string): string {
@@ -258,24 +276,66 @@ export interface TaskGraphPayload {
   grounded: number;
 }
 
-export type DiffField = "duration_h" | "energy_wh" | "quantity" | "robot_type" | "zone" | "after";
+/** The task fields a repair diff compares (backend loop.py DIFF_FIELDS); `name`, `structure`
+ *  and `unit` arrived in phase 3d (a recording made before carries only the other six). */
+export type DiffField =
+  | "name"
+  | "duration_h"
+  | "energy_wh"
+  | "quantity"
+  | "robot_type"
+  | "zone"
+  | "structure"
+  | "unit"
+  | "after";
 
 /** Short words for the diff chips ("T4 energy 4,000 → 2,100 Wh"). */
 export const DIFF_FIELD_LABELS: Record<DiffField, string> = {
+  name: "name",
   duration_h: "duration",
   energy_wh: "energy",
   quantity: "quantity",
   robot_type: "robot type",
   zone: "zone",
+  structure: "structure",
+  unit: "unit",
   after: "after",
 };
 
+/** One changed field of a task the backend paired across the repair. `task` is the id in the
+ *  answer (the after graph); `from` the id the task had in the graph the repair answered,
+ *  present only when the task was renumbered. An `after` row's `before` list is written in the
+ *  answer's ids (renumbering applied) and a predecessor that no longer exists reads
+ *  "T2 (removed)"; its `after` list is the answer's own. */
+export interface DiffChange {
+  task: string;
+  from?: string;
+  field: DiffField;
+  before: unknown;
+  after: unknown;
+}
+
+/** One id the repair renumbered: the task kept its work (name and slot) under a new id. */
+export interface DiffRenumbering {
+  from: string;
+  to: string;
+}
+
 /** Added to a `repair` step payload (`diff`) when the answer validated: what the model
- *  changed relative to the graph the repair answered. */
+ *  changed relative to the graph the repair answered.
+ *
+ *  Phase 3d recordings pair the two graphs before diffing them (same name and slot, a unique
+ *  name, a unique robot type / zone / structure / unit slot, a kept id): `added` / `removed`
+ *  are the truly unmatched ids, `renumbered` lists every paired task whose id changed (always
+ *  present, [] when none) and `changed` rows carry `from` for those. A recording made before
+ *  (no `renumbered` key) diffed per id, so a renumbering there reads as a cascade of field
+ *  changes and is only ever inferred (format.ts describeRepairDiff). */
 export interface RepairDiff {
   added: string[];
   removed: string[];
-  changed: { task: string; field: DiffField; before: unknown; after: unknown }[];
+  /** absent in recordings older than phase 3d */
+  renumbered?: DiffRenumbering[];
+  changed: DiffChange[];
   per_type_energy_before: Record<string, number>;
   per_type_energy_after: Record<string, number>;
   /** signed % change of total energy_wh (negative = the repair re-scoped work away) */
@@ -327,6 +387,32 @@ export interface SchedulePayload {
   verified: true;
   verification: VerificationReceipt;
 }
+
+/**
+ * The numbers behind the `energy:<robot>` conflicts of a failed `schedule` step (backend
+ * schedule.py budget_rows), exact Wh floats (the hint quotes them rounded: "9,930 Wh").
+ * kind "type": the type's work fits the pool of its robots' batteries but no split of it fits
+ * the single batteries (or, when demanded_wh > budget_wh, it exceeds even the pool): `robots`
+ * is every robot of the type, `budget_wh` their batteries combined. kind "robot": the tasks
+ * only that robot can run (locked to it, or it is the only robot of its type) exceed its
+ * battery. `travel_wh` is the transit allowance inside `demanded_wh`. Rows come in the order
+ * the conflicts first name them.
+ */
+export interface BudgetRow {
+  kind: "type" | "robot";
+  subject: string;
+  robots: string[];
+  budget_wh: number;
+  demanded_wh: number;
+  travel_wh: number;
+}
+
+/** Payload of a `schedule` step with ok=false (phase 3d): `budget` is present only when the
+ *  verdict names energy:<robot> conflicts; the final failed step of a failed run adds the
+ *  advice (SuggestionsPayload). Inside ReplanRecord.after.steps it also carries `offset_h` and
+ *  `time_base: "relative"` (the rows themselves have no time base). Read it through
+ *  stepBudget. */
+export type BudgetPayload = ({ budget?: BudgetRow[] } & Partial<SuggestionsPayload>) | null;
 
 // ------------------------------------------------------------------ F5 -> advice
 /** extend_horizon: a later deadline; add_robot: one more robot of a type; raise_battery: one
@@ -480,11 +566,48 @@ export function lastReceipt(steps: LoopStep[]): { step: LoopStep; receipt: Verif
   return null;
 }
 
-/** The diff of a validated repair answer. */
+/** The diff of a validated repair answer. A malformed `renumbered` list is dropped (the diff
+ *  then reads like a recording older than phase 3d). */
 export function repairDiff(step: LoopStep): RepairDiff | null {
   if (step.stage !== "repair" || !step.ok || !step.payload) return null;
   const d = step.payload.diff;
-  return isRecord(d) && Array.isArray(d.changed) ? (d as unknown as RepairDiff) : null;
+  if (!isRecord(d) || !Array.isArray(d.changed) || !Array.isArray(d.added) || !Array.isArray(d.removed)) return null;
+  const diff = d as unknown as RepairDiff;
+  if (d.renumbered === undefined) return diff;
+  const ok =
+    Array.isArray(d.renumbered) &&
+    d.renumbered.every((r) => isRecord(r) && typeof r.from === "string" && typeof r.to === "string");
+  if (ok) return diff;
+  const copy: RepairDiff = { ...diff };
+  delete copy.renumbered;
+  return copy;
+}
+
+/** True for a diff the backend computed by pairing tasks (phase 3d): `renumbered` is present,
+ *  so added / removed / renumbered / changed can be read verbatim. */
+export function isMatchedDiff(diff: RepairDiff): diff is RepairDiff & { renumbered: DiffRenumbering[] } {
+  return Array.isArray(diff.renumbered);
+}
+
+function isBudgetRow(v: unknown): v is BudgetRow {
+  if (!isRecord(v)) return false;
+  return (
+    (v.kind === "type" || v.kind === "robot") &&
+    typeof v.subject === "string" &&
+    Array.isArray(v.robots) &&
+    v.robots.every((r) => typeof r === "string") &&
+    typeof v.budget_wh === "number" &&
+    typeof v.demanded_wh === "number" &&
+    typeof v.travel_wh === "number"
+  );
+}
+
+/** The budget rows of a failed `schedule` step (the numbers behind its energy core); [] for
+ *  any other step and for a recording made before the backend attached them. */
+export function stepBudget(step: LoopStep): BudgetRow[] {
+  if (step.stage !== "schedule" || step.ok || !step.payload) return [];
+  const b = step.payload.budget;
+  return Array.isArray(b) ? b.filter(isBudgetRow) : [];
 }
 
 /** Advisories of a taskgraph / repair / validate step (warnings, never conflicts). */

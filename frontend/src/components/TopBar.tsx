@@ -1,6 +1,7 @@
 "use client";
 import { useState } from "react";
 import type { Health } from "@/lib/types";
+import { plural } from "@/lib/format";
 import { Button, Dot, IconCheck, Spinner, cx } from "./Section";
 
 export type FlowStage = "brief" | "requirements" | "plan" | "simulate" | "robustness";
@@ -77,8 +78,13 @@ export function TopBar({
     <header className="sticky top-0 z-30 border-b border-line bg-surface">
       {/* one row from xl (brand [+ tagline] | stepper | demo + health); below xl the stepper
           takes its own centred row. The tagline shows only where the row has room for all of
-          it (md to lg, and from 2xl: the recording width); at xl the stepper, the three sample
-          buttons and the backend badge fill the row, and an ellipsis is worse than no tagline */}
+          it, measured: from lg to xl (the stepper on its own row leaves the brand ~460 px) and
+          from 1400 px, where the row reaches its 1,400 px cap (1440 and the 1536 recording
+          width leave the brand 340-365 px whatever the backend badge says, for a 238 px
+          tagline). Between 1280 and 1399 px the stepper, the three sample buttons and the
+          badge fill the row, and an ellipsis is worse than no tagline (the two ranges never
+          overlap: Tailwind emits min-[1400px] before the named breakpoints, so an xl:hidden
+          would win over it) */}
       <div className="mx-auto flex w-full max-w-[1400px] flex-wrap items-center gap-x-2.5 gap-y-2 px-4 py-2 md:px-6 lg:px-8">
         <div className="flex min-w-0 flex-1 basis-0 items-baseline gap-2.5">
           <h1
@@ -88,7 +94,7 @@ export function TopBar({
             <a href="#top">Moonwright</a>
           </h1>
           <span
-            className="hidden min-w-0 truncate text-[12.5px] text-muted md:inline xl:hidden 2xl:inline"
+            className="hidden min-w-0 truncate text-[12.5px] text-muted lg:max-xl:inline min-[1400px]:inline"
             title="Verified multi-robot planning for lunar construction"
           >
             verified multi-robot planning for the Moon
@@ -120,7 +126,7 @@ export function TopBar({
                       state === "upcoming" && "border-transparent text-dim",
                     )}
                   >
-                    <span className="flex size-3.5 items-center justify-center font-mono text-[10px] tabular-nums">
+                    <span className="flex size-3.5 items-center justify-center font-mono text-[11px] tabular-nums">
                       {state === "done" ? <IconCheck className="size-2.5" /> : i + 1}
                     </span>
                     <span className="hidden sm:inline">{s.label}</span>
@@ -175,6 +181,14 @@ function IconPlay({ className }: { className?: string }) {
 const badgeClass =
   "inline-flex h-7 items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 text-xs";
 
+/** The model routing of a live backend (backend llm/tokenfactory.py), for the badge tooltip. */
+const LIVE_ROUTING =
+  "Nemotron 3.5 Lightning structures the brief, Nemotron 3 Ultra proposes the task graph and repairs it, Nemotron 3 Super writes the explanation";
+
+/** The backend's address shows only in a development build: the product copy names no host,
+ *  port or path. */
+const SHOW_ADDRESS = process.env.NODE_ENV !== "production";
+
 function BackendBadge({
   health,
   status,
@@ -186,9 +200,10 @@ function BackendBadge({
   apiBase: string;
   onRetry: () => void;
 }) {
+  const at = SHOW_ADDRESS ? ` at ${apiBase}` : "";
   if (status === "checking") {
     return (
-      <span className={cx(badgeClass, "border-white/10 text-muted")} title={`GET ${apiBase}/health`}>
+      <span className={cx(badgeClass, "border-white/10 text-muted")} title={`Asking the planning backend${at} whether it is up`}>
         <Spinner className="size-3" />
         checking backend
       </span>
@@ -199,7 +214,7 @@ function BackendBadge({
       <button
         type="button"
         onClick={onRetry}
-        title={`No backend answered at ${apiBase} (GET /health). The recorded demos work without one; structuring and planning need it. Click to retry.`}
+        title={`No planning backend answered${at}. The recorded demos work without one; structuring and planning need it. Click to retry.`}
         className={cx(badgeClass, "border-white/15 bg-white/5 text-muted hover:bg-white/10 hover:text-fg")}
       >
         <Dot color="var(--fail)" />
@@ -208,11 +223,12 @@ function BackendBadge({
     );
   }
   const live = health.llm !== "fixture";
+  const examples = plural(health.examples, "example brief");
   if (!live) {
     return (
       <span
         className={cx(badgeClass, "border-white/15 bg-white/5 text-muted")}
-        title={`Moonwright ${health.version} at ${apiBase} replays recorded Nemotron answers; CP-SAT, the simulator and Monte Carlo run live · ${health.examples} example briefs`}
+        title={`Moonwright ${health.version}${at} replays recorded Nemotron answers; CP-SAT, the simulator and Monte Carlo run live · ${examples}`}
       >
         <Dot color="var(--ok)" />
         recorded answers
@@ -222,7 +238,7 @@ function BackendBadge({
   return (
     <span
       className={cx(badgeClass, "border-ok/30 bg-ok/10 text-ok")}
-      title={`Moonwright ${health.version} at ${apiBase} · Nebius Token Factory · Nemotron 3.5 Lightning structures the brief, Nemotron 3 Ultra proposes and repairs the task graph, Nemotron 3 Super writes the explanation · ${health.examples} example briefs`}
+      title={`Moonwright ${health.version}${at} · Nemotron on Nebius Token Factory: ${LIVE_ROUTING} · ${examples}`}
     >
       <Dot color="var(--ok)" />
       Nemotron live

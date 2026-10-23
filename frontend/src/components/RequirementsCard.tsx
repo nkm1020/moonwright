@@ -1,12 +1,15 @@
 "use client";
 /**
  * Step 02: what the model understood from the brief, editable. The site is drawn as a tiny
- * map (grid, zone circles, depot) so geometry mistakes are visible at a glance; every
- * structure shows the operations the brief asks for as chips (toggled from the validator's
- * closed vocabulary) and reads as prose ("20 m diameter · 0.4 m deep") with the task-graph
- * quantities under it once a plan exists; the structuring stage's notes (operations recovered
- * from a scrambled answer, a structure without dimensions, an operation the fleet cannot
- * staff, zone geometry) head the card; validation mirrors the backend's pydantic limits.
+ * map (grid, zone circles, depot) so geometry mistakes are visible at a glance, with red kept
+ * for what the backend would reject (a zone centre or the depot off the grid, a radius out of
+ * bounds) and a muted note for a disc that merely reaches past the edge; every structure shows
+ * the operations the brief asks for as chips (toggled from the validator's closed vocabulary)
+ * and reads as prose ("20 m diameter · min diameter 12 m · 0.4 m deep", the smallest size a
+ * brief allows editable like any dimension) with the task graph's work under it once a plan
+ * exists, one figure per operation; the structuring stage's notes (operations recovered from a
+ * scrambled answer, a structure without dimensions, an operation the fleet cannot staff, zone
+ * geometry) head the card; validation mirrors the backend's pydantic limits.
  */
 import { useMemo, useState, type ReactNode } from "react";
 import type { LoopStep, Operation, Requirements, Robot, Site, Structure, Task, Unit } from "@/lib/types";
@@ -15,6 +18,7 @@ import { ROBOT_TYPE_COLORS, robotTypeColor, zoneColor } from "@/lib/palette";
 import {
   OPERATIONS,
   dimLabel,
+  dimPhrase,
   fmtCompact,
   fmtHorizon,
   fmtHours,
@@ -22,6 +26,7 @@ import {
   fmtSeconds,
   fmtWh,
   isOperation,
+  minDimension,
   operationLabel,
   plural,
   modelDisplayName,
@@ -63,6 +68,10 @@ export interface RequirementsCardProps {
   /** Additive: the brief in the textarea is not the one these requirements were structured
    *  from (another example loaded, or the text edited): planning waits for a re-structure. */
   staleBrief?: boolean;
+  /** Additive: why this backend cannot plan the card at all (a recorded-answers backend with no
+   *  recording of the brief the card came from); the plan button is off and the reason shows
+   *  above it. Null or absent: planning is possible. */
+  planBlocked?: string | null;
 }
 
 /** Keys a dimension can never take: the identity fields and the operations list. */
@@ -76,6 +85,13 @@ const COMMON_DIMENSIONS = [
   "thickness_m",
   "trench_width_m",
   "trench_depth_m",
+  // the smallest size a brief allows ("any diameter between 12 m and 20 m"): the planner may
+  // shrink the work down to it (backend rates.py Shape.floor_m3)
+  "min_diameter_m",
+  "min_length_m",
+  "min_width_m",
+  "min_depth_m",
+  "min_height_m",
 ];
 /** One-line caption of the structures group, shown once above the rows. */
 const OPERATIONS_CAPTION =
@@ -153,57 +169,96 @@ const DIM_PHRASES: Record<string, (v: string) => string> = {
   trench_depth_m: (v) => `trench ${v} m deep`,
 };
 
-/** "20 m diameter · 0.4 m deep · 0.3 m thick" from a structure's numeric extras; a berm's key
- *  trench reads as one phrase, "trench 1.2 m wide × 0.8 m deep", when both its numbers exist. */
+/** "20 m diameter · min diameter 12 m · 0.4 m deep · 0.3 m thick" from a structure's numeric
+ *  extras; a berm's key trench reads as one phrase, "trench 1.2 m wide × 0.8 m deep", when both
+ *  its numbers exist; the smallest size a brief allows (min_<dimension>_m) follows the
+ *  dimension it bounds. */
 export function structureSummary(s: Structure): string {
   const dims = structureDims(s);
-  const trenchWidth = dims.find(([k]) => k === "trench_width_m")?.[1];
-  const trenchDepth = dims.find(([k]) => k === "trench_depth_m")?.[1];
+  const byKey = new Map(dims);
+  const trenchWidth = byKey.get("trench_width_m");
+  const trenchDepth = byKey.get("trench_depth_m");
   const trenchPair = trenchWidth !== undefined && trenchDepth !== undefined;
   let trenchDone = false;
   const parts: string[] = [];
   for (const [k, v] of dims) {
-    const num = fmtNum(v, 2);
+    const bounds = minDimension(k);
+    if (bounds) {
+      // printed right after the dimension it bounds; on its own when that one is missing
+      if (!byKey.has(bounds)) parts.push(dimPhrase(k, v) ?? `${fmtNum(v, 2)} ${k}`);
+      continue;
+    }
     if (trenchPair && (k === "trench_width_m" || k === "trench_depth_m")) {
       if (!trenchDone) parts.push(`trench ${fmtNum(trenchWidth, 2)} m wide × ${fmtNum(trenchDepth, 2)} m deep`);
       trenchDone = true;
       continue;
     }
+    const num = fmtNum(v, 2);
     const phrase = DIM_PHRASES[k];
-    if (phrase) {
-      parts.push(phrase(num));
-      continue;
+    if (phrase) parts.push(phrase(num));
+    else {
+      const m = /^(.*)_(m|m2|m3|cm|mm|kg|t|wh|kwh|h|deg)$/i.exec(k);
+      const base = (m ? m[1] : k).replace(/_/g, " ");
+      parts.push(m ? `${num} ${m[2]} ${base}` : `${num} ${base}`);
     }
-    const m = /^(.*)_(m|m2|m3|cm|mm|kg|t|wh|kwh|h|deg)$/i.exec(k);
-    const base = (m ? m[1] : k).replace(/_/g, " ");
-    parts.push(m ? `${num} ${m[2]} ${base}` : `${num} ${base}`);
+    const least = byKey.get(`min_${k}`);
+    const floor = least === undefined ? null : dimPhrase(`min_${k}`, least);
+    if (floor) parts.push(floor);
   }
   return parts.join(" · ");
 }
 
 const UNIT_LABELS: Record<Unit, string> = { m3: "m³", m2: "m²", m: "m", ea: "ea" };
 
-/** "6 tasks · 80 h · 8,058 Wh · excavator 2 × 141.4 m³ · compactor 2 × 353.4 m² · surveyor
- *  2 × 706.9 m²" for the tasks of one structure: quantities grouped by robot type and unit,
- *  equal quantities read as a count (two halves of a pad are not summed into a figure larger
- *  than the pad), unequal ones summed. */
+/** The operation a task performs, read as the validator reads it (backend validate.py
+ *  task_phases): by its robot type, and an excavator by its unit (m³ or m of cut is
+ *  excavation, m² is grading); null for a robot type outside the closed vocabulary. */
+export function taskOperation(t: Task): Operation | null {
+  switch (t.robot_type) {
+    case "surveyor":
+      return "survey";
+    case "hauler":
+      return "haul";
+    case "compactor":
+      return "compact";
+    case "printer":
+      return "sinter";
+    case "excavator":
+      return t.unit === "m2" ? "grade" : "excavate";
+    default:
+      return null;
+  }
+}
+
+/** "6 tasks · 80 h · 8,058 Wh · survey 2 × 706.9 m² · excavate 2 × 141.4 m³ · compact 2 ×
+ *  353.4 m²" for the tasks of one structure. Quantities are grouped by operation and unit in
+ *  work order, so excavated m³ and surveyed or compacted m² never add up into one figure;
+ *  equal quantities read as a count (two passes over a pad are not summed into an area larger
+ *  than the pad), unequal ones of one operation are summed. */
 export function structureWork(tasks: Task[]): string | null {
   if (tasks.length === 0) return null;
   const hours = tasks.reduce((a, t) => a + t.duration_h, 0);
   const wh = tasks.reduce((a, t) => a + t.energy_wh, 0);
-  const groups = new Map<string, { type: string; unit: Unit; quantities: number[] }>();
+  const groups = new Map<string, { label: string; rank: number; unit: Unit; quantities: number[] }>();
   for (const t of tasks) {
     if (t.quantity === null || !t.unit) continue;
-    const key = `${t.robot_type}|${t.unit}`;
-    const g = groups.get(key) ?? { type: t.robot_type, unit: t.unit, quantities: [] };
+    const op = taskOperation(t);
+    const key = `${op ?? t.robot_type}|${t.unit}`;
+    const g = groups.get(key) ?? {
+      label: op ? operationLabel(op) : t.robot_type,
+      rank: op ? OPERATIONS.indexOf(op) : OPERATIONS.length,
+      unit: t.unit,
+      quantities: [],
+    };
     g.quantities.push(t.quantity);
     groups.set(key, g);
   }
   const quantities = [...groups.values()]
-    .map(({ type, unit, quantities: qs }) => {
+    .sort((a, b) => a.rank - b.rank)
+    .map(({ label, unit, quantities: qs }) => {
       const same = qs.length > 1 && qs.every((q) => Math.abs(q - qs[0]) < 0.05);
       const figure = same ? `${qs.length} × ${fmtNum(qs[0], 1)}` : fmtNum(qs.reduce((a, q) => a + q, 0), 1);
-      return `${type} ${figure} ${UNIT_LABELS[unit]}`;
+      return `${label} ${figure} ${UNIT_LABELS[unit]}`;
     })
     .join(" · ");
   return `${plural(tasks.length, "task")} · ${fmtHours(hours, 1)} · ${fmtWh(wh)}${quantities ? ` · ${quantities}` : ""}`;
@@ -375,6 +430,7 @@ export function RequirementsCard({
   canRestructure,
   tasks,
   staleBrief = false,
+  planBlocked = null,
 }: RequirementsCardProps) {
   const problems = validateRequirements(value);
   const repairsOk = Number.isInteger(maxRepairs) && maxRepairs >= 0 && maxRepairs <= 10;
@@ -729,6 +785,14 @@ export function RequirementsCard({
           </div>
         )}
 
+        {planBlocked && !staleBrief && (
+          <div className="border-t border-line px-4 py-3 md:px-5">
+            <Notice tone="neutral" title="Planning these requirements needs a live backend">
+              {planBlocked}
+            </Notice>
+          </div>
+        )}
+
         <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-line px-4 py-3 md:px-5">
           <div className="flex flex-wrap items-center gap-3">
             <Field label="Repair rounds" className="w-24">
@@ -760,8 +824,12 @@ export function RequirementsCard({
               variant="primary"
               onClick={onPlan}
               loading={planning}
-              disabled={problems.length > 0 || !repairsOk || restructuring || staleBrief}
-              title={staleBrief ? "Re-structure the brief first: these requirements came from another brief" : undefined}
+              disabled={problems.length > 0 || !repairsOk || restructuring || staleBrief || Boolean(planBlocked)}
+              title={
+                staleBrief
+                  ? "Re-structure the brief first: these requirements came from another brief"
+                  : (planBlocked ?? undefined)
+              }
             >
               {planning ? "Planning…" : "Plan with these requirements"}
             </Button>
@@ -809,6 +877,52 @@ function SiteMap({ site, structures, notes }: { site: Site; structures: Structur
   const summary = `${gx} × ${gy} cells · ${plural(site.zones.length, "zone")}${
     site.depot ? ` · depot (${site.depot[0]}, ${site.depot[1]})` : " · no depot"
   }`;
+
+  // Label layout. A zone's id (and the structures it holds, one line below) sit on its centre,
+  // kept inside the map; when the depot sits on that spot the labels move beside the disc. The
+  // depot's own label takes the free side of its diamond: right, else left, else below.
+  const CHAR_W = 6.7; // 11 px Geist Mono
+  const depot = site.depot ? { x: px(site.depot[0]), y: py(site.depot[1]) } : null;
+  const clampY = (y: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, y));
+  type Box = { x0: number; x1: number; y0: number; y1: number };
+  const boxOf = (x: number, anchor: "start" | "middle" | "end", w: number, y0: number, y1: number): Box => {
+    const x0 = anchor === "start" ? x : anchor === "end" ? x - w : x - w / 2;
+    return { x0, x1: x0 + w, y0, y1 };
+  };
+  const overlaps = (a: Box, b: Box) => a.x0 < b.x1 && b.x0 < a.x1 && a.y0 < b.y1 && b.y0 < a.y1;
+  const zoneLabels = site.zones.map((z) => {
+    const held = (byZone.get(z.id) ?? []).join(" ");
+    const cx = px(z.center[0]);
+    const cy = py(z.center[1]);
+    const r = Math.max(z.radius * sx, 2);
+    const idY = held ? clampY(cy - 5, 8, H - 17) : clampY(cy, 8, H - 6);
+    const heldY = idY + 11;
+    const w = Math.max(z.id.length, held.length) * CHAR_W;
+    const bottom = (held ? heldY : idY) + 6;
+    let x = cx;
+    let anchor: "start" | "middle" | "end" = "middle";
+    if (depot && overlaps(boxOf(cx, "middle", w, idY - 6, bottom), { x0: depot.x - 6, x1: depot.x + 6, y0: depot.y - 6, y1: depot.y + 6 })) {
+      if (cx - r - 4 - w >= 0) {
+        x = cx - r - 4;
+        anchor = "end";
+      } else {
+        x = cx + r + 4;
+        anchor = "start";
+      }
+    }
+    return { id: z.id, held, x, anchor, idY, heldY, box: boxOf(x, anchor, w, idY - 6, bottom) };
+  });
+  const depotLabel = (() => {
+    if (!depot) return null;
+    const w = 5 * CHAR_W;
+    const free = (b: Box) => b.x0 >= 0 && b.x1 <= W && b.y1 <= H && !zoneLabels.some((l) => overlaps(l.box, b));
+    const y = clampY(depot.y, 8, H - 6);
+    const right = { x: depot.x + 7, y, anchor: "start" as const };
+    const left = { x: depot.x - 7, y, anchor: "end" as const };
+    if (free(boxOf(right.x, "start", w, y - 6, y + 6))) return right;
+    if (free(boxOf(left.x, "end", w, y - 6, y + 6))) return left;
+    return { x: depot.x, y: Math.min(H - 4, depot.y + 14), anchor: "middle" as const };
+  })();
   return (
     <figure className="shrink-0">
       <svg
@@ -829,10 +943,11 @@ function SiteMap({ site, structures, notes }: { site: Site; structures: Structur
           .map((v) => (
             <line key={`hy${v}`} x1={0} x2={W} y1={py(v)} y2={py(v)} stroke="rgba(255,255,255,0.06)" />
           ))}
-        {site.zones.map((z) => {
+        {site.zones.map((z, i) => {
           const color = zoneColor(z.id, zoneIds);
           const held = byZone.get(z.id) ?? [];
           const r = Math.max(z.radius * sx, 2);
+          const label = zoneLabels[i];
           return (
             <g key={z.id}>
               <title>{`${z.id} · centre (${z.center[0]}, ${z.center[1]}) · radius ${z.radius}${held.length ? ` · ${held.join(", ")}` : " · no structure"}`}</title>
@@ -847,9 +962,9 @@ function SiteMap({ site, structures, notes }: { site: Site; structures: Structur
                 strokeDasharray={bad.has(z.id) ? "3 2" : undefined}
               />
               <text
-                x={px(z.center[0])}
-                y={py(z.center[1]) - (held.length ? 4 : 0)}
-                textAnchor="middle"
+                x={label.x}
+                y={label.idY}
+                textAnchor={label.anchor}
                 dominantBaseline="central"
                 fontSize={11}
                 fontWeight={600}
@@ -860,37 +975,38 @@ function SiteMap({ site, structures, notes }: { site: Site; structures: Structur
               </text>
               {held.length > 0 && (
                 <text
-                  x={px(z.center[0])}
-                  y={py(z.center[1]) + 8}
-                  textAnchor="middle"
+                  x={label.x}
+                  y={label.heldY}
+                  textAnchor={label.anchor}
                   dominantBaseline="central"
                   fontSize={11}
                   fill="#9aa7b4"
                   fontFamily="var(--font-mono)"
                 >
-                  {held.join(" ")}
+                  {label.held}
                 </text>
               )}
             </g>
           );
         })}
-        {site.depot && (
+        {site.depot && depot && depotLabel && (
           <g>
             <title>{`depot (${site.depot[0]}, ${site.depot[1]})`}</title>
             <rect
-              x={px(site.depot[0]) - 4}
-              y={py(site.depot[1]) - 4}
+              x={depot.x - 4}
+              y={depot.y - 4}
               width={8}
               height={8}
-              transform={`rotate(45 ${px(site.depot[0])} ${py(site.depot[1])})`}
+              transform={`rotate(45 ${depot.x} ${depot.y})`}
               fill="#0b0f14"
               stroke="#e6edf3"
               strokeWidth={1.5}
             />
             <text
-              x={px(site.depot[0])}
-              y={Math.min(H - 4, py(site.depot[1]) + 14)}
-              textAnchor="middle"
+              x={depotLabel.x}
+              y={depotLabel.y}
+              textAnchor={depotLabel.anchor}
+              dominantBaseline={depotLabel.anchor === "middle" ? undefined : "central"}
               fontSize={11}
               fill="#9aa7b4"
               fontFamily="var(--font-mono)"
@@ -899,7 +1015,7 @@ function SiteMap({ site, structures, notes }: { site: Site; structures: Structur
             </text>
           </g>
         )}
-        <text x={4} y={13} fontSize={11} fill="#66727f" fontFamily="var(--font-mono)">
+        <text x={4} y={13} fontSize={11} fill="#7b8896" fontFamily="var(--font-mono)">
           N ↑
         </text>
       </svg>

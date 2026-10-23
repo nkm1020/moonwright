@@ -9,6 +9,7 @@ import {
   modelDisplayName,
   modelTitle,
   plural,
+  tidyProse,
   totalUsage,
 } from "@/lib/format";
 import { Badge, Card } from "./Section";
@@ -29,9 +30,11 @@ function writerModel(steps: LoopStep[]): string | null {
 }
 
 export function ExplanationCard({ plan }: ExplanationCardProps) {
+  // the model's words verbatim, its figures in the console's format ("4000 Wh" -> "4,000 Wh",
+  // "10 m3" -> "10 m³")
   const paragraphs = (plan.explanation ?? "")
     .split(/\n{2,}/)
-    .map((p) => p.trim())
+    .map((p) => tidyProse(p.trim()))
     .filter(Boolean);
   const usage = totalUsage(plan.steps);
   const schedule = plan.schedule;
@@ -89,7 +92,7 @@ export function ExplanationCard({ plan }: ExplanationCardProps) {
           {plan.task_graph?.notes && (
             <p className="mt-4 border-l-2 border-white/15 pl-3 text-xs leading-relaxed text-muted">
               <span className="font-medium text-fg/80">Planner notes. </span>
-              {plan.task_graph.notes}
+              {tidyProse(plan.task_graph.notes)}
             </p>
           )}
         </div>

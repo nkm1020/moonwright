@@ -10,13 +10,14 @@
  *
  * Variants: `trace` is the compact block under the core block of the final failed step (no
  * footer); `outcome` is the card of a failed plan's verdict column: the heading row, the best
- * proven change as the one big figure ("86 h · later deadline · 26 h past the 60 h deadline"),
- * the rows and the footer, on the raised card surface so the way out outranks the red verdict
- * next to it; `replan` is compact with the time-base note of a failed replan (its hours are
- * absolute simulator time against the brief's deadline). An empty list renders nothing. The
- * block takes the verified green only when at least one change was proved.
+ * proven change as the one big figure ("86 h", "deadline that works · 26 h later"), the way
+ * back into the loop right under it (the console's apply buttons, the first one primary), the
+ * rows and the footer, on the raised card surface with a green border, so the way out outranks
+ * the red verdict next to it; `replan` is compact with the time-base note of a failed replan
+ * (its hours are absolute simulator time against the brief's deadline). An empty list renders
+ * nothing. The block takes the verified green only when at least one change was proved.
  */
-import { useId } from "react";
+import { useId, type ReactNode } from "react";
 import type { Suggestion, SuggestionKind } from "@/lib/types";
 import { SUGGESTION_COPY } from "@/lib/types";
 import { fmtHours, fmtSuggestion, fmtWh, plural, suggestionKindLabel, suggestionProofLabel } from "@/lib/format";
@@ -28,7 +29,7 @@ export type SuggestionsTimeBase = "absolute" | "relative";
 export interface SuggestionsProps {
   suggestions: Suggestion[];
   /** trace: compact, no footer (default); outcome: heading row, the big figure of the best
-   *  proven change, and the footer; replan: compact with the time-base note. */
+   *  proven change, the actions and the footer; replan: compact with the time-base note. */
   variant?: SuggestionsVariant;
   /** Time base of the hours in the sentences: "absolute" (simulator hours against the brief's
    *  deadline: every list the backend emits, main plan or replan) or "relative" (planner hours
@@ -37,8 +38,13 @@ export interface SuggestionsProps {
   /** Planner time 0 of a replan in simulator hours (its offset_h), for the relative note. */
   offsetH?: number;
   /** The deadline the failed plan had (requirements.horizon_h): the outcome card's figure then
-   *  says how far past it a later deadline goes. */
+   *  says how much later a later deadline is. */
   horizonH?: number | null;
+  /** outcome only: the way back into the loop, under the big figure (the console passes its
+   *  apply buttons, the best change as the primary one). */
+  actions?: ReactNode;
+  /** outcome only: one line under the actions, what they do. */
+  actionsNote?: ReactNode;
   className?: string;
 }
 
@@ -56,33 +62,39 @@ export interface SuggestionStat {
   label: string;
   /** the figure: "86 h", "5,950 Wh", "+1 excavator" */
   value: string;
-  /** the rest of the numbers: "26 h past the 60 h deadline", "on EX1 · feasible at 62 h" */
+  /** what the figure is, with the rest of the numbers: "deadline that works · 26 h later",
+   *  "battery EX1 needs · feasible at 62 h", "EX3, 5,000 Wh · feasible at 62 h" */
   sub: string;
 }
 
-/** The one figure of a proven change, for the outcome card's stat: null for reduce_scope, an
+/** The one figure of a proven change, for the outcome card: null for reduce_scope, an
  *  unverified change or a suggestion without its numbers. */
 export function suggestionStat(s: Suggestion, horizonH?: number | null): SuggestionStat | null {
   if (!s.verified) return null;
   const at = s.makespan_h !== null && Number.isFinite(s.makespan_h) ? `feasible at ${fmtHours(s.makespan_h, 0)}` : null;
+  const join = (parts: Array<string | null>) => parts.filter((x): x is string => x !== null && x !== "").join(" · ");
   switch (s.kind) {
     case "extend_horizon": {
       const h = s.horizon_h ?? s.makespan_h;
       if (h === null || !Number.isFinite(h)) return null;
       const known = horizonH !== null && horizonH !== undefined && Number.isFinite(horizonH);
-      const sub = known && h > horizonH ? `${fmtHours(h - horizonH, 0)} past the ${fmtHours(horizonH, 0)} deadline` : "the deadline that works";
-      return { label: kindLabel(s.kind), value: fmtHours(h, 0), sub };
+      const later = known && h > horizonH ? `${fmtHours(h - horizonH, 0)} later` : null;
+      return { label: kindLabel(s.kind), value: fmtHours(h, 0), sub: join(["deadline that works", later]) };
     }
     case "raise_battery": {
-      if (s.battery_wh === null) return null;
-      const sub = [s.robot_id ? `on ${s.robot_id}` : null, at].filter((x): x is string => x !== null).join(" · ");
-      return { label: kindLabel(s.kind), value: fmtWh(s.battery_wh), sub };
+      if (s.battery_wh === null || !Number.isFinite(s.battery_wh)) return null;
+      return {
+        label: kindLabel(s.kind),
+        value: fmtWh(s.battery_wh),
+        sub: join([s.robot_id ? `battery ${s.robot_id} needs` : "battery that works", at]),
+      };
     }
     case "add_robot": {
       if (s.robot_type === null) return null;
-      const who = s.robot_id ? `${s.robot_id}${s.battery_wh !== null ? `, ${fmtWh(s.battery_wh)}` : ""}` : null;
-      const sub = [who, at].filter((x): x is string => x !== null).join(" · ");
-      return { label: kindLabel(s.kind), value: `+1 ${s.robot_type}`, sub };
+      const who = s.robot_id
+        ? `${s.robot_id}${s.battery_wh !== null && Number.isFinite(s.battery_wh) ? `, ${fmtWh(s.battery_wh)}` : ""}`
+        : null;
+      return { label: kindLabel(s.kind), value: `+1 ${s.robot_type}`, sub: join([who, at]) };
     }
     default:
       return null;
@@ -105,6 +117,8 @@ export function Suggestions({
   timeBase = "absolute",
   offsetH,
   horizonH = null,
+  actions,
+  actionsNote,
   className,
 }: SuggestionsProps) {
   const headingId = useId();
@@ -117,36 +131,50 @@ export function Suggestions({
     // the list is best first: the first proven change is the figure of the card
     const best = suggestions.find((s) => s.verified) ?? null;
     const stat = best ? suggestionStat(best, horizonH) : null;
+    const hasActions = Boolean(actions) || Boolean(actionsNote);
     return (
       <section
         aria-labelledby={headingId}
-        className={cx("rounded-lg border bg-raised", proven > 0 ? "border-ok/30" : "border-line", className)}
+        className={cx("rounded-lg border bg-raised", proven > 0 ? "border-ok/45" : "border-line", className)}
       >
         <header className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b border-line px-4 py-2.5">
-          <h4 id={headingId} className="inline-flex items-center gap-2 text-[14px] font-semibold text-fg">
-            {proven === suggestions.length && (
+          <h3 id={headingId} className="inline-flex items-center gap-2 text-[15px] font-semibold tracking-tight text-fg">
+            {proven > 0 && (
               <span aria-hidden="true" className="flex size-4 items-center justify-center rounded-full bg-ok/15 text-ok">
                 <IconCheck className="size-2.5" />
               </span>
             )}
             {SUGGESTION_COPY.heading}
-          </h4>
-          {ranked && (
-            <span className="text-[11px] text-dim">
-              {plural(suggestions.length, "option")} · best first
-            </span>
-          )}
+          </h3>
+          <span className="text-xs text-dim">
+            {ranked ? `${plural(suggestions.length, "option")} · best first` : plural(suggestions.length, "option")}
+          </span>
         </header>
-        {stat && (
-          <div className="border-b border-line px-4 py-3">
-            <Stat label={stat.label} value={stat.value} sub={`${stat.sub} · ${SUGGESTION_COPY.verified}`} tone="ok" />
+        {(stat || hasActions) && (
+          <div className="border-b border-line px-4 py-3.5">
+            {stat && (
+              <div className="flex items-start justify-between gap-3">
+                <Stat label={stat.label} value={stat.value} sub={stat.sub || undefined} size="lg" tone="ok" />
+                <Badge tone="ok" title={VERIFIED_TITLE} className="mt-0.5 shrink-0">
+                  {SUGGESTION_COPY.verified}
+                </Badge>
+              </div>
+            )}
+            {actions && <div className={cx("flex flex-wrap items-center gap-2", stat && "mt-3")}>{actions}</div>}
+            {actionsNote && <div className={cx("text-xs leading-relaxed text-muted", stat || actions ? "mt-2" : null)}>{actionsNote}</div>}
           </div>
         )}
-        <ol className="divide-y divide-white/5 px-4">
-          {suggestions.map((s, i) => (
-            <Row key={`${s.kind}-${i}`} suggestion={s} rank={ranked ? i + 1 : null} className="py-2" />
-          ))}
-        </ol>
+        {stat && !ranked ? (
+          // the one option is the figure above, with its kind and proof chip: only its sentence
+          // is new here
+          <p className="px-4 py-2 text-[13px] leading-5 text-fg/90">{fmtSuggestion(suggestions[0])}</p>
+        ) : (
+          <ol className="divide-y divide-white/5 px-4">
+            {suggestions.map((s, i) => (
+              <Row key={`${s.kind}-${i}`} suggestion={s} rank={ranked ? i + 1 : null} className="py-2" />
+            ))}
+          </ol>
+        )}
         <footer className="border-t border-line px-4 py-2 text-[11px] leading-4 text-dim">
           {SUGGESTION_COPY.footer}
           {note ? ` · ${note}` : ""}

@@ -4,16 +4,28 @@
  * green checks and counts, read from the last ok `schedule` step's payload.verification
  * (backend loop.py verification_receipt) plus the plan. A plan without a verified schedule
  * renders the red variant: the failure kind and the conflict core as chips, with the hint and
- * the numbers behind a disclosure (the trace's final step shows that core in full, so one
- * screen holds one full core), then the solver-proven advice ("What would make it feasible":
- * PlanResult.suggestions, each change re-solved by CP-SAT) as the panel with its footer.
+ * the numbers (the verdict step's own budget rows first) folded behind "Show the core" (the
+ * trace shows that core in full, so one screen holds one full core), then the solver-proven
+ * advice ("What would make it feasible": PlanResult.suggestions, each change re-solved by
+ * CP-SAT) as the panel with its footer.
  */
 import type { ReactNode } from "react";
 import type { LoopStep, PlanResult, Schedule, VerificationReceipt as ReceiptData } from "@/lib/types";
-import { lastReceipt, taskGraphPayload } from "@/lib/types";
-import { fmtHours, fmtNum, fmtPercent, fmtSeconds, isFixtureModel, modelDisplayName, planSuggestions, plural } from "@/lib/format";
+import { lastReceipt, stepBudget, taskGraphPayload } from "@/lib/types";
+import {
+  failureStep,
+  fmtHours,
+  fmtNum,
+  fmtPercent,
+  fmtSeconds,
+  isFixtureModel,
+  modelDisplayName,
+  planSuggestions,
+  plural,
+} from "@/lib/format";
+import { STAGE_LABELS } from "@/lib/palette";
 import { Badge, Card, IconCheck, IconX, cx } from "./Section";
-import { FailureDetails, isVerdict, roundsPhrase } from "./ProgressTrace";
+import { FailureDetails, answeredByRepair, roundsPhrase } from "./ProgressTrace";
 import { Suggestions } from "./Suggestions";
 
 export interface VerificationReceiptProps {
@@ -43,7 +55,13 @@ export function VerificationReceipt({ plan, steps, horizonH = null, showAdvice =
     );
   }
   return (
-    <FailedCard plan={plan} horizonH={horizonH ?? plan.requirements.horizon_h} showAdvice={showAdvice} className={className} />
+    <FailedCard
+      plan={plan}
+      steps={trace}
+      horizonH={horizonH ?? plan.requirements.horizon_h}
+      showAdvice={showAdvice}
+      className={className}
+    />
   );
 }
 
@@ -83,6 +101,11 @@ function deriveReceipt(plan: PlanResult, schedule: Schedule): ReceiptData {
     travel_allowance: false,
     recheck: "",
   };
+}
+
+/** The last step of a trace, or null. */
+function lastStep(steps: LoopStep[]): LoopStep | null {
+  return steps.length > 0 ? steps[steps.length - 1] : null;
 }
 
 /** The last step of one of `stages` that carries a model name. */
@@ -247,25 +270,39 @@ function BatteryPills({ receipt }: { receipt: ReceiptData }) {
 
 function FailedCard({
   plan,
+  steps,
   horizonH,
   showAdvice,
   className,
 }: {
   plan: PlanResult;
+  steps: LoopStep[];
   horizonH: number;
   showAdvice: boolean;
   className?: string;
 }) {
   const failure = plan.failure;
+  // the step that produced the verdict: its payload carries the exact budget rows
+  const verdictStep = failureStep(steps, failure);
   const advice = showAdvice ? planSuggestions(plan) : [];
-  const repairsOff = plan.repairs === 0 && isVerdict(failure);
+  const repairsOff = plan.repairs === 0 && answeredByRepair(failure);
+  // where the trace shows this core in full: its last step, or, when the run went on past the
+  // verdict (a repair answer rejected on every re-ask ends the run with the verdict that round
+  // answered), the last step of the verdict's stage
+  const last = lastStep(steps);
+  const where =
+    verdictStep && last && verdictStep !== last
+      ? `the trace's last ${STAGE_LABELS[verdictStep.stage] ?? verdictStep.stage} step`
+      : "the trace's last step";
   const why = !failure
     ? "The planner stopped without a failure record."
     : failure.kind === "infeasible"
-      ? "CP-SAT proved the last task graph infeasible; the conflicts below are the minimal core it extracted (the trace's final step has the numbers)."
+      ? `CP-SAT proved the last task graph infeasible; the conflicts below are the minimal core it extracted (${where} has the numbers).`
       : failure.kind === "validation"
         ? "The validator rejected the last task graph before the solver ran; the conflicts below name what it found."
-        : "The planner stopped before a schedule could be proved; the trace's final step says why.";
+        : failure.kind === "solver_timeout"
+          ? "CP-SAT ran out of time on the last task graph before it could prove or refute a schedule."
+          : "The planner stopped before a schedule could be proved; the trace's last step says why.";
   const rounds = repairsOff ? " Repairs were off, so this first verdict was final." : "";
   return (
     <Card
@@ -285,7 +322,15 @@ function FailedCard({
         {why}
         {rounds}
       </p>
-      {failure && <FailureDetails failure={failure} horizonH={horizonH} className="mt-3" collapsed />}
+      {failure && (
+        <FailureDetails
+          failure={failure}
+          horizonH={horizonH}
+          budget={verdictStep ? stepBudget(verdictStep) : null}
+          className="mt-3"
+          collapsed
+        />
+      )}
       {advice.length > 0 && <Suggestions variant="outcome" suggestions={advice} className="mt-3" />}
     </Card>
   );

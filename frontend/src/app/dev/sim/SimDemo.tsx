@@ -22,7 +22,7 @@ interface Loaded {
 type Variant = "recorded" | "escalated" | "failed";
 
 const VARIANTS: { id: Variant; label: string; blurb: string }[] = [
-  { id: "recorded", label: "Recorded", blurb: "landing_pad.sim.json as served: CP-SAT only, 80 h → 91 h" },
+  { id: "recorded", label: "Recorded", blurb: "the recorded landing-pad simulation as served: CP-SAT only, 80 h → 91 h" },
   { id: "escalated", label: "Escalated (synthetic)", blurb: "same run, replan marked as escalated to Nemotron with one repair, 80 h → 95 h" },
   { id: "failed", label: "No verified replan (synthetic)", blurb: "same run, replan fails with an infeasibility core" },
 ];
@@ -36,34 +36,88 @@ async function fetchJson<T>(url: string, signal: AbortSignal): Promise<T> {
   return (await res.json()) as T;
 }
 
-/** The recorded replan, re-told as an escalation: Nemotron re-scoped the work after CP-SAT
- *  could not fit it, one repair, a longer makespan. Frames are left as recorded. */
+/** The recorded replan, re-told as an escalation: CP-SAT could not fit the remaining work
+ *  (an energy core on EX1), Nemotron re-scoped it in one repair, CP-SAT re-verified a longer
+ *  makespan. The trace reads like the backend's (validate, failed schedule with its budget
+ *  row, repair, validate, schedule, closing replan step worded as sim/replan.py _outcome_step
+ *  words it: no time-base flag, real plurals). Frames are left as recorded. */
 function escalatedVariant(sim: SimResult): SimResult {
   const replans: ReplanRecord[] = sim.replans.map((r) => {
     const schedule = r.after.schedule ? { ...r.after.schedule, makespan_h: r.after.schedule.makespan_h + 4 } : null;
-    const steps: LoopStep[] = r.after.steps.map((st) =>
-      st.stage === "replan"
-        ? {
+    const core: Failure = {
+      kind: "infeasible",
+      conflicts: ["energy:EX1"],
+      hint: "EX1 would need 4,310 Wh, about 25 Wh of it travel, but has 3,551 Wh.",
+      details: [],
+    };
+    const steps: LoopStep[] = [];
+    for (const st of r.after.steps) {
+      if (st.stage === "schedule" && st.ok) {
+        steps.push(
+          {
             ...st,
-            message: `CP-SAT could not finish the remaining work; Nemotron 3 Ultra re-scoped it (1 repair); makespan ${r.before.makespan_h} h -> ${schedule?.makespan_h ?? "—"} h (absolute)`,
-            payload: { ...(st.payload ?? {}), escalated: true, after_makespan_h: schedule?.makespan_h ?? null, solve_time_s: 0.012 },
-          }
-        : st,
-    );
+            ok: false,
+            failure: core,
+            message: null,
+            payload: {
+              budget: [{ kind: "robot", subject: "EX1", robots: ["EX1"], budget_wh: 3551, demanded_wh: 4310, travel_wh: 25 }],
+              offset_h: r.t_h,
+              time_base: "relative",
+            },
+          },
+          {
+            stage: "repair",
+            attempt: 2,
+            ok: true,
+            failure: null,
+            duration_s: 21.4,
+            usage: { model: "nvidia/Nemotron-3-Ultra-550b-a55b", input_tokens: 5200, output_tokens: 9800, latency_s: 21.4 },
+            message: `${r.remaining_tasks.length} tasks`,
+            payload: null,
+          },
+          {
+            stage: "validate",
+            attempt: 2,
+            ok: true,
+            failure: null,
+            duration_s: 0.003,
+            usage: null,
+            message: `${r.remaining_tasks.length} tasks valid`,
+            payload: { offset_h: r.t_h, time_base: "relative" },
+          },
+          {
+            ...st,
+            attempt: 2,
+            message: `makespan ${schedule?.makespan_h ?? "—"}h (optimal)`,
+            payload: st.payload && schedule ? { ...st.payload, makespan_h: schedule.makespan_h } : st.payload,
+          },
+        );
+      } else if (st.stage === "replan") {
+        steps.push({
+          ...st,
+          message: `infeasible (energy:EX1) -> escalated to Nemotron; makespan ${r.before.makespan_h} h -> ${schedule?.makespan_h ?? "—"} h, verified after 1 repair`,
+          payload: { ...(st.payload ?? {}), escalated: true, after_makespan_h: schedule?.makespan_h ?? null, solve_time_s: 0.012 },
+        });
+      } else {
+        steps.push(st);
+      }
+    }
     return { ...r, escalated: true, after: { ...r.after, repairs: 1, schedule, steps } };
   });
   return { ...sim, replans };
 }
 
 /** The recorded replan, re-told as a failure: two repairs, still infeasible, the run does not
- *  finish. Frames are left as recorded. */
+ *  finish. Frames are left as recorded. The verdict and the closing message are worded like
+ *  the backend's (schedule.py energy sentence with its budget row, replan.py _outcome_step). */
 function failedVariant(sim: SimResult): SimResult {
   const failure: Failure = {
     kind: "infeasible",
-    conflicts: ["energy:EX1", "capability:excavator"],
-    hint: "the remaining excavator work needs 5,100 Wh and EX1 has 3,551 Wh left; no other excavator survives",
+    conflicts: ["energy:EX1"],
+    hint: "EX1 would need 5,100 Wh, about 40 Wh of it travel, but has 3,551 Wh.",
     details: [],
   };
+  const budget = [{ kind: "robot", subject: "EX1", robots: ["EX1"], budget_wh: 3551, demanded_wh: 5100, travel_wh: 40 }];
   const replans: ReplanRecord[] = sim.replans.map((r) => {
     const steps: LoopStep[] = r.after.steps.map((st) =>
       st.stage === "replan"
@@ -71,11 +125,13 @@ function failedVariant(sim: SimResult): SimResult {
             ...st,
             ok: false,
             failure,
-            message: "no verified replan: the surviving fleet cannot finish the remaining work",
+            message:
+              "infeasible (energy:EX1) -> escalated to Nemotron (no answer: offline, no recorded repair); " +
+              "no verified replan (infeasible: energy:EX1); the previous plan stays in force",
             payload: { ...(st.payload ?? {}), escalated: true, after_makespan_h: null, solve_time_s: null },
           }
         : st.stage === "schedule"
-          ? { ...st, ok: false, failure, message: "infeasible: energy:EX1, capability:excavator", payload: { offset_h: r.t_h, time_base: "relative" } }
+          ? { ...st, ok: false, failure, message: null, payload: { budget, offset_h: r.t_h, time_base: "relative" } }
           : st,
     );
     return {
@@ -149,7 +205,7 @@ export function SimDemo() {
   if (!data || !sims) {
     return (
       <main className="mx-auto max-w-3xl px-4 py-10 text-sm text-muted" aria-busy>
-        Loading /samples/landing_pad.plan.json and landing_pad.sim.json…
+        Loading the recorded landing-pad plan and simulation…
       </main>
     );
   }

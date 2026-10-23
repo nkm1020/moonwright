@@ -4,14 +4,19 @@
  */
 import {
   CONFLICT_PREFIXES,
+  DIFF_FIELD_LABELS,
   OPERATIONS,
   OPERATION_LABELS,
   SUGGESTION_COPY,
   SUGGESTION_KIND_LABELS,
   conflictPrefix,
+  isMatchedDiff,
   isSuggestion,
+  repairDiff,
   unitLabel,
+  type BudgetRow,
   type DiffField,
+  type DiffRenumbering,
   type Failure,
   type LoopStep,
   type Operation,
@@ -88,6 +93,21 @@ export function dimLabel(key: string): string {
   return m ? `${base} (${m[2]})` : base;
 }
 
+/** The dimension a phase-3e floor key bounds: "min_diameter_m" -> "diameter_m" (the smallest
+ *  size the brief allows); null for any other key. */
+export function minDimension(key: string): string | null {
+  const m = /^min_([a-z][a-z_]*_m)$/.exec(key);
+  return m ? m[1] : null;
+}
+
+/** A floor key as prose: ("min_diameter_m", 12) -> "min diameter 12 m"; null for any other
+ *  key (the card's own phrases cover the regular dimensions). */
+export function dimPhrase(key: string, value: number): string | null {
+  const base = minDimension(key);
+  if (!base) return null;
+  return `min ${base.replace(/_m$/, "").replace(/_/g, " ")} ${fmtNum(value, 2)} m`;
+}
+
 /** Numeric extras of a structure (its dimensions) in declaration order. */
 export function structureDims(s: Structure): [string, number][] {
   const out: [string, number][] = [];
@@ -123,13 +143,18 @@ export function structureOperations(s: Structure): Operation[] {
   return out;
 }
 
-/** Meaning of a conflict id's prefix, e.g. "energy:EX1" -> "battery budget exceeded". */
+/** Meaning of a conflict id, e.g. "energy:EX1" -> "battery budget exceeded"; an id that is a
+ *  complete word of its own ("schema:json" -> "answer cut off or not valid JSON") is looked up
+ *  before its prefix. */
 export function conflictMeaning(conflict: string): string | null {
-  return CONFLICT_PREFIXES[conflictPrefix(conflict)] ?? null;
+  return CONFLICT_PREFIXES[conflict] ?? CONFLICT_PREFIXES[conflictPrefix(conflict)] ?? null;
 }
 
-/** "energy:EX1" -> "battery budget exceeded (EX1)"; unknown prefixes return the raw id. */
+/** "energy:EX1" -> "battery budget exceeded (EX1)", "schema:json" -> "answer cut off or not
+ *  valid JSON"; unknown prefixes return the raw id. */
 export function conflictLabel(conflict: string): string {
+  const whole = CONFLICT_PREFIXES[conflict];
+  if (whole && conflict.includes(":")) return whole;
   const prefix = conflictPrefix(conflict);
   const meaning = CONFLICT_PREFIXES[prefix];
   if (!meaning) return conflict;
@@ -301,28 +326,44 @@ export interface Advisory {
 }
 
 /** "estimate:T4: model said 10 h / 1000 Wh, rate model gives 27 h / 3000 Wh (+170%)" ->
- *  {category: "estimate", task: "T4", text: "model said ..."}; "ungrounded: no task states a
- *  quantity, ..." -> {category: "ungrounded", task: null, text: "no task ..."}; "volume:S1: its
- *  dimensions give 360 m3 (100 x 6 x 0.6 m) but its excavation tasks (T3 600 m2) total only
- *  0 m3 (0%)" -> {category: "volume", kind: "other", task: "S1", text: "its dimensions give
- *  360 m³ (100 × 6 × 0.6 m) but ..."}. */
+ *  {category: "estimate", task: "T4", text: "model said 10 h / 1,000 Wh, ..."}; "ungrounded:
+ *  no task states a quantity, ..." -> {category: "ungrounded", task: null, text: "no task
+ *  ..."}; a volume line (phase 3e: a shortfall "volume:S2: its dimensions give 360 m3 (100 x 6
+ *  x 0.6 m) but its excavation tasks (T3 600 m2 counts 120 m3 at 0.2 m) total only 120 m3
+ *  (33 %)", or an excess "... total 600 m3 (200 %): hauled twice over") -> {category: "volume",
+ *  kind: "other", task: "S2", text: "its dimensions give 360 m³ (100 × 6 × 0.6 m) but its
+ *  excavation tasks (T3 600 m² counts 120 m³ at 0.2 m) total only 120 m³ (33%)"}. */
 export function parseAdvisory(raw: string): Advisory {
   const est = /^estimate:([^:\s]+):\s*([\s\S]*)$/.exec(raw);
-  if (est) return { kind: "estimate", category: "estimate", task: est[1], text: humanizeFields(est[2].trim()), raw };
+  if (est) return { kind: "estimate", category: "estimate", task: est[1], text: tidyNumbers(humanizeFields(est[2].trim())), raw };
   const ung = /^ungrounded:\s*([\s\S]*)$/.exec(raw);
   if (ung) return { kind: "ungrounded", category: "ungrounded", task: null, text: humanizeFields(ung[1].trim()), raw };
   const vol = /^volume:([^:\s]+):\s*([\s\S]*)$/.exec(raw);
   if (vol) return { kind: "other", category: "volume", task: vol[1], text: humanizeVolume(vol[2].trim()), raw };
-  return { kind: "other", category: "other", task: null, text: humanizeFields(raw), raw };
+  return { kind: "other", category: "other", task: null, text: tidyNumbers(humanizeFields(raw)), raw };
 }
 
-/** The volume sentence with the console's units: "360 m3 (100 x 6 x 0.6 m)" ->
- *  "360 m³ (100 × 6 × 0.6 m)"; task ids such as T3 are left alone. */
+/** The volume sentence with the console's units and numbers: "360 m3 (100 x 6 x 0.6 m)" ->
+ *  "360 m³ (100 × 6 × 0.6 m)", "bowl 12-20 m across" -> "bowl 12–20 m across", "(33 %)" ->
+ *  "(33%)", "T3 600 m2 counts 120 m3 at 0.2 m" -> "T3 600 m² counts 120 m³ at 0.2 m"; task ids
+ *  such as T3 and the words ("hauled twice over") are left alone. */
 export function humanizeVolume(text: string): string {
-  return humanizeFields(text)
-    .replace(/\bm3\b/g, "m³")
-    .replace(/\bm2\b/g, "m²")
-    .replace(/(\d)\s+x\s+(?=\d)/g, "$1 × ");
+  return tidyNumbers(tidyQuantities(humanizeFields(text)));
+}
+
+/** Quantities as the console writes them: "360 m3" -> "360 m³", "600 m2" -> "600 m²" (also
+ *  "10m3" and "10 m^3", as model prose writes them), "100 x 6 x 0.6 m" -> "100 × 6 × 0.6 m",
+ *  "12-20 m" / "68-189 m3" -> "12–20 m" / "68–189 m³", "(33 %)" -> "(33%)". Ids and words are
+ *  left alone. */
+export function tidyQuantities(text: string): string {
+  return text
+    .replace(/(\d)\s?m\^?3\b/g, "$1 m³")
+    .replace(/(\d)\s?m\^?2\b/g, "$1 m²")
+    .replace(/\bm\^?3\b/g, "m³")
+    .replace(/\bm\^?2\b/g, "m²")
+    .replace(/(\d)\s+x\s+(?=\d)/g, "$1 × ")
+    .replace(/(\d)-(?=\d[\d.,]*\s?(?:m³|m²|m\b))/g, "$1–")
+    .replace(/(\d) %/g, "$1%");
 }
 
 /** Backend sentences name schema fields ("every duration_h and energy_wh"): read them as words. */
@@ -343,33 +384,200 @@ export function tidyUnits(text: string): string {
   return text.replace(/(\d)(Wh|h)\b/g, "$1 $2");
 }
 
-/** Numbers that carry a unit get the console's formatting: "9929.649 Wh" -> "9,929.6 Wh",
- *  "5000 Wh" -> "5,000 Wh", "336h" -> "336 h"; bare counts and ids are left alone. */
+/** A number as backend text writes it: "9930", "9929.649", and since phase 3d "9,930" or
+ *  "1,784.39" (thousands separators). parseNum reads either. */
+const NUM = "(\\d{1,3}(?:,\\d{3})+(?:\\.\\d+)?|\\d+(?:\\.\\d+)?)";
+
+function parseNum(s: string): number {
+  return Number(s.replace(/,/g, ""));
+}
+
+/** "5950" -> "5,950", "9929.649" -> "9,929.649", "10,000" -> "10,000": thousands separators
+ *  on the whole part, the decimals kept as written (the backend chooses them so that two
+ *  figures that differ never print equal: "1,784.39 Wh but has 1,784.38 Wh"). */
+export function groupDigits(n: string): string {
+  const [whole, frac] = n.replace(/,/g, "").split(".");
+  const grouped = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  return frac !== undefined ? `${grouped}.${frac}` : grouped;
+}
+
+const UNIT_NUMBER = new RegExp(`\\b${NUM}\\s?(kWh|Wh|h)\\b`, "g");
+
+/** Numbers that carry a unit get the console's formatting: "5000 Wh" -> "5,000 Wh", "336h" ->
+ *  "336 h", while text the backend already formatted stays as it is ("10,000 Wh",
+ *  "9,930 Wh", "1,784.39 Wh"); bare counts, token counts and ids are left alone. */
 export function tidyNumbers(text: string): string {
-  return text.replace(/(\d+(?:\.\d+)?)\s?(kWh|Wh|h)\b/g, (_, n: string, unit: string) => `${fmtNum(Number(n), 1)} ${unit}`);
+  return text.replace(UNIT_NUMBER, (_, n: string, unit: string) => `${groupDigits(n)} ${unit}`);
+}
+
+/** The model's own prose (the explanation, the planner's notes) with the console's figures:
+ *  quantities with their symbols ("10 m3" -> "10 m³", "300 m2" -> "300 m²", "100 x 6 m" ->
+ *  "100 × 6 m") and every number that carries a unit grouped ("4000 Wh" -> "4,000 Wh"); the
+ *  words are the model's. */
+export function tidyProse(text: string): string {
+  return tidyNumbers(tidyQuantities(text));
+}
+
+/** Raw Token Factory model ids inside backend text ("nvidia/Nemotron-3-Ultra-550b-a55b") read
+ *  as the model's name ("Nemotron 3 Ultra"), like every model badge on the page. */
+export function tidyModels(text: string): string {
+  return text.replace(/\b[\w.-]+\/[\w.-]*nemotron[\w.-]*/gi, (id) => modelDisplayName(id));
+}
+
+/** The planner roles as the trace names them ("taskgraph (Nemotron 3 Ultra): ..." -> "Task
+ *  graph (Nemotron 3 Ultra): ..."). */
+const ROLE_WORDS: Record<string, string> = {
+  structure: "Structure",
+  taskgraph: "Task graph",
+  repair: "Repair",
+  explain: "Explain",
+};
+
+/** "3 robot(s)" -> "3 robots", "1 attempt(s)" -> "1 attempt": the backend's older plurals. */
+function resolvePlurals(s: string): string {
+  return s.replace(
+    /\b(\d+)((?:\s+[a-z][a-z-]*){0,2})\s+(robot|task|zone|structure|repair|conflict|attempt|ask|answer|token)\(s\)/g,
+    (_, n: string, mid: string, w: string) => `${n}${mid} ${w}${n === "1" ? "" : "s"}`,
+  );
+}
+
+/** Machine words inside backend prose read as words: a structure's type id in its label ("S2
+ *  (blast_berm)" -> "S2 (blast berm)"), a chain of ids drawn with the console's arrow
+ *  ("T1->T2->T7" -> "T1→T2→T7", "80 h -> 91 h" -> "80 h → 91 h"), the Token Factory's request
+ *  formats ("json_schema, json_object and plain text were all refused" -> "every request format
+ *  (JSON schema, JSON object, plain text) was refused") and the API's finish reasons ("empty
+ *  completion (finish_reason=stop)" -> "empty answer", "(finish_reason=length)" -> "(cut off at
+ *  the token limit)"). */
+function tidyWords(s: string): string {
+  return s
+    .replace(
+      /\b([A-Z][A-Za-z]*\d+[a-z]?) \(([a-z][a-z0-9]*(?:_[a-z0-9]+)+)\)/g,
+      (_, id: string, type: string) => `${id} (${type.replace(/_/g, " ")})`,
+    )
+    .replace(/(\w)->(?=\w)/g, "$1→")
+    .replace(/ -> /g, " → ")
+    .replace(
+      /\bjson_schema, json_object and plain text were all refused\b/g,
+      "every request format (JSON schema, JSON object, plain text) was refused",
+    )
+    .replace(/\s*\(finish_reason=stop\)/g, "")
+    .replace(/\(finish_reason=length\)/g, "(cut off at the token limit)")
+    .replace(/\(finish_reason=([\w-]+)\)/g, (_, r: string) => `(stopped: ${r.replace(/_/g, " ")})`)
+    .replace(/\bempty completion\b/g, "empty answer");
+}
+
+/** Backend prose as the console prints it (hints, details, step messages): schema field
+ *  names read as words, model ids as model names, a leading role word as its stage label,
+ *  "(s)" plurals resolved, machine words read as words (tidyWords), quantities with their
+ *  symbols (m³, m², ×) and every number that carries a unit grouped ("5000 Wh" -> "5,000 Wh"),
+ *  the words otherwise verbatim. */
+export function tidyText(text: string): string {
+  const s = tidyWords(resolvePlurals(tidyModels(humanizeFields(text)))).replace(
+    /^(structure|taskgraph|repair|explain) \(/,
+    (_, role: string) => `${ROLE_WORDS[role] ?? role} (`,
+  );
+  return tidyNumbers(tidyQuantities(tidyUnits(s)));
+}
+
+/** True for the hint of an offline backend that has no recorded answer to give (backend
+ *  llm/base.py FixtureClient: "This backend is running offline on recorded Nemotron answers and
+ *  has no recording for brief 'x'. ...", "missing fixture explain.json for brief 'x'"). */
+export function isOfflineHint(hint: string | null | undefined): boolean {
+  return /running offline on recorded|no recording for brief|missing fixture|fixture lookup/i.test(hint ?? "");
+}
+
+/** How a model stage ended without a usable answer, one reading for the trace, the receipt and
+ *  the console's guidance: "offline" (an offline backend has no recorded answer for the brief,
+ *  so nothing was asked), "empty" (the model answered with nothing on every ask: "Nemotron 3
+ *  Ultra returned an empty completion on each of 2 asks", or before phase 3e "taskgraph (...):
+ *  empty completion (finish_reason=stop) on every one of 2 attempt(s)"), "request" (the Token
+ *  Factory request itself failed, "The Token Factory request to Nemotron 3 Ultra failed:
+ *  APITimeoutError (...)", or any other failed call), "rejected" (an answer came back but was
+ *  cut off, not JSON or off the schema: kind schema). Null for a verdict, a solver time-out or
+ *  no failure. */
+export type AnswerFailure = "offline" | "empty" | "request" | "rejected";
+
+export function answerFailure(failure: Failure | null | undefined): AnswerFailure | null {
+  if (!failure) return null;
+  if (failure.kind === "schema") return "rejected";
+  if (failure.kind !== "llm_error") return null;
+  if (isOfflineHint(failure.hint)) return "offline";
+  if (/\bempty (?:completion|answer)\b/i.test(failure.hint)) return "empty";
+  return "request";
+}
+
+/** An offline backend's miss in the console's words: its sentences name the lookup key and a
+ *  server setting ("... has no recording for brief 'front_loaded'. Pick one of the example
+ *  briefs, or start the backend with NEBIUS_API_KEY set to plan new briefs live." -> "... has
+ *  no recording for this brief. Pick one of the example briefs, or connect a live backend to
+ *  plan new briefs.") and a recording's file name ("missing fixture explain.json for brief
+ *  'x'" -> "no recorded answer for this step of the brief"). Other text passes through. */
+export function tidyOffline(text: string): string {
+  return text
+    .replace(/\bThis backend is running offline on recorded Nemotron answers\b/g, "This backend replays recorded Nemotron answers")
+    .replace(/\bstart the backend with [A-Z][A-Z0-9_]* set to plan new briefs live\b/g, "connect a live backend to plan new briefs")
+    .replace(/\bmissing fixture [\w.-]+ for brief '[^']*'/g, "no recorded answer for this step of the brief")
+    .replace(/\bfixture lookup for role=\w+ needs a brief key\b/g, "recorded answers are looked up by brief, and this request named none")
+    .replace(/\bfor brief '[^']*'/g, "for this brief");
 }
 
 /** A failure detail line as the console prints it: the backend's file-system clauses dropped
- *  ("(looked in /…/x)"), absolute paths removed and its recording vocabulary read as words
- *  ("no fixture directory for brief 'x'" -> "no recording for brief 'x'"), units spaced. */
+ *  ("(looked in /…/x)"), endpoint URLs, absolute paths and recording file names removed, its
+ *  recording vocabulary read as words ("no fixture directory for brief 'x'" -> "no recording
+ *  for brief 'x'"), an older rejected answer's machine wording read as words ("json: the
+ *  answer was cut off at max_tokens=16384 (...); answer with compact JSON only, no reasoning"
+ *  -> "the answer was cut off at 16,384 tokens (...)", ": Input should be ..." -> "Input should
+ *  be ..."), then tidyText (model ids as names, units and numbers formatted). */
 export function tidyDetail(text: string): string {
-  return tidyUnits(
-    text
-      .replace(/\s*\(looked in [^)]*\)/g, "")
-      .replace(/(^|[\s(])\/(?:[^\s/)]+\/)+[^\s)]*/g, "$1…")
-      .replace(/\bfixture directory\b/gi, "recording")
-      .replace(/\bfixtures?\b/gi, "recording"),
-  ).trim();
+  const s = tidyOffline(text)
+    .replace(/\s*\(looked in [^)]*\)/g, "")
+    .replace(/\s+on https?:\/\/\S+?(?=[,;]|:(?:\s|$)|\s|$)/g, "")
+    .replace(/(^|[\s(])\/(?:[^\s/)]+\/)+[^\s)]*/g, "$1…")
+    .replace(/\bfixture directory\b/gi, "recording")
+    .replace(/\bfixture file\b/gi, "recording")
+    .replace(/\bfixtures?\b/gi, "recording")
+    .replace(/\s*'?\b[\w.-]+\.json\b'?/g, "")
+    .replace(/^json:\s*/i, "")
+    .replace(/^:\s*/, "")
+    .replace(/\bmax_tokens=(\d+)/g, (_, n: string) => `${groupDigits(n)} tokens`)
+    .replace(/;\s*answer with compact JSON only, no reasoning\.?$/i, "");
+  return tidyText(s).replace(/\s{2,}/g, " ").trim();
+}
+
+/** A step message as the trace prints it: "makespan 68h (optimal)" -> "makespan 68 h
+ *  (optimal)", a replan's "80 h -> 91 h" -> "80 h → 91 h"; an offline backend's miss
+ *  ("offline: missing fixture taskgraph_3.json for brief 'x'", "offline: This backend is
+ *  running offline ...") reads as one short clause, since the step's failure carries the rest
+ *  and recording file names never reach the page. */
+export function tidyMessage(message: string | null | undefined): string {
+  if (!message) return "";
+  const m = message.trim();
+  if (/^offline:/i.test(m)) {
+    return /reused prior graph/i.test(m)
+      ? "offline: kept the remaining graph, no recorded answer"
+      : "offline: no recorded answer";
+  }
+  return tidyText(m).replace(/ -> /g, " → ");
+}
+
+/** A rejected answer's per-ask detail line (phase 3e, backend tokenfactory AskOutcome.line):
+ *  "ask 1: cut off at 32,768 tokens" -> {ask: "ask 1", text: "cut off at 32,768 tokens"},
+ *  "ask 3 (reasoning off): task T3: 'after' must be a list" -> {ask: "ask 3 (reasoning off)",
+ *  text: "task T3: 'after' must be a list"}; any other line -> {ask: null, text: tidied}. */
+export function parseAskLine(line: string): { ask: string | null; text: string } {
+  const m = /^(ask \d+(?: \(reasoning off\))?):\s*([\s\S]*)$/.exec(line.trim());
+  return m ? { ask: m[1], text: tidyDetail(m[2]) } : { ask: null, text: tidyDetail(line) };
 }
 
 /** "a", "a and b", "a, b and c". */
-function joinAnd(words: string[]): string {
+export function joinAnd(words: string[]): string {
   if (words.length <= 1) return words.join("");
   return `${words.slice(0, -1).join(", ")} and ${words[words.length - 1]}`;
 }
 
-/** Solver sentence for a robot type whose work fits the pool but no single battery
- *  (backend schedule.py _energy_hint), one copy per robot of the type. */
+/** Solver sentence for a robot type whose work fits the pool but no single battery, as the
+ *  backend wrote it before phase 3d (one copy per robot of the type); kept so recordings made
+ *  before then (front_loaded.plan.json and older) still merge into one sentence. */
 const POOL_SENTENCE =
   /^(\S+) has (\d+(?:\.\d+)?) Wh, and the (\S+) tasks \((\d+(?:\.\d+)?) Wh in total(?: \(incl\. ~(\d+(?:\.\d+)?) Wh of travel\))?\) cannot be split across the (\d+) \S+ robot\(s\) \((\d+(?:\.\d+)?) Wh combined\) without exceeding its budget\.?$/;
 
@@ -381,6 +589,10 @@ interface PoolHint {
   pool: number;
 }
 
+/** The merged pool sentence, worded like the backend's own since phase 3d ("EX1 and EX2 each
+ *  have 5,000 Wh; the excavator tasks need 9,930 Wh in total, about 30 Wh of it travel, and
+ *  cannot be split across 2 excavators (10,000 Wh combined) without exceeding one budget."),
+ *  so an older recording reads like a new one. */
 function renderPool(type: string, p: PoolHint): string {
   const ids = p.robots.map((r) => r.id);
   const sameBudget = p.robots.every((r) => r.budget === p.robots[0].budget);
@@ -389,33 +601,29 @@ function renderPool(type: string, p: PoolHint): string {
       ? `${ids[0]} has ${fmtWh(p.robots[0].budget)}`
       : sameBudget
         ? `${joinAnd(ids)} each have ${fmtWh(p.robots[0].budget)}`
-        : p.robots.map((r) => `${r.id} has ${fmtWh(r.budget)}`).join(", ");
-  const whose = p.robots.length === 1 ? "its budget" : p.robots.length === 2 ? "either budget" : "one of their budgets";
-  const travel = p.travel !== null ? ` (incl. ~${fmtNum(p.travel, 0)} Wh of travel)` : "";
-  return `${who}; the ${type} tasks need ${fmtNum(p.total, 1)} Wh in total${travel} and cannot be split across ${plural(p.count, type)} (${fmtWh(p.pool)} combined) without exceeding ${whose}.`;
+        : joinAnd(p.robots.map((r) => `${r.id} has ${fmtWh(r.budget)}`));
+  const travel = p.travel !== null && Math.round(p.travel) >= 1 ? `, about ${fmtNum(p.travel, 0)} Wh of it travel,` : "";
+  return `${who}; the ${type} tasks need ${fmtNum(p.total, 0)} Wh in total${travel} and cannot be split across ${plural(p.count, type)} (${fmtWh(p.pool)} combined) without exceeding one budget.`;
 }
 
-/** One sentence of a hint, tidied: formatted numbers, "robot(s)" resolved by its count, the
- *  nested "(… (incl. …))" flattened. */
+/** One sentence of a hint, tidied (tidyText), with an older recording's nested
+ *  "(… (incl. …))" flattened. */
 function tidySentence(s: string): string {
-  return tidyNumbers(
-    s
-      .replace(/\(([^()]*) \(incl\. ([^()]*)\)\)/g, "($1, incl. $2)")
-      .replace(/\b(\d+)((?:\s+[a-z][a-z-]*){0,2})\s+(robot|task|zone|structure|repair|conflict)\(s\)/g, (_, n: string, mid: string, w: string) => `${n}${mid} ${w}${n === "1" ? "" : "s"}`),
-  );
+  return tidyText(s.replace(/\(([^()]*) \(incl\. ([^()]*)\)\)/g, "($1, incl. $2)"));
 }
 
 /**
  * A backend hint as the console prints it: numbers formatted like every other figure on the
- * page, "robot(s)" resolved, duplicate sentences dropped, and the solver's per-robot copies of
- * the energy-pool sentence merged into one ("EX1 and EX2 each have 5,000 Wh; the excavator
- * tasks need 9,929.6 Wh in total (incl. ~30 Wh of travel) and cannot be split across
- * 2 excavators (10,000 Wh combined) without exceeding either budget."). Unknown text passes
- * through with its numbers tidied, never reworded.
+ * page (text the backend already formatted, "EX1 and EX2 each have 5,000 Wh; the excavator
+ * tasks need 9,930 Wh in total, about 30 Wh of it travel, ...", is kept as written), model
+ * ids as names, m³ / m² / ×, duplicate sentences dropped, an offline backend's miss without
+ * its lookup key or server setting (tidyOffline). Recordings made before phase 3d
+ * also get "robot(s)" resolved and the solver's per-robot copies of the energy-pool sentence
+ * merged into one. Unknown text passes through tidied, never reworded.
  */
 export function tidyHint(text: string | null | undefined): string {
   if (!text) return "";
-  const sentences = text.trim().split(/(?<=[.!?])\s+(?=[A-Z("])/);
+  const sentences = tidyOffline(text.trim()).split(/(?<=[.!?])\s+(?=[A-Z("])/);
   const pools = new Map<string, PoolHint>();
   const out: string[] = [];
   const seen = new Set<string>();
@@ -497,6 +705,29 @@ export function lastFailedStep(steps: LoopStep[]): LoopStep | null {
   return null;
 }
 
+/** The same verdict (kind, conflicts, hint): a step's failure and the PlanResult's. */
+export function sameFailure(a: Failure, b: Failure): boolean {
+  return (
+    a.kind === b.kind &&
+    a.hint === b.hint &&
+    a.conflicts.length === b.conflicts.length &&
+    a.conflicts.every((c, i) => c === b.conflicts[i])
+  );
+}
+
+/** The last step whose failure is `failure` (the step that produced a PlanResult's verdict:
+ *  its payload carries the budget rows and the advice), or null. A run that ends in a
+ *  rejected repair answer reports the verdict that round answered, which is an earlier step
+ *  than lastFailedStep. */
+export function failureStep(steps: readonly LoopStep[], failure: Failure | null | undefined): LoopStep | null {
+  if (!failure) return null;
+  for (let i = steps.length - 1; i >= 0; i -= 1) {
+    const f = steps[i].failure;
+    if (f && sameFailure(f, failure)) return steps[i];
+  }
+  return null;
+}
+
 /** Index of the step whose answer is the plan's task graph (PlanResult.task_graph): the last
  *  ok taskgraph / repair step, since a rejected repair answer produces no graph; -1 when there
  *  is none. Only that step's repair diff may be read against the final graph. */
@@ -557,141 +788,255 @@ export function roundShares(counts: number[], total: number): number[] {
 }
 
 // ------------------------------------------------------------------ failure numbers
-export interface BudgetRow {
-  /** robot id, robot type, task id or a precedence chain */
+/** One row of the subject / budget / demanded table behind a failure, as the console shows
+ *  it. (The backend's own rows are types.ts BudgetRow, read from a failed schedule step's
+ *  payload; budgetPayloadRows turns them into these.) */
+export interface BudgetTableRow {
+  /** robot id, robot type, task id, zone or a precedence chain */
   subject: string;
   kind: "robot" | "type" | "task" | "chain" | "zone";
   budget: number;
   demanded: number;
   unit: "Wh" | "h";
   note: string | null;
+  /** the row is the conflict itself (a failed schedule step's own energy rows, which bind even
+   *  at 99 %: no split fits); absent: binding when demanded exceeds budget */
+  binding?: boolean;
+  /** why a row binds although its figure is within the budget ("no split fits one battery"),
+   *  printed next to that figure */
+  why?: string | null;
 }
 
-const NUM = "(\\d+(?:\\.\\d+)?)";
+/** "incl. 30 Wh travel" for a travel share worth a Wh, else null. */
+function travelNote(wh: number | null | undefined): string | null {
+  return typeof wh === "number" && Number.isFinite(wh) && wh >= 0.5 ? `incl. ${fmtNum(wh, 0)} Wh travel` : null;
+}
+
+function withNote(note: string, extra: string | null): string {
+  return extra ? `${note} · ${extra}` : note;
+}
+
+/** The table rows of a failed schedule step's own budget rows (payload.budget, phase 3d):
+ *  the exact figures the hint quotes rounded, the pool or the robot in the note with the
+ *  travel share ("EX1 and EX2 combined, no split fits one battery · incl. 30 Wh travel",
+ *  "tasks only it can run · incl. 41 Wh travel"). */
+export function budgetPayloadRows(rows: readonly BudgetRow[]): BudgetTableRow[] {
+  return rows.map((r) => {
+    let note: string;
+    let why: string | null = null;
+    if (r.kind === "type") {
+      note = r.robots.length > 1 ? `${joinAnd(r.robots)} combined` : r.robots.length === 1 ? r.robots[0] : "the type's robots";
+      // within the pool, the row binds because no split of the work fits one battery each;
+      // above it, the work exceeds even every battery of the type together
+      if (r.demanded_wh <= r.budget_wh) why = "no split fits one battery";
+    } else {
+      note = "tasks only it can run";
+    }
+    return {
+      subject: r.subject,
+      kind: r.kind,
+      budget: r.budget_wh,
+      demanded: r.demanded_wh,
+      unit: "Wh" as const,
+      note: withNote(note, travelNote(r.travel_wh)),
+      binding: true,
+      why,
+    };
+  });
+}
 
 /**
- * The numbers behind a Failure as rows of a robot / budget / demanded table, read from
- * `details` first (the validator's one line per conflict) and then from the solver's hint
- * sentences (backend/moonwright/pipeline/schedule.py `_energy_hint`, `_horizon_hint`,
- * `_robot_hint`, `_zone_hint`). Rows the sentences only imply against the deadline need
- * `horizonH`. Unparseable text yields no row, never a wrong one.
+ * The numbers behind a Failure as rows of a subject / budget / demanded table.
+ *
+ * A failed schedule step's own rows (`budget`: its payload.budget, see types.ts stepBudget)
+ * come first and are exact; then the validator's detail lines (one per conflict) and the
+ * hint sentences, for what the payload does not carry: the deadline, robot time, zones, the
+ * validator's energy checks, and the solver's energy sentences of a recording made before the
+ * payload had rows. Rows the sentences only imply against the deadline need `horizonH`. Every
+ * pattern reads numbers with or without thousands separators ("9,930" and "9929.649") and the
+ * sentence shapes of every backend phase (backend schedule.py `_energy_sentence`,
+ * `_horizon_hint`, `_robot_sentence`, `_zone_hint`; validate.py `_check_*`). Unparseable text
+ * yields no row, never a wrong one.
  */
-export function budgetRows(failure: Failure, horizonH?: number | null): BudgetRow[] {
-  const rows: BudgetRow[] = [];
+export function budgetRows(
+  failure: Failure,
+  horizonH?: number | null,
+  budget?: readonly BudgetRow[] | null,
+): BudgetTableRow[] {
+  // rows in reading order: the payload's first, then by where their sentence stands
+  const rows: { row: BudgetTableRow; at: number }[] = [];
   const seen = new Set<string>();
-  const add = (row: BudgetRow) => {
+  let at = -1;
+  let base = 0;
+  const add = (row: BudgetTableRow) => {
     const key = `${row.kind}|${row.subject}|${row.unit}`;
     if (seen.has(key) || !Number.isFinite(row.budget) || !Number.isFinite(row.demanded)) return;
     seen.add(key);
-    rows.push(row);
+    rows.push({ row, at });
   };
   const each = (text: string, re: RegExp, fn: (m: RegExpExecArray) => void) => {
     const g = new RegExp(re.source, re.flags.includes("g") ? re.flags : `${re.flags}g`);
-    for (let m = g.exec(text); m; m = g.exec(text)) fn(m);
+    for (let m = g.exec(text); m; m = g.exec(text)) {
+      at = base + m.index;
+      fn(m);
+    }
   };
   const robots = (n: string) => `${n} ${n === "1" ? "robot" : "robots"}`;
-  // the solver's energy-pool sentence comes once per robot of the type; the numbers it carries
-  // are the type's (total work against the combined budget), so they make one row per type
-  const pools = new Map<string, { robots: { id: string; budget: number }[]; demanded: number; travel: string | null; pool: number }>();
+  const fleet = (n: string) => (n === "1" ? "1 robot" : `${n} robots combined`);
+  const arrows = (chain: string) => chain.replace(/->/g, "→");
+  const travel = (s: string | undefined) => (s === undefined ? null : travelNote(parseNum(s)));
+
+  const own = budget ?? [];
+  for (const row of budgetPayloadRows(own)) add(row);
+  // the payload is the energy core's own account: the solver's energy sentences would only
+  // repeat it rounded
+  const solverEnergy = own.length === 0;
+  // a recording older than phase 3d writes the solver's energy-pool sentence once per robot of
+  // the type; the numbers it carries are the type's, so they make one row per type
+  const pools = new Map<string, { robots: { id: string; budget: number }[]; demanded: number; travel: string | null; pool: number; at: number }>();
 
   const texts = [...failure.details, failure.hint].filter(Boolean);
-  for (const text of texts) {
-    // validator: "excavator tasks need 9900 Wh; its 2 robots carry 10000 Wh"
-    each(text, new RegExp(`(\\S+) tasks need ${NUM} Wh; its (\\d+) robots? carry ${NUM} Wh`), (m) =>
-      add({ subject: m[1], kind: "type", demanded: +m[2], budget: +m[4], unit: "Wh", note: `${robots(m[3])} combined` }),
+  for (const [ti, text] of texts.entries()) {
+    base = (ti + 1) * 1e6;
+    // validator, per robot type: "excavator tasks need 9900 Wh; its 2 robots carry 10000 Wh";
+    // phase 3e: "printer tasks need 4,037 Wh, about 38 Wh of it travel; its 1 robot carries
+    // 4,000 Wh"
+    each(text, new RegExp(`(\\S+) tasks need ${NUM} Wh(?:, about ${NUM} Wh of it travel)?; its (\\d+) robots? (?:carry|carries) ${NUM} Wh`), (m) =>
+      add({ subject: m[1], kind: "type", demanded: parseNum(m[2]), budget: parseNum(m[5]), unit: "Wh", note: withNote(fleet(m[4]), travel(m[3])) }),
     );
-    // validator hint: "excavator tasks need 9900 Wh but its 2 robots carry only 10000 Wh combined"
-    each(text, new RegExp(`(\\S+) tasks need ${NUM} Wh but its (\\d+) robots? carry only ${NUM} Wh combined`), (m) =>
-      add({ subject: m[1], kind: "type", demanded: +m[2], budget: +m[4], unit: "Wh", note: `${robots(m[3])} combined` }),
+    // validator hint: "excavator tasks need 9900 Wh but its 2 robots carry only 10000 Wh
+    // combined"; phase 3e: "printer tasks need 4,037 Wh, 3,999 Wh of work and about 38 Wh of
+    // travel, but its 1 robot carries only 4,000 Wh combined"
+    each(text, new RegExp(`(\\S+) tasks need ${NUM} Wh(?:, ${NUM} Wh of work and about ${NUM} Wh of travel,)? but its (\\d+) robots? (?:carry|carries) only ${NUM} Wh combined`), (m) =>
+      add({ subject: m[1], kind: "type", demanded: parseNum(m[2]), budget: parseNum(m[6]), unit: "Wh", note: withNote(fleet(m[5]), travel(m[4])) }),
     );
-    // validator: "T4 needs 5200 Wh but the largest excavator battery is 5000 Wh"
-    each(text, new RegExp(`(\\S+) needs ${NUM} Wh but the largest (\\S+) battery is ${NUM} Wh`), (m) =>
-      add({ subject: m[1], kind: "task", demanded: +m[2], budget: +m[4], unit: "Wh", note: `largest ${m[3]} battery` }),
+    // validator: "T4 needs 5200 Wh but the largest excavator battery is 5000 Wh"; phase 3e:
+    // "T1 needs 4,200 Wh, about 38 Wh of it travel, but the largest excavator battery is 4,000 Wh"
+    each(text, new RegExp(`(\\S+) needs ${NUM} Wh(?:, about ${NUM} Wh of it travel,)? but the largest (\\S+) battery is ${NUM} Wh`), (m) =>
+      add({ subject: m[1], kind: "task", demanded: parseNum(m[2]), budget: parseNum(m[5]), unit: "Wh", note: withNote(`largest ${m[4]} battery`, travel(m[3])) }),
     );
     // validator hint: "T4 (5200 Wh, largest excavator battery 5000 Wh)"
     each(text, new RegExp(`(\\S+) \\(${NUM} Wh, largest (\\S+) battery ${NUM} Wh\\)`), (m) =>
-      add({ subject: m[1], kind: "task", demanded: +m[2], budget: +m[4], unit: "Wh", note: `largest ${m[3]} battery` }),
+      add({ subject: m[1], kind: "task", demanded: parseNum(m[2]), budget: parseNum(m[4]), unit: "Wh", note: `largest ${m[3]} battery` }),
     );
-    // solver: "EX1 would need 5200 Wh (incl. ~30 Wh of travel) but has 5000 Wh."
-    each(text, new RegExp(`(\\S+) would need ${NUM} Wh(?: \\(incl\\. ~${NUM} Wh of travel\\))? but has ${NUM} Wh`), (m) =>
-      add({
-        subject: m[1],
-        kind: "robot",
-        demanded: +m[2],
-        budget: +m[4],
-        unit: "Wh",
-        note: m[3] ? `incl. ~${m[3]} Wh of travel` : null,
-      }),
+    // validator hint, phase 3e: "T1 (4,162 Wh of work plus about 38 Wh of travel, 4,200 Wh
+    // against the largest excavator battery of 4,000 Wh)"
+    each(text, new RegExp(`(\\S+) \\((?:${NUM} Wh of work plus about ${NUM} Wh of travel, )?${NUM} Wh against the largest (\\S+) battery of ${NUM} Wh\\)`), (m) =>
+      add({ subject: m[1], kind: "task", demanded: parseNum(m[4]), budget: parseNum(m[6]), unit: "Wh", note: withNote(`largest ${m[5]} battery`, travel(m[3])) }),
     );
-    // solver: "EX1 has 5000 Wh, and the excavator tasks (9929.649 Wh in total (incl. ~30 Wh of
-    // travel)) cannot be split across the 2 excavator robot(s) (10000 Wh combined) ..."
-    each(
-      text,
-      new RegExp(
-        `(\\S+) has ${NUM} Wh, and the (\\S+) tasks \\(${NUM} Wh in total(?: \\(incl\\. ~${NUM} Wh of travel\\))?\\) cannot be split across the (\\d+) \\S+ robot\\(s\\) \\(${NUM} Wh combined\\)`,
-      ),
-      (m) => {
-        const p = pools.get(m[3]) ?? { robots: [], demanded: +m[4], travel: m[5] ?? null, pool: +m[7] };
-        if (!p.robots.some((r) => r.id === m[1])) p.robots.push({ id: m[1], budget: +m[2] });
-        pools.set(m[3], p);
-      },
-    );
+    if (solverEnergy) {
+      // solver, the tasks only one robot can run: "EX1 would need 5200 Wh (incl. ~30 Wh of
+      // travel) but has 5000 Wh." (3c); "PR1 would need 4,031 Wh, about 41 Wh of it travel,
+      // but has 4,000 Wh." (3d)
+      each(text, new RegExp(`(\\S+) would need ${NUM} Wh(?: \\(incl\\. ~${NUM} Wh of travel\\)|, about ${NUM} Wh of it travel,)? but has ${NUM} Wh`), (m) =>
+        add({ subject: m[1], kind: "robot", demanded: parseNum(m[2]), budget: parseNum(m[5]), unit: "Wh", note: withNote("tasks only it can run", travel(m[3] ?? m[4])) }),
+      );
+      // solver, a type's pool (3d): "EX1 and EX2 each have 5,000 Wh; the excavator tasks need
+      // 9,930 Wh in total, about 30 Wh of it travel, and cannot be split across 2 excavators
+      // (10,000 Wh combined) without exceeding one budget." / "... need 362 Wh in total, about
+      // 62 Wh of it travel, more than the 250 Wh the 2 excavators have combined."
+      each(text, new RegExp(`the (\\S+) tasks need ${NUM} Wh in total(?:, about ${NUM} Wh of it travel)?(?:,? and cannot be split across (\\d+) \\S+ \\(${NUM} Wh combined\\)|, more than the ${NUM} Wh the (\\d+) \\S+ have combined)`), (m) => {
+        const split = m[4] !== undefined;
+        const count = split ? m[4] : m[7];
+        add({
+          subject: m[1],
+          kind: "type",
+          demanded: parseNum(m[2]),
+          budget: parseNum(split ? m[5] : m[6]),
+          unit: "Wh",
+          note: withNote(`${robots(count)} combined`, travel(m[3])),
+          // "cannot be split ... without exceeding one budget": the row is the conflict itself
+          ...(split ? { binding: true, why: "no split fits one battery" } : {}),
+        });
+      });
+      // solver, pre-3d pool sentence: "EX1 has 5000 Wh, and the excavator tasks (9929.649 Wh in
+      // total (incl. ~30 Wh of travel)) cannot be split across the 2 excavator robot(s)
+      // (10000 Wh combined) ..."
+      each(
+        text,
+        new RegExp(
+          `(\\S+) has ${NUM} Wh, and the (\\S+) tasks \\(${NUM} Wh in total(?: \\(incl\\. ~${NUM} Wh of travel\\))?\\) cannot be split across the (\\d+) \\S+ robot\\(s\\) \\(${NUM} Wh combined\\)`,
+        ),
+        (m) => {
+          const p = pools.get(m[3]) ?? { robots: [], demanded: parseNum(m[4]), travel: m[5] ?? null, pool: parseNum(m[7]), at };
+          if (!p.robots.some((r) => r.id === m[1])) p.robots.push({ id: m[1], budget: parseNum(m[2]) });
+          pools.set(m[3], p);
+        },
+      );
+    }
     // validator: "excavator: 120 h over 2 robots needs >= 60 h; horizon is 48 h"
     each(text, new RegExp(`(\\S+): ${NUM} h over (\\d+) robots? needs >= ${NUM} h; horizon is ${NUM} h`), (m) =>
-      add({ subject: m[1], kind: "type", demanded: +m[4], budget: +m[5], unit: "h", note: `${m[2]} h over ${robots(m[3])}` }),
+      add({ subject: m[1], kind: "type", demanded: parseNum(m[4]), budget: parseNum(m[5]), unit: "h", note: `${groupDigits(m[2])} h over ${robots(m[3])}` }),
     );
-    // validator: "T1->T2->T5 takes 200 h in sequence; horizon is 168 h"
+    // validator: "T1->T2->T5 takes 200 h in sequence; horizon is 168 h" (subject "T1→T2→T5",
+    // drawn with the arrow the hint above it prints)
     each(text, new RegExp(`(\\S+) takes ${NUM} h in sequence; horizon is ${NUM} h`), (m) =>
-      add({ subject: m[1], kind: "chain", demanded: +m[2], budget: +m[3], unit: "h", note: "critical path" }),
+      add({ subject: arrows(m[1]), kind: "chain", demanded: parseNum(m[2]), budget: parseNum(m[3]), unit: "h", note: "critical path" }),
     );
     // validator hint: "The critical path T1->T2 alone takes 200 h, longer than the 168 h horizon"
     each(text, new RegExp(`The critical path (\\S+) alone takes ${NUM} h, longer than the ${NUM} h horizon`), (m) =>
-      add({ subject: m[1], kind: "chain", demanded: +m[2], budget: +m[3], unit: "h", note: "critical path" }),
+      add({ subject: arrows(m[1]), kind: "chain", demanded: parseNum(m[2]), budget: parseNum(m[3]), unit: "h", note: "critical path" }),
     );
-    // solver horizon hint: "... within the 168 h horizon: the longest precedence chain alone
-    // takes 200 h, the busiest robot type (excavator) needs at least 180 h"
-    const horizon = /within the (\d+(?:\.\d+)?) h horizon/.exec(text);
-    const deadline = horizon ? +horizon[1] : horizonH ?? null;
+    // solver horizon hint: "The plan cannot finish within the 60 h horizon: the longest
+    // precedence chain alone needs 86 h, 26 h past the 60 h deadline; the busiest robot type
+    // (hauler) needs at least 24 h." (3d; "takes 61 h (transit to its first zone included) and"
+    // before)
+    const horizon = new RegExp(`within the ${NUM} h horizon`).exec(text);
+    const deadline = horizon ? parseNum(horizon[1]) : (horizonH ?? null);
     if (deadline !== null) {
-      each(text, new RegExp(`the longest (?:precedence chain alone|chain of work, locked starts included,) takes ${NUM} h`), (m) =>
-        add({ subject: "longest chain", kind: "chain", demanded: +m[1], budget: deadline, unit: "h", note: "precedence" }),
+      each(text, new RegExp(`the longest (?:precedence chain alone|chain of work, locked starts included,) (?:takes|needs) ${NUM} h( \\(transit to its first zone included\\)| including the transit to its first zone)?`), (m) =>
+        add({
+          subject: "longest chain",
+          kind: "chain",
+          demanded: parseNum(m[1]),
+          budget: deadline,
+          unit: "h",
+          note: m[2] ? "precedence, incl. transit to its first zone" : "precedence",
+        }),
       );
       each(text, new RegExp(`the busiest robot type \\((\\S+)\\) needs at least ${NUM} h`), (m) =>
-        add({ subject: m[1], kind: "type", demanded: +m[2], budget: deadline, unit: "h", note: "busiest type" }),
+        add({ subject: m[1], kind: "type", demanded: parseNum(m[2]), budget: deadline, unit: "h", note: "busiest type, work spread over its robots" }),
       );
       each(text, new RegExp(`the locked task (\\S+) cannot end before ${NUM} h`), (m) =>
-        add({ subject: m[1], kind: "task", demanded: +m[2], budget: deadline, unit: "h", note: "locked start" }),
+        add({ subject: m[1], kind: "task", demanded: parseNum(m[2]), budget: deadline, unit: "h", note: "locked start" }),
       );
       // validator hint: "excavator work (120 h over 2 robots needs at least 60 h)"
       each(text, new RegExp(`(\\S+) work \\(${NUM} h over (\\d+) robots? needs at least ${NUM} h\\)`), (m) =>
-        add({ subject: m[1], kind: "type", demanded: +m[4], budget: deadline, unit: "h", note: `${m[2]} h over ${robots(m[3])}` }),
+        add({ subject: m[1], kind: "type", demanded: parseNum(m[4]), budget: deadline, unit: "h", note: `${groupDigits(m[2])} h over ${robots(m[3])}` }),
       );
-      // solver: "EX1 runs one task at a time, and the 3 task(s) only it can do already take
-      // 120 h back to back plus up to 4 h of transit."
-      each(text, new RegExp(`(\\S+) runs one task at a time, and the (\\d+) task\\(s\\) only it can do already take ${NUM} h back to back(?: plus up to ${NUM} h of transit)?`), (m) =>
+      // solver, robot time: "EX1 runs one task at a time, and the 2 tasks only it can do
+      // already take 20 h back to back plus up to 8 h of transit." / "..., and the task only it
+      // can do already takes 8 h plus up to 2 h of transit." (3d); "the 3 task(s) only it can
+      // do already take 120 h back to back" (before)
+      each(text, new RegExp(`(\\S+) runs one task at a time, and the (?:(\\d+) tasks?(?:\\(s\\))?|task) only it can do already takes? ${NUM} h(?: back to back)?(?: plus up to ${NUM} h of transit)?`), (m) => {
+        const n = m[2] ?? "1";
         add({
           subject: m[1],
           kind: "robot",
-          demanded: +m[3] + (m[4] ? +m[4] : 0),
+          demanded: parseNum(m[3]) + (m[4] ? parseNum(m[4]) : 0),
           budget: deadline,
           unit: "h",
-          note: `${m[2]} ${m[2] === "1" ? "task" : "tasks"} only it can do${m[4] ? `, incl. ${m[4]} h of transit` : ""}`,
-        }),
-      );
-      // solver: "EX1 runs one task at a time; the excavator tasks total 120 h across 2 excavator robot(s) ..."
-      each(text, new RegExp(`(\\S+) runs one task at a time; the (\\S+) tasks total ${NUM} h across (\\d+) \\S+ robot\\(s\\)(?: plus up to ${NUM} h of transit)?`), (m) =>
+          note: `${n} ${n === "1" ? "task" : "tasks"} only it can do${m[4] ? `, incl. ${groupDigits(m[4])} h of transit` : ""}`,
+        });
+      });
+      // solver, a type's robot time: "EX1 and EX2 each run one task at a time; the excavator
+      // tasks total 40 h across 2 excavators plus up to 3 h of transit." (3d); "EX1 runs one task
+      // at a time; the excavator tasks total 120 h across 2 excavator robot(s) ..." (before).
+      // The type's robots together have the deadline once each.
+      each(text, new RegExp(`(?:runs|each run) one task at a time; the (\\S+) tasks total ${NUM} h across (\\d+) \\S+(?: robot\\(s\\))?(?: plus up to ${NUM} h of transit)?`), (m) =>
         add({
           subject: m[1],
-          kind: "robot",
-          demanded: +m[3] + (m[5] ? +m[5] : 0),
-          budget: deadline,
+          kind: "type",
+          demanded: parseNum(m[2]) + (m[4] ? parseNum(m[4]) : 0),
+          budget: deadline * Number(m[3]),
           unit: "h",
-          note: `${m[2]} total across ${robots(m[4])}${m[5] ? `, incl. ${m[5]} h of transit` : ""}`,
+          note: `${robots(m[3])} × ${fmtNum(deadline, 0)} h${m[4] ? `, incl. ${groupDigits(m[4])} h of transit` : ""}`,
         }),
       );
-      // solver: "Zone Z1 admits one robot at a time, so its 5 tasks (60 h in total) cannot overlap."
-      each(text, new RegExp(`Zone (\\S+) admits one robot at a time, so its (\\d+) tasks \\(${NUM} h in total\\)`), (m) =>
-        add({ subject: m[1], kind: "zone", demanded: +m[3], budget: deadline, unit: "h", note: `${m[2]} tasks, one robot at a time` }),
+      // solver: "Zone Z1 admits one robot at a time, so its 5 tasks (60 h in total) cannot
+      // overlap." ("its 1 task (8 h in total)")
+      each(text, new RegExp(`Zone (\\S+) admits one robot at a time, so its (\\d+) tasks? \\(${NUM} h in total\\)`), (m) =>
+        add({ subject: m[1], kind: "zone", demanded: parseNum(m[3]), budget: deadline, unit: "h", note: `${m[2]} ${m[2] === "1" ? "task" : "tasks"}, one robot at a time` }),
       );
     }
   }
@@ -703,22 +1048,30 @@ export function budgetRows(failure: Failure, horizonH?: number | null): BudgetRo
         : sameBudget
           ? `${p.robots.map((r) => r.id).join(", ")} (${fmtNum(p.robots[0].budget, 0)} Wh each)`
           : p.robots.map((r) => `${r.id} ${fmtNum(r.budget, 0)} Wh`).join(", ");
+    at = p.at;
     add({
       subject: type,
       kind: "type",
       demanded: p.demanded,
       budget: p.pool,
       unit: "Wh",
-      note: `cannot be split across ${across}${p.travel ? ` · incl. ~${p.travel} Wh travel` : ""}`,
+      note: withNote(`no split fits ${across}`, p.travel !== null ? travelNote(parseNum(p.travel)) : null),
     });
   }
-  return rows;
+  return rows.sort((a, b) => a.at - b.at).map((r) => r.row);
 }
 
 // ------------------------------------------------------------------ repair diff
 export interface DiffChip {
+  /** the task id (the answer's id; a removed task's old id), or the id range of a
+   *  renumbering ("T4–T10 → T5–T11") */
   task: string;
-  kind: "added" | "removed" | "split" | "changed";
+  /** the id a renumbered task had in the graph the repair answered: "T4 (was T3)" */
+  was?: string;
+  /** "replaced": the repair removed a task and gave its id to a new one (the id is both removed
+   *  and added) and the diff does not prove a split; one neutral chip, never "T2 added" next to
+   *  "T2 removed" */
+  kind: "added" | "removed" | "replaced" | "split" | "changed" | "renumbered";
   /** chip text after the task id, e.g. "energy 4,000 → 2,100 Wh · zone Z2 → Z1" */
   text: string;
   /** tooltip: the task name when known plus the full change list */
@@ -736,9 +1089,28 @@ export interface RepairSummary {
   totals: string;
 }
 
+type FieldChanges = Map<DiffField, { before: unknown; after: unknown }>;
+
+/** The diff's changed rows grouped by the task they belong to (the answer's id), in the
+ *  diff's order, with the id the task had before when it was renumbered. */
+function groupChanges(diff: RepairDiff): Map<string, { from: string | null; fields: FieldChanges }> {
+  const out = new Map<string, { from: string | null; fields: FieldChanges }>();
+  for (const c of diff.changed) {
+    let entry = out.get(c.task);
+    if (!entry) {
+      entry = { from: null, fields: new Map() };
+      out.set(c.task, entry);
+    }
+    if (typeof c.from === "string" && c.from !== c.task) entry.from = c.from;
+    entry.fields.set(c.field, { before: c.before, after: c.after });
+  }
+  return out;
+}
+
 function fmtDiffValue(field: DiffField, v: unknown, unit: string): string {
   if (v === null || v === undefined) return "none";
   if (field === "after") return Array.isArray(v) && v.length ? v.map(String).join(" + ") : "none";
+  if (field === "unit" && typeof v === "string") return unitLabel(v) || v;
   if (typeof v === "number") {
     if (field === "duration_h") return `${fmtNum(v, 1)} h`;
     if (field === "energy_wh") return `${fmtNum(v, 0)} Wh`;
@@ -756,7 +1128,413 @@ function range(field: DiffField, before: unknown, after: unknown, unit: string):
   return m && b.endsWith(m[2]) ? `${m[1]} → ${b}` : `${a} → ${b}`;
 }
 
-/** A task's state on one side of the diff, for matching work across ids. */
+/** A quantity range with each side's own unit when the unit changed ("353.4 m² → 141.4 m³"),
+ *  one unit when it did not ("141.4 → 280 m³"), none when neither is known ("100 → 353.4");
+ *  when only the new unit is known (a re-typed task of an older recording, whose diff has no
+ *  unit field) the old figure is quoted bare after the new one ("353.4 m² (was 100)"), so no
+ *  unit is claimed for it. */
+function quantityRange(before: unknown, after: unknown, unitBefore: string, unitAfter: string): string {
+  if (unitBefore === unitAfter) return range("quantity", before, after, unitAfter);
+  if (!unitBefore && typeof before === "number") return `${fmtDiffValue("quantity", after, unitAfter)} (was ${fmtNum(before, 1)})`;
+  return `${fmtDiffValue("quantity", before, unitBefore)} → ${fmtDiffValue("quantity", after, unitAfter)}`;
+}
+
+const workOf = (t: { duration_h: number; energy_wh: number }) => `${fmtNum(t.duration_h, 1)} h · ${fmtWh(t.energy_wh)}`;
+
+const SAME = 1e-6;
+
+function sameNumber(a: number, b: number, tolerance = SAME): boolean {
+  return Math.abs(a - b) <= tolerance * Math.max(1, Math.abs(a), Math.abs(b));
+}
+
+/** Whether `tasks` is the graph this repair produced, as far as the diff can tell: every added
+ *  id is in it (and, in a per-id diff, no removed one), every changed row's `after` value is
+ *  the task's own, and its energy per robot type, total energy and total hours are the
+ *  diff's after-figures. A graph that fails is never used to name, unit or match the chips:
+ *  a round's chips must not be read against a graph later rounds rewrote. */
+export function graphFitsDiff(diff: RepairDiff, tasks: readonly Task[]): boolean {
+  if (tasks.length === 0) return false;
+  const byId = new Map(tasks.map((t) => [t.id, t]));
+  if (byId.size !== tasks.length) return false;
+  if (diff.added.some((id) => !byId.has(id))) return false;
+  if (!isMatchedDiff(diff) && diff.removed.some((id) => byId.has(id))) return false;
+  for (const c of diff.changed) {
+    const t = byId.get(c.task);
+    if (!t) return false;
+    if (c.field === "after") continue; // edge lists are compared through the renumbering
+    const now = (t as unknown as Record<string, unknown>)[c.field];
+    if (typeof c.after === "number" && typeof now === "number") {
+      if (!sameNumber(c.after, now)) return false;
+    } else if (c.field === "name") {
+      if (typeof c.after !== "string" || typeof now !== "string" || nameKey(c.after) !== nameKey(now)) return false;
+    } else if ((c.after ?? null) !== (now ?? null)) {
+      return false;
+    }
+  }
+  const perType = new Map<string, number>();
+  let energy = 0;
+  let hours = 0;
+  for (const t of tasks) {
+    perType.set(t.robot_type, (perType.get(t.robot_type) ?? 0) + t.energy_wh);
+    energy += t.energy_wh;
+    hours += t.duration_h;
+  }
+  const after = diff.per_type_energy_after ?? {};
+  for (const type of new Set([...perType.keys(), ...Object.keys(after)])) {
+    if (Math.abs((perType.get(type) ?? 0) - (after[type] ?? 0)) > 0.5) return false;
+  }
+  if (Number.isFinite(diff.total_energy_wh_after) && Math.abs(energy - diff.total_energy_wh_after) > 0.5) return false;
+  if (Number.isFinite(diff.total_duration_h_after) && Math.abs(hours - diff.total_duration_h_after) > 0.5) return false;
+  return true;
+}
+
+/** Names compared the way the backend pairs them: case, whitespace and punctuation ignored. */
+function nameKey(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+/** The scalar fields a repair can change on a task, in the order the chips list them. */
+const SCALAR_FIELDS: DiffField[] = ["name", "robot_type", "zone", "structure", "unit", "quantity", "duration_h", "energy_wh"];
+
+/**
+ * The graph a repair answered, rebuilt from the graph it produced and its diff (phase 3d
+ * diffs only): every paired task with its `before` values and its old id, the added tasks
+ * left out. Null when that graph cannot be known: the diff removed tasks (their work is not
+ * in the diff) or is a per-id diff of an older recording. Predecessor lists are translated
+ * back through the renumbering ("T2 (removed)" read as the old T2); edges the backend forgave
+ * as a re-point stay as the answer wrote them, so they are approximate, and nothing here reads
+ * them.
+ */
+export function graphBefore(diff: RepairDiff, after: readonly Task[]): Task[] | null {
+  if (!isMatchedDiff(diff) || diff.removed.length > 0 || after.length === 0) return null;
+  const added = new Set(diff.added);
+  const rows = groupChanges(diff);
+  const back = new Map(diff.renumbered.map((r) => [r.to, r.from]));
+  const oldId = (id: string) => back.get(id) ?? id;
+  const out: Task[] = [];
+  for (const t of after) {
+    if (added.has(t.id)) continue;
+    const row = rows.get(t.id);
+    const was: Task = { ...t, id: row?.from ?? oldId(t.id), after: t.after.filter((p) => !added.has(p)).map(oldId) };
+    const record = was as unknown as Record<string, unknown>;
+    for (const field of SCALAR_FIELDS) {
+      const change = row?.fields.get(field);
+      if (change) record[field] = change.before;
+    }
+    const edges = row?.fields.get("after");
+    if (edges && Array.isArray(edges.before)) {
+      was.after = edges.before.map((p) => String(p).replace(/ \(removed\)$/, "")).map(oldId);
+    }
+    out.push(was);
+  }
+  return out;
+}
+
+/** Index of the ok taskgraph / repair step before step `i` (the answer the repair at `i`
+ *  repaired), or -1. */
+function previousGraphStep(steps: readonly LoopStep[], i: number): number {
+  for (let j = i - 1; j >= 0; j -= 1) {
+    const s = steps[j];
+    if ((s.stage === "taskgraph" || s.stage === "repair") && s.ok) return j;
+  }
+  return -1;
+}
+
+/**
+ * The graph each validated repair produced, for its diff chips: step index -> tasks. The
+ * repair that produced the plan's final graph (lastGraphStep) gets `finalTasks`; walking back,
+ * each earlier repair gets the graph the next one answered, rebuilt from that one's diff
+ * (graphBefore), as long as it can be rebuilt exactly and fits the diff it is read with
+ * (graphFitsDiff). A recording made before phase 3d (a per-id diff) stops the walk: there
+ * only the producing repair gets a graph, never an earlier round.
+ */
+export function repairGraphs(steps: readonly LoopStep[], finalTasks: readonly Task[]): Map<number, Task[]> {
+  const out = new Map<number, Task[]>();
+  let i = lastGraphStep([...steps]);
+  let graph: Task[] | null = finalTasks.length > 0 ? [...finalTasks] : null;
+  while (i >= 0 && graph) {
+    const step = steps[i];
+    if (step.stage !== "repair") break;
+    const diff = repairDiff(step);
+    if (!diff || !graphFitsDiff(diff, graph)) break;
+    out.set(i, graph);
+    graph = graphBefore(diff, graph);
+    i = previousGraphStep(steps, i);
+  }
+  return out;
+}
+
+/** "T4–T10 → T5–T11" for a run of ids shifted together, runs joined by ", ". */
+function renumberLabel(pairs: readonly DiffRenumbering[]): string {
+  const split = (id: string) => {
+    const m = /^(.*?)(\d+)$/.exec(id);
+    return m ? { prefix: m[1], n: Number(m[2]) } : null;
+  };
+  const runs: DiffRenumbering[][] = [];
+  for (const p of pairs) {
+    const run = runs[runs.length - 1];
+    const last = run?.[run.length - 1];
+    const a = last ? split(last.from) : null;
+    const b = last ? split(last.to) : null;
+    const c = split(p.from);
+    const d = split(p.to);
+    const continues =
+      a !== null && b !== null && c !== null && d !== null &&
+      c.prefix === a.prefix && d.prefix === b.prefix && c.n === a.n + 1 && d.n === b.n + 1;
+    if (continues) run.push(p);
+    else runs.push([p]);
+  }
+  return runs
+    .map((run) =>
+      run.length === 1
+        ? `${run[0].from} → ${run[0].to}`
+        : `${run[0].from}–${run[run.length - 1].from} → ${run[0].to}–${run[run.length - 1].to}`,
+    )
+    .join(", ");
+}
+
+/** The clauses of one changed task, in reading order: "renamed", "moved to excavator", "zone
+ *  Z2 → Z4", "quantity 141.4 → 280 m³", "duration 24 → 14 h", "energy 4,000 → 2,100 Wh",
+ *  "after T2 (removed) + T4 → T4". `unitBefore` / `unitAfter` are the quantity's units when
+ *  known ("" when not). `quantityDropped` says the same work shrank: a smaller quantity in the
+ *  same unit, robot type, zone and structure. */
+function changeParts(
+  fields: FieldChanges,
+  unitBefore: string,
+  unitAfter: string,
+  splitChildren?: string[],
+  self?: string,
+): { parts: string[]; detail: string[]; quantityDropped: boolean } {
+  const parts: string[] = [];
+  const detail: string[] = [];
+  if (splitChildren && self) {
+    parts.push(`split into ${self} + ${splitChildren.join(" + ")}`);
+    detail.push(parts[0]);
+  }
+  const name = fields.get("name");
+  if (name) {
+    parts.push("renamed");
+    detail.push(`renamed “${String(name.before)}” → “${String(name.after)}”`);
+  }
+  const rt = fields.get("robot_type");
+  if (rt) {
+    parts.push(`moved to ${String(rt.after)}`);
+    detail.push(`robot type ${String(rt.before)} → ${String(rt.after)}`);
+  }
+  for (const field of ["zone", "structure"] as const) {
+    const c = fields.get(field);
+    if (!c) continue;
+    const text = `${field} ${fmtDiffValue(field, c.before, "")} → ${fmtDiffValue(field, c.after, "")}`;
+    parts.push(text);
+    detail.push(text);
+  }
+  const q = fields.get("quantity");
+  const unit = fields.get("unit");
+  if (q) {
+    const text = `quantity ${quantityRange(q.before, q.after, unitBefore, unitAfter)}`;
+    parts.push(text);
+    detail.push(text);
+  } else if (unit) {
+    const text = `unit ${range("unit", unit.before, unit.after, "")}`;
+    parts.push(text);
+    detail.push(text);
+  }
+  for (const field of ["duration_h", "energy_wh", "after"] as const) {
+    const c = fields.get(field);
+    if (!c) continue;
+    const text = `${DIFF_FIELD_LABELS[field]} ${range(field, c.before, c.after, "")}`;
+    parts.push(text);
+    detail.push(text);
+  }
+  const quantityDropped =
+    q !== undefined &&
+    !unit &&
+    !rt &&
+    !fields.has("zone") &&
+    !fields.has("structure") &&
+    typeof q.before === "number" &&
+    (q.after === null || q.after === undefined || (typeof q.after === "number" && q.after < q.before));
+  return { parts, detail, quantityDropped };
+}
+
+/** A removed task the answer split into several added ones, proven from the diff: exactly one
+ *  task was removed, its robot type and energy follow from the diff's per-type energy before
+ *  the repair minus what the paired tasks had then, and exactly one set of at least two added
+ *  tasks of that type adds back to that energy within 10 %. Null when the diff does not prove
+ *  it (or `tasks`, the graph the repair produced, is not known). */
+function provenSplit(
+  diff: RepairDiff,
+  tasks: readonly Task[],
+  rows: Map<string, { from: string | null; fields: FieldChanges }>,
+): { removed: string; type: string; energy: number; duration: number | null; halves: Task[] } | null {
+  if (tasks.length === 0 || diff.removed.length !== 1) return null;
+  const added = new Set(diff.added);
+  const paired = new Map<string, number>();
+  let pairedHours = 0;
+  for (const t of tasks) {
+    if (added.has(t.id)) continue;
+    const fields = rows.get(t.id)?.fields;
+    const rt = fields?.get("robot_type")?.before;
+    const e = fields?.get("energy_wh")?.before;
+    const d = fields?.get("duration_h")?.before;
+    const type = typeof rt === "string" ? rt : t.robot_type;
+    paired.set(type, (paired.get(type) ?? 0) + (typeof e === "number" ? e : t.energy_wh));
+    pairedHours += typeof d === "number" ? d : t.duration_h;
+  }
+  const before = diff.per_type_energy_before ?? {};
+  const left: [string, number][] = [];
+  for (const type of new Set([...Object.keys(before), ...paired.keys()])) {
+    const rest = (before[type] ?? 0) - (paired.get(type) ?? 0);
+    if (Math.abs(rest) > 1) left.push([type, rest]);
+  }
+  if (left.length !== 1 || left[0][1] <= 0) return null;
+  const [type, energy] = left[0];
+  const candidates = tasks.filter((t) => added.has(t.id) && t.robot_type === type);
+  if (candidates.length < 2 || candidates.length > 10) return null;
+  const fits: Task[][] = [];
+  for (let mask = 1; mask < 1 << candidates.length; mask += 1) {
+    const subset = candidates.filter((_, k) => (mask >> k) & 1);
+    if (subset.length < 2) continue;
+    const sum = subset.reduce((acc, t) => acc + t.energy_wh, 0);
+    if (Math.abs(sum - energy) <= 0.1 * energy) fits.push(subset);
+  }
+  if (fits.length !== 1) return null;
+  const hours = Number.isFinite(diff.total_duration_h_before) ? diff.total_duration_h_before - pairedHours : NaN;
+  return { removed: diff.removed[0], type, energy, duration: hours > 0 ? hours : null, halves: fits[0] };
+}
+
+/**
+ * The repair diff as chips: what THIS round changed, from its own diff.
+ *
+ * A phase-3d diff (the backend paired the two graphs, `renumbered` present) is rendered
+ * verbatim: one chip per changed task ("T4 (was T3) renamed · duration 24 → 14 h · energy
+ * 4,000 → 2,100 Wh"), "added" / "removed" for the unmatched ids, a split only when the diff
+ * proves it ("T2 split into T2 + T3 · 24 h · 4,000 Wh → 14 h · 2,100 Wh each": one removed
+ * task whose energy, from the per-type figures, the added tasks of its robot type give back
+ * within 10 %), and one line for the renumbered ids that changed nothing ("T4–T10 → T5–T11 ·
+ * 7 tasks renumbered, work unchanged"). A per-id diff of an older recording keeps the old
+ * inference (a split from a shrunken task plus an added one, a renumbering from equal work
+ * under shifted ids), and only with the graph that repair produced.
+ *
+ * `tasks` is the graph THIS repair produced (repairGraphs: the plan's final graph for the step
+ * lastGraphStep names, a graph rebuilt from the later diffs for an earlier phase-3d round, []
+ * otherwise); it names the tasks and gives the quantities their units. A graph that does not
+ * fit the diff (graphFitsDiff) is ignored, so a round is never read against a graph later
+ * rounds rewrote.
+ */
+export function describeRepairDiff(diff: RepairDiff, tasks: readonly Task[] = []): RepairSummary {
+  const graph = graphFitsDiff(diff, tasks) ? tasks : [];
+  const { chips, quantityDropped } = isMatchedDiff(diff) ? matchedChips(diff, graph) : legacyChips(diff, graph);
+  const drift = Number.isFinite(diff.scope_drift_pct) ? diff.scope_drift_pct : 0;
+  let scopeReason: string | null = null;
+  if (drift < -25) scopeReason = `total energy ${fmtSignedPct(drift)}: work was re-scoped away`;
+  else if (quantityDropped) scopeReason = `quantity reduced on ${quantityDropped}`;
+  const totals = `${fmtNum(diff.total_energy_wh_before, 0)} → ${fmtNum(diff.total_energy_wh_after, 0)} Wh (${fmtSignedPct(drift)}) · ${fmtNum(diff.total_duration_h_before, 0)} → ${fmtNum(diff.total_duration_h_after, 0)} h`;
+  return { chips, scopeReview: scopeReason !== null, scopeReason, drift, totals };
+}
+
+/** The chips of a phase-3d diff (see describeRepairDiff). */
+function matchedChips(
+  diff: RepairDiff & { renumbered: DiffRenumbering[] },
+  tasks: readonly Task[],
+): { chips: DiffChip[]; quantityDropped: string | null } {
+  const byId = new Map(tasks.map((t) => [t.id, t]));
+  const rows = groupChanges(diff);
+  const chips: DiffChip[] = [];
+  let quantityDropped: string | null = null;
+  const doneAdded = new Set<string>();
+  const doneRemoved = new Set<string>();
+
+  const split = provenSplit(diff, tasks, rows);
+  if (split) {
+    const ids = split.halves.map((t) => t.id);
+    const was = split.duration !== null ? workOf({ duration_h: split.duration, energy_wh: split.energy }) : fmtWh(split.energy);
+    const equal = split.halves.every((t) => t.duration_h === split.halves[0].duration_h && t.energy_wh === split.halves[0].energy_wh);
+    const into = equal ? `${workOf(split.halves[0])} each` : split.halves.map(workOf).join(" + ");
+    const sum = split.halves.reduce((acc, t) => acc + t.energy_wh, 0);
+    chips.push({
+      task: split.removed,
+      kind: "split",
+      text: `split into ${ids.join(" + ")} · ${was} → ${into}`,
+      title:
+        `${split.removed} (${split.type}, ${was}) of the graph the repair answered became ` +
+        `${joinAnd(split.halves.map((t) => `${t.id} ${t.name} (${workOf(t)})`))}; ` +
+        `together ${fmtWh(sum)}, ${fmtSignedPct((100 * (sum - split.energy)) / split.energy)} against the task they replace`,
+    });
+    doneRemoved.add(split.removed);
+    for (const id of ids) doneAdded.add(id);
+  }
+
+  // the changed tasks in the order of the graph they belong to, when it is known
+  const order = new Map(tasks.map((t, i) => [t.id, i]));
+  const changed = [...rows.entries()].sort((a, b) => (order.get(a[0]) ?? 1e9) - (order.get(b[0]) ?? 1e9));
+  for (const [id, row] of changed) {
+    const task = byId.get(id);
+    const unitRow = row.fields.get("unit");
+    const unitAfter = unitRow ? unitLabel(String(unitRow.after ?? "")) : unitLabel(task?.unit);
+    const unitBefore = unitRow ? unitLabel(String(unitRow.before ?? "")) : unitAfter;
+    const { parts, detail, quantityDropped: dropped } = changeParts(row.fields, unitBefore, unitAfter);
+    if (dropped && !quantityDropped) quantityDropped = id;
+    const head = `${id}${row.from ? ` (was ${row.from})` : ""}`;
+    chips.push({
+      task: id,
+      ...(row.from ? { was: row.from } : {}),
+      kind: "changed",
+      text: parts.join(" · "),
+      title: `${head}${task ? ` ${task.name}` : ""}: ${detail.join("; ")}`,
+    });
+  }
+
+  const removed = new Set(diff.removed);
+  for (const id of diff.added) {
+    if (doneAdded.has(id)) continue;
+    const t = byId.get(id);
+    if (removed.has(id) && !doneRemoved.has(id)) {
+      // the old task is gone and a new one took its id: one chip, whether or not the graph
+      // that would prove a split is known yet (it is not while the run streams)
+      doneRemoved.add(id);
+      chips.push({
+        task: id,
+        kind: "replaced",
+        text: "replaced",
+        title: `${id} of the graph the repair answered is gone; the answer's ${id} is a new task${
+          t ? `: ${t.name} (${t.robot_type}, ${workOf(t)})` : ""
+        }`,
+      });
+      continue;
+    }
+    chips.push({
+      task: id,
+      kind: "added",
+      text: "added",
+      title: t ? `${id} ${t.name} (${t.robot_type}, ${workOf(t)})` : `${id} added by the repair`,
+    });
+  }
+  for (const id of diff.removed) {
+    if (doneRemoved.has(id)) continue;
+    chips.push({
+      task: id,
+      kind: "removed",
+      text: "removed",
+      title: `${id} of the graph the repair answered is gone`,
+    });
+  }
+
+  // the renumbered tasks that changed nothing: one line, after the substantive chips
+  const quiet = diff.renumbered.filter((r) => !rows.has(r.to));
+  if (quiet.length > 0) {
+    chips.push({
+      task: renumberLabel(quiet),
+      kind: "renumbered",
+      text: `${quiet.length === 1 ? "renumbered" : `${plural(quiet.length, "task")} renumbered`}, work unchanged`,
+      title: quiet.map((r) => `${r.from} → ${r.to}${byId.get(r.to) ? ` ${byId.get(r.to)?.name}` : ""}`).join("; "),
+    });
+  }
+  return { chips, quantityDropped };
+}
+
+// ---- recordings made before phase 3d: a per-id diff, so splits and renumberings are inferred
+/** A task's state on one side of a per-id diff, for matching work across ids. */
 interface TaskState {
   robot_type: string;
   zone: string;
@@ -765,13 +1543,12 @@ interface TaskState {
   quantity: number | null;
 }
 
-type FieldChanges = Map<DiffField, { before: unknown; after: unknown }>;
-
 function stateSig(s: TaskState): string {
   return `${s.robot_type}|${s.zone}|${s.duration_h}|${s.energy_wh}|${s.quantity ?? ""}`;
 }
 
-/** The task as it was before the repair: its final state with the diff's `before` values put back. */
+/** The task as it was before the repair: its state in the graph the repair produced with the
+ *  diff's `before` values put back. */
 function stateBefore(task: Task, fields: FieldChanges): TaskState {
   const s: TaskState = {
     robot_type: task.robot_type,
@@ -796,12 +1573,13 @@ function idNumber(id: string): number | null {
 }
 
 /**
- * Old id -> new id for tasks the repair renumbered. The backend diff is per id; when the model
- * inserts a task and shifts every later id by one, that diff reads as a cascade of re-scopes
- * ("T9 moved to compactor, 3 -> 14 h") although the work did not change. A changed id whose
- * pre-repair state equals the final state of another added or changed id is such a shift.
+ * Old id -> new id for tasks a per-id diff shows renumbered: when the model inserts a task and
+ * shifts every later id by one, the per-id diff reads as a cascade of re-scopes although the
+ * work did not change. A changed id whose pre-repair state equals the final state of another
+ * added or changed id is such a shift, kept only when the shift is a chain that ends in an
+ * added id.
  */
-function detectRenumbering(changes: Map<string, FieldChanges>, diff: RepairDiff, tasks: Task[], byId: Map<string, Task>): Map<string, string> {
+function detectRenumbering(changes: Map<string, FieldChanges>, diff: RepairDiff, tasks: readonly Task[], byId: Map<string, Task>): Map<string, string> {
   const touched = new Set([...diff.added, ...changes.keys()]);
   const order = new Map(tasks.map((t, i) => [t.id, i]));
   const out = new Map<string, string>();
@@ -839,31 +1617,6 @@ function detectRenumbering(changes: Map<string, FieldChanges>, diff: RepairDiff,
   return out;
 }
 
-/** The per-field clauses of one changed id: "moved to excavator", "zone Z2 → Z4", ... */
-function fieldParts(task: string, fields: FieldChanges, unit: string, splitChildren?: string[]): { parts: string[]; quantityDropped: boolean } {
-  const parts: string[] = [];
-  if (splitChildren) parts.push(`split into ${task} + ${splitChildren.join(" + ")}`);
-  const rt = fields.get("robot_type");
-  if (rt) parts.push(`moved to ${String(rt.after)}`);
-  const zone = fields.get("zone");
-  if (zone) parts.push(`zone ${String(zone.before)} → ${String(zone.after)}`);
-  let quantityDropped = false;
-  const q = fields.get("quantity");
-  if (q) {
-    parts.push(`quantity ${range("quantity", q.before, q.after, unit)}`);
-    quantityDropped =
-      (typeof q.before === "number" && typeof q.after === "number" && q.after < q.before) ||
-      (typeof q.before === "number" && (q.after === null || q.after === undefined));
-  }
-  const d = fields.get("duration_h");
-  if (d) parts.push(`duration ${range("duration_h", d.before, d.after, unit)}`);
-  const e = fields.get("energy_wh");
-  if (e) parts.push(`energy ${range("energy_wh", e.before, e.after, unit)}`);
-  const after = fields.get("after");
-  if (after) parts.push(`after ${range("after", after.before, after.after, unit)}`);
-  return { parts, quantityDropped };
-}
-
 /** "duration 24 → 14 h · energy 4,000 → 2,100 Wh" between an old state and a final task. */
 function stateDelta(old: TaskState, now: Task): { parts: string[]; quantityDropped: boolean } {
   const parts: string[] = [];
@@ -872,44 +1625,32 @@ function stateDelta(old: TaskState, now: Task): { parts: string[]; quantityDropp
   if (old.zone !== now.zone) parts.push(`zone ${old.zone} → ${now.zone}`);
   let quantityDropped = false;
   if (old.quantity !== now.quantity) {
-    parts.push(`quantity ${range("quantity", old.quantity, now.quantity, unit)}`);
-    quantityDropped = typeof old.quantity === "number" && (now.quantity === null || now.quantity < old.quantity);
+    // the unit of a re-typed task's old quantity is not in a per-id diff
+    const u = old.robot_type === now.robot_type ? unit : "";
+    parts.push(`quantity ${quantityRange(old.quantity, now.quantity, u, unit)}`);
+    quantityDropped =
+      old.robot_type === now.robot_type &&
+      old.zone === now.zone &&
+      typeof old.quantity === "number" &&
+      (now.quantity === null || now.quantity < old.quantity);
   }
   if (old.duration_h !== now.duration_h) parts.push(`duration ${range("duration_h", old.duration_h, now.duration_h, unit)}`);
   if (old.energy_wh !== now.energy_wh) parts.push(`energy ${range("energy_wh", old.energy_wh, now.energy_wh, unit)}`);
   return { parts, quantityDropped };
 }
 
-const workOf = (t: Pick<TaskState, "duration_h" | "energy_wh">) => `${fmtNum(t.duration_h, 1)} h · ${fmtWh(t.energy_wh)}`;
+/** The quantity units of a per-id changed row: the task's unit on both sides when its robot
+ *  type stayed (an older diff has no unit field), only on the new side when it was re-typed. */
+function legacyUnits(task: Task | undefined, fields: FieldChanges): [string, string] {
+  const unit = unitLabel(task?.unit);
+  return [fields.has("robot_type") ? "" : unit, unit];
+}
 
-/**
- * The repair diff as chips, one per task: "T2 split into T2 + T11 · energy 4,000 → 2,100 Wh",
- * "T5 moved to excavator · zone Z2 → Z4", "T11 added", "T9 removed". A split is detected
- * when an added task's energy plus the shrunken task's new energy adds back to the old energy
- * (within 10 %) on the same robot type; `tasks` supplies names, units and robot types.
- *
- * `tasks` must be the graph THIS repair produced: the plan's final graph for the step
- * lastGraphStep names, and [] for every earlier round (and while the trace still streams), so
- * those chips come from the diff's fields verbatim. Matching a round's diff against a graph
- * that later rounds rewrote describes changes that never happened ("renumbered, work
- * unchanged" for tasks that were re-scoped) and drops the real ones.
- *
- * When the repair renumbered the graph (see detectRenumbering) the shifted ids collapse into
- * one "renumbered, work unchanged" chip and the ids whose old work is gone are matched to the
- * new work by robot type and zone: "T2 + T3 split from T2 (24 h · 4,000 Wh) into 14 h · 2,100 Wh
- * + 14 h · 2,100 Wh", "T4 re-scoped (was T3) · duration 24 → 14 h · energy 4,000 → 2,100 Wh".
- */
-export function describeRepairDiff(diff: RepairDiff, tasks: Task[] = []): RepairSummary {
+/** The chips of a per-id diff (a recording made before phase 3d; see describeRepairDiff). */
+function legacyChips(diff: RepairDiff, tasks: readonly Task[]): { chips: DiffChip[]; quantityDropped: string | null } {
   const byId = new Map(tasks.map((t) => [t.id, t]));
   const changes = new Map<string, FieldChanges>();
-  for (const c of diff.changed) {
-    let fields = changes.get(c.task);
-    if (!fields) {
-      fields = new Map();
-      changes.set(c.task, fields);
-    }
-    fields.set(c.field, { before: c.before, after: c.after });
-  }
+  for (const [id, row] of groupChanges(diff)) changes.set(id, row.fields);
 
   const chips: DiffChip[] = [];
   let quantityDropped: string | null = null;
@@ -922,22 +1663,11 @@ export function describeRepairDiff(diff: RepairDiff, tasks: Task[] = []): Repair
   const renumbered = detectRenumbering(changes, diff, tasks, byId);
   if (renumbered.size > 0) {
     const pairs = [...renumbered].sort((a, b) => (idNumber(a[0]) ?? 0) - (idNumber(b[0]) ?? 0));
-    const contiguous =
-      pairs.length > 1 &&
-      pairs.every(([o, n], i) => {
-        const a = idNumber(o);
-        const b = idNumber(n);
-        const prev = i === 0 ? null : idNumber(pairs[i - 1][0]);
-        return a !== null && b === a + 1 && (prev === null || a === prev + 1);
-      });
-    const label = contiguous
-      ? `${pairs[0][0]}–${pairs[pairs.length - 1][0]} → ${pairs[0][1]}–${pairs[pairs.length - 1][1]}`
-      : pairs.map(([o, n]) => `${o}→${n}`).join(" ");
     // listed after the substantive changes: it is the least interesting chip
     const renumberedChip: DiffChip = {
-      task: label,
-      kind: "changed",
-      text: `${plural(pairs.length, "task")} renumbered, work unchanged`,
+      task: renumberLabel(pairs.map(([from, to]) => ({ from, to }))),
+      kind: "renumbered",
+      text: `${pairs.length === 1 ? "renumbered" : `${plural(pairs.length, "task")} renumbered`}, work unchanged`,
       title: pairs.map(([o, n]) => `${o} → ${n}${byId.get(n) ? ` ${byId.get(n)?.name}` : ""}`).join("; "),
     };
     for (const [, n] of pairs) handled.add(n);
@@ -950,11 +1680,13 @@ export function describeRepairDiff(diff: RepairDiff, tasks: Task[] = []): Repair
       if (renumbered.has(id)) continue;
       const task = byId.get(id);
       const old = task ? stateBefore(task, fields) : null;
+      // the id itself first: an id that still holds work of its own type and zone kept it
       const group = old ? tasks.filter((t) => free.has(t.id) && t.robot_type === old.robot_type && t.zone === old.zone) : [];
       if (!old || group.length === 0) {
-        const { parts, quantityDropped: dropped } = fieldParts(id, fields, unitLabel(task?.unit));
+        const [ub, ua] = legacyUnits(task, fields);
+        const { parts, detail, quantityDropped: dropped } = changeParts(fields, ub, ua);
         noteDrop(dropped, id);
-        chips.push({ task: id, kind: "changed", text: parts.join(" · "), title: `${id}${task ? ` ${task.name}` : ""}: ${parts.join("; ")}` });
+        chips.push({ task: id, kind: "changed", text: parts.join(" · "), title: `${id}${task ? ` ${task.name}` : ""}: ${detail.join("; ")}` });
         handled.add(id);
         continue;
       }
@@ -962,9 +1694,9 @@ export function describeRepairDiff(diff: RepairDiff, tasks: Task[] = []): Repair
       if (group.length > 1 && Math.abs(sum - old.energy_wh) <= Math.max(1, 0.1 * old.energy_wh)) {
         const ids = group.map((t) => t.id);
         chips.push({
-          task: ids.join(" + "),
+          task: id,
           kind: "split",
-          text: `split from ${id} (${workOf(old)}) into ${group.map(workOf).join(" + ")}`,
+          text: `split into ${ids.join(" + ")} · ${workOf(old)} → ${group.map(workOf).join(" + ")}`,
           title: group.map((t) => `${t.id} ${t.name} (${workOf(t)})`).join("; "),
         });
         for (const t of group) {
@@ -974,34 +1706,29 @@ export function describeRepairDiff(diff: RepairDiff, tasks: Task[] = []): Repair
         continue;
       }
       const now = group.find((t) => t.id === id) ?? group[0];
-      let words: string[];
       if (now.id === id) {
         // the id kept its work: the diff's own fields, with the task's unit
-        const { parts, quantityDropped: dropped } = fieldParts(id, fields, unitLabel(now.unit));
+        const [ub, ua] = legacyUnits(task, fields);
+        const { parts, detail, quantityDropped: dropped } = changeParts(fields, ub, ua);
         noteDrop(dropped, id);
-        words = parts;
-      } else {
-        // the old work went on under another id: what changed on the way, the edges included
-        // when the diff recorded the old ones
-        const { parts, quantityDropped: dropped } = stateDelta(old, now);
-        const edges = fields.get("after");
-        if (edges && Array.isArray(edges.before)) {
-          const was = edges.before.map(String).sort();
-          const is = [...now.after].sort();
-          if (was.length !== is.length || was.some((x, k) => x !== is[k])) {
-            parts.push(`after ${range("after", edges.before, now.after, "")}`);
-          }
-        }
-        noteDrop(dropped, now.id);
-        const scoped = parts.some((x) => /^(duration|energy|quantity)/.test(x));
-        words = [`${scoped ? "re-scoped" : "re-issued"} (was ${id})`, ...parts];
+        chips.push({ task: id, kind: "changed", text: parts.join(" · "), title: `${id}${task ? ` ${task.name}` : ""}: ${detail.join("; ")}` });
+        free.delete(id);
+        handled.add(id);
+        continue;
       }
-      chips.push({
-        task: now.id,
-        kind: "changed",
-        text: words.join(" · "),
-        title: `${now.id} ${now.name}: ${words.join("; ")}`,
-      });
+      // the old work went on under another id: what changed on the way, the edges included
+      // when the diff recorded the old ones
+      const { parts, quantityDropped: dropped } = stateDelta(old, now);
+      const edges = fields.get("after");
+      if (edges && Array.isArray(edges.before)) {
+        const was = edges.before.map(String).sort();
+        const is = [...now.after].sort();
+        if (was.length !== is.length || was.some((x, k) => x !== is[k])) parts.push(`after ${range("after", edges.before, now.after, "")}`);
+      }
+      noteDrop(dropped, now.id);
+      const scoped = parts.some((x) => /^(duration|energy|quantity)/.test(x));
+      const words = [scoped ? "re-scoped" : "renumbered", ...parts];
+      chips.push({ task: now.id, was: id, kind: "changed", text: words.join(" · "), title: `${now.id} (was ${id}) ${now.name}: ${words.join("; ")}` });
       free.delete(now.id);
       handled.add(now.id);
     }
@@ -1016,7 +1743,7 @@ export function describeRepairDiff(diff: RepairDiff, tasks: Task[] = []): Repair
         const e = fields.get("energy_wh");
         if (!e || typeof e.before !== "number" || typeof e.after !== "number" || e.after >= e.before) continue;
         const parent = byId.get(task);
-        if (parent && parent.robot_type !== child.robot_type) continue;
+        if (!parent || parent.robot_type !== child.robot_type || fields.has("robot_type")) continue;
         const err = Math.abs(e.before - (e.after + child.energy_wh));
         if (err <= Math.max(1, 0.1 * e.before) && (!best || err < best.err)) best = { parent: task, err };
       }
@@ -1027,14 +1754,15 @@ export function describeRepairDiff(diff: RepairDiff, tasks: Task[] = []): Repair
     }
     for (const [task, fields] of changes) {
       const children = splitOf.get(task);
-      const { parts, quantityDropped: dropped } = fieldParts(task, fields, unitLabel(byId.get(task)?.unit), children);
+      const [ub, ua] = legacyUnits(byId.get(task), fields);
+      const { parts, detail, quantityDropped: dropped } = changeParts(fields, ub, ua, children, task);
       noteDrop(dropped, task);
       const name = byId.get(task)?.name;
       chips.push({
         task,
         kind: children ? "split" : "changed",
         text: parts.join(" · "),
-        title: `${task}${name ? ` ${name}` : ""}: ${parts.join("; ")}`,
+        title: `${task}${name ? ` ${name}` : ""}: ${detail.join("; ")}`,
       });
     }
   }
@@ -1046,17 +1774,11 @@ export function describeRepairDiff(diff: RepairDiff, tasks: Task[] = []): Repair
       task: id,
       kind: "added",
       text: "added",
-      title: t ? `${id} ${t.name} (${t.robot_type}, ${fmtNum(t.duration_h, 1)} h, ${fmtNum(t.energy_wh, 0)} Wh)` : `${id} added by the repair`,
+      title: t ? `${id} ${t.name} (${t.robot_type}, ${workOf(t)})` : `${id} added by the repair`,
     });
   }
   for (const id of diff.removed) {
-    chips.push({ task: id, kind: "removed", text: "removed", title: `${id} removed by the repair` });
+    chips.push({ task: id, kind: "removed", text: "removed", title: `${id} of the graph the repair answered is gone` });
   }
-
-  const drift = Number.isFinite(diff.scope_drift_pct) ? diff.scope_drift_pct : 0;
-  let scopeReason: string | null = null;
-  if (drift < -25) scopeReason = `total energy ${fmtSignedPct(drift)}: work was re-scoped away`;
-  else if (quantityDropped) scopeReason = `quantity reduced on ${quantityDropped}`;
-  const totals = `${fmtNum(diff.total_energy_wh_before, 0)} → ${fmtNum(diff.total_energy_wh_after, 0)} Wh (${fmtSignedPct(drift)}) · ${fmtNum(diff.total_duration_h_before, 0)} → ${fmtNum(diff.total_duration_h_after, 0)} h`;
-  return { chips, scopeReview: scopeReason !== null, scopeReason, drift, totals };
+  return { chips, quantityDropped };
 }

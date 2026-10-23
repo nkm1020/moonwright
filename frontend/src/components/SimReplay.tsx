@@ -1531,7 +1531,7 @@ export function SimReplay({
                 style={{ left: `${(100 * t) / tMax}%` }}
               >
                 <span className="h-1.5 w-1.5 rotate-45 bg-info" />
-                <span className="mt-0.5 text-[10px] font-semibold leading-none text-info">R{i + 1}</span>
+                <span className="mt-0.5 text-[11px] font-semibold leading-none text-info">R{i + 1}</span>
               </button>
             ))}
         </div>

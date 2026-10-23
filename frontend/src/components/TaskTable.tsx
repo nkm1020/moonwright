@@ -10,6 +10,7 @@ import { useMemo, useState } from "react";
 import type { KeyboardEvent } from "react";
 import type { Requirements, Schedule, ScheduleEntry, Task, Unit } from "@/lib/types";
 import { robotTypeColor, zoneColor } from "@/lib/palette";
+import { fmtNum } from "@/lib/format";
 
 export interface TaskTableProps {
   tasks: Task[];
@@ -42,17 +43,18 @@ function naturalCompare(a: string, b: string): number {
   return a.localeCompare(b, "en");
 }
 
+/** "12", "12.5", "1,344" (hours: integers plain, otherwise one decimal, thousands grouped). */
 function fmtH(h: number): string {
-  return Number.isInteger(h) ? String(h) : h.toFixed(1);
+  return fmtNum(h, 1);
 }
 
 function fmtWh(wh: number): string {
   return Math.round(wh).toLocaleString("en-US");
 }
 
-/** "126 m³" (integers plain, otherwise one decimal). */
+/** "126 m³", "1,413.7 m²" (integers plain, otherwise one decimal, thousands grouped). */
 export function fmtQuantity(q: number, unit: Unit | null): string {
-  const n = Number.isInteger(q) ? q.toLocaleString("en-US") : q.toFixed(1);
+  const n = fmtNum(q, 1);
   return unit ? `${n} ${UNIT_LABELS[unit]}` : n;
 }
 

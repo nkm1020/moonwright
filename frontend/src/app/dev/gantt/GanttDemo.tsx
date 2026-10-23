@@ -94,15 +94,14 @@ export function GanttDemo() {
           <p className="text-[11px] uppercase tracking-widest text-slate-500">Moonwright · dev</p>
           <h1 className="text-xl font-semibold">Gantt and task table</h1>
           <p className="mt-1 text-xs text-slate-400">
-            Rendered from <code className="font-mono">public/samples/*.plan.json</code>. Hover or focus a bar for
-            details, click to select a task and see its precedence arrows, Escape to clear. The table and the
-            charts of a section share one selection.
+            Rendered from the bundled recorded plans. Hover or focus a bar for details, click to select a task and
+            see its precedence arrows, Escape to clear. The table and the charts of a section share one selection.
           </p>
         </header>
 
         {error ? (
           <div className="rounded-md border border-red-400/40 bg-red-400/10 p-3 text-sm text-red-200">
-            Failed to load the sample files: {error}
+            Could not load the recorded plans: {error}
           </div>
         ) : null}
         {!data && !error ? <div className="text-sm text-slate-400">Loading sample plans…</div> : null}
@@ -238,7 +237,7 @@ function LoadedSections({
 
       {replan && replan.after.schedule ? (
         <Section
-          title="Replan #1 before / after (from landing_pad.sim.json)"
+          title="Replan #1 before / after (the recorded landing-pad simulation)"
           hint="Both charts share the scale through minSpanH; the remaining tasks are highlighted; the failed robot EX2 keeps an empty row on the right because it is gone from the replanned requirements."
         >
           <div className="grid gap-4 md:grid-cols-2">

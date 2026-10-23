@@ -20,9 +20,10 @@ import type {
   Task,
   VerificationReceipt,
 } from "@/lib/types";
-import { CONFLICT_PREFIXES, conflictPrefix } from "@/lib/types";
+import { conflictPrefix } from "@/lib/types";
 import { EVENT_COLORS, STAGE_LABELS, robotTypeColor, zoneColor } from "@/lib/palette";
 import {
+  conflictMeaning,
   fmtHours,
   fmtSeconds,
   isFixtureModel,
@@ -32,8 +33,9 @@ import {
   repairRounds,
   plural,
   suggestionsTimeBase,
+  tidyDetail,
   tidyHint,
-  tidyUnits,
+  tidyMessage,
 } from "@/lib/format";
 import { Gantt, defaultZoneIds } from "./Gantt";
 import { ESCALATION_MODEL, KindPill, escalationText, eventKindLabel, formatHours, replanOutcome as outcomeOf } from "./EventList";
@@ -121,7 +123,9 @@ function repairModel(steps: LoopStep[]): string {
 
 /** The one-line story of the replan, built from the closing step's payload when it parses
  *  ("CP-SAT rescheduled 11 tasks in <0.01 s, Nemotron not needed · makespan 80 h → 91 h");
- *  for older recordings and failed replans the backend message minus its time-base flag. */
+ *  for older recordings and failed replans the backend message, tidied ("80 h -> 91 h" reads
+ *  "80 h → 91 h"). Recordings made before phase 3d end the message in a time-base flag,
+ *  "(absolute)", which is dropped; current ones carry none, so the strip is a no-op. */
 function outcomeHeadline(
   outcome: { step: LoopStep; payload: ReplanOutcomePayload | null } | null,
   after: PlanResult,
@@ -138,7 +142,7 @@ function outcomeHeadline(
     return `CP-SAT could not finish ${n}; ${repairModel(after.steps)} repaired the graph and CP-SAT re-verified it${solve} · ${span}`;
   }
   const msg = outcome.step.message;
-  return msg ? tidyUnits(msg.replace(/\s*\((absolute|relative)\)\s*$/, "").replace(/ -> /g, " → ")) : null;
+  return msg ? tidyMessage(msg.replace(/\s*\((absolute|relative)\)\s*$/, "")) : null;
 }
 
 /** The verification receipt of the last ok `schedule` step of the replan trace. */
@@ -455,7 +459,7 @@ function TraceChips({ steps }: { steps: LoopStep[] }) {
         return (
         <li key={i} className="flex items-center gap-1">
           <span
-            title={[s.message, s.failure ? tidyHint(s.failure.hint) : null].filter(Boolean).join(" — ") || undefined}
+            title={[tidyMessage(s.message), s.failure ? tidyHint(s.failure.hint) : null].filter(Boolean).join(" — ") || undefined}
             className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium leading-4 ${
               s.ok
                 ? "border-ok/40 bg-ok/10"
@@ -508,7 +512,7 @@ function FailurePanel({ after, atH }: { after: PlanResult; atH: number }) {
               {failure.conflicts.map((c) => (
                 <span
                   key={c}
-                  title={CONFLICT_PREFIXES[conflictPrefix(c)] ?? c}
+                  title={conflictMeaning(c) ?? conflictPrefix(c)}
                   className="rounded-md border border-fail/50 px-1.5 py-0.5 font-mono text-[11px]"
                 >
                   {c}
@@ -520,7 +524,7 @@ function FailurePanel({ after, atH }: { after: PlanResult; atH: number }) {
           {failure.details.length > 0 && (
             <ul className={`list-disc space-y-0.5 pl-5 text-xs ${mutedClass}`}>
               {failure.details.slice(0, 6).map((d, i) => (
-                <li key={i}>{d}</li>
+                <li key={i}>{tidyDetail(d)}</li>
               ))}
             </ul>
           )}

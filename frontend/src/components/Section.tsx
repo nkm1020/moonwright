@@ -278,17 +278,20 @@ export interface StatProps {
   sub?: ReactNode;
   /** The one big number of a view. */
   hero?: boolean;
+  /** "lg" (24 px) for the lead figure of a card, such as the best proven change of the advice;
+   *  the default is the 20 px of a stat row. */
+  size?: "md" | "lg";
   tone?: Tone;
 }
 
-export function Stat({ label, value, sub, hero, tone = "neutral" }: StatProps) {
+export function Stat({ label, value, sub, hero, size = "md", tone = "neutral" }: StatProps) {
   return (
     <div className="min-w-0">
       <div className="text-[11px] font-medium uppercase tracking-wider text-dim">{label}</div>
       <div
         className={cx(
           "mt-0.5 font-semibold tracking-tight tabular-nums",
-          hero ? "text-[36px] leading-none md:text-[44px]" : "text-xl",
+          hero ? "text-[36px] leading-none md:text-[44px]" : size === "lg" ? "text-[24px] leading-tight" : "text-xl",
           TONE_TEXT[tone],
         )}
       >

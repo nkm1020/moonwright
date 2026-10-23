@@ -204,7 +204,7 @@ export function BriefForm({
               className="relative flex gap-2.5 rounded-md border border-white/10 bg-white/[0.02] px-3 py-2.5"
             >
               <span className="mt-0.5 flex items-center gap-1.5">
-                <span className="font-mono text-[10px] tabular-nums text-dim">{i + 1}</span>
+                <span className="font-mono text-[11px] tabular-nums text-dim">{i + 1}</span>
                 <Glyph kind={m.glyph} />
               </span>
               <span className="min-w-0">
@@ -245,7 +245,7 @@ export function BriefForm({
                   onClick={() => onUseExample(plainExample(ex))}
                   disabled={disabled || structuring}
                   aria-pressed={active}
-                  title={active ? `${ex.id} is in the textarea` : `Put the ${ex.id} brief in the textarea`}
+                  title={active ? "This brief is in the textarea" : `Put “${ex.title}” in the textarea`}
                   className={cx(
                     "flex min-w-0 flex-col items-start gap-1 rounded-md border px-3 py-2.5 text-left transition-colors",
                     "disabled:cursor-not-allowed disabled:opacity-50",
@@ -289,10 +289,10 @@ export function BriefForm({
             <span className="font-mono tabular-nums">{words} words</span>
             {offline && briefId && (
               <span
-                className="font-mono text-[11px]"
+                className="text-[11px]"
                 title="Offline mode: the backend replays the recorded Nemotron answers for this example even if you edit the text; clear the textarea to detach."
               >
-                replays recorded answers for {briefId}
+                replays this example&apos;s recorded answers
               </span>
             )}
             <span className="hidden items-center gap-1 md:inline-flex">
