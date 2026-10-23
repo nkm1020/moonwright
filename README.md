@@ -1,387 +1,180 @@
 # Moonwright
 
-**Natural-language construction briefs → solver-verified multi-robot schedules for the lunar surface.**
+**Language models propose. Solvers prove.**
 
-Moonwright is a planning agent for crews of autonomous construction robots. A mission planner writes a
-brief in plain English ("build a 20 m landing pad and a 60 m blast berm with two excavators, two
-haulers, a compactor and a printer within 14 days"). NVIDIA **Nemotron** (served by **Nebius Token
-Factory**) turns the brief into structured requirements and proposes a task graph. A deterministic
-validator and an **OR-Tools CP-SAT** model then prove the plan is executable: every precedence edge,
-one task at a time per robot, one robot per safety zone, per-robot battery budgets and the deadline.
-When the solver says *infeasible*, it names the conflicting constraint groups (an infeasibility core)
-and Nemotron repairs the graph. Only plans the solver has verified against the planning model reach
-the user. The verified plan runs in a 2D simulator; when a robot fails mid-mission, the agent detects
-it, reschedules the remaining work with the solver and escalates to Nemotron only when the remaining
-fleet provably cannot finish.
+Moonwright is a planning agent for crews of autonomous construction robots on the Moon. A mission
+planner writes a brief in plain English. NVIDIA Nemotron models on **Nebius Token Factory** turn it
+into requirements and a task graph with quantities. A deterministic validator and **OR-Tools CP-SAT**
+then check the plan against the physics that matters: precedence, one task per robot, one robot per
+safety zone, battery budgets including travel, material that exists before it is hauled, and the
+deadline. When the solver says no, it returns a minimal infeasibility core with the numbers behind
+it, and Nemotron repairs the plan from that proof. When a brief is impossible, Moonwright does not
+shrink the work to pass: it says so, and the solver finds what would make it feasible
+(`finishing needs 85 h, 25 h past the 60 h deadline`). A 2D simulator then breaks robots mid-mission,
+CP-SAT replans the remaining work in milliseconds, and Monte Carlo puts a number on robustness.
 
-Why this matters: Earth–Moon latency (~1.3 s one way) rules out teleoperating a construction crew. The
-plan has to be right *before* execution, and it has to be repaired autonomously when reality diverges.
-LLMs alone produce plausible but unexecutable plans; solvers alone need an expert to write the model.
-Moonwright puts the LLM where it is strong (structuring, decomposition, repair) and the solver where it
-is strong (proof of feasibility).
+<!-- TODO(video): hero GIF docs/img/hero.gif + links: demo video, live demo -->
 
-> Built for the [Nebius × NVIDIA Global AI Hackathon](https://nebiusglobalaihackathon.devpost.com/)
-> (Physical AI track, simulation-based). Submission deadline: Oct 30 2026 10:00 PDT.
+## Why
+
+A robot crew on the Moon works 1.3 light-seconds from Earth: nobody teleoperates an excavator
+through that, and nobody on Earth can catch a bad plan in time. The plan has to be right before
+execution and repaired autonomously when reality diverges. Language models write plans that look
+right and quietly break what matters: a battery that runs dry halfway through a dig, two robots in
+one blast zone, a haul scheduled before the material is dug, a deadline no schedule can meet.
+Solvers catch all of that, but someone has to write the model. Moonwright puts each where it is
+strong: Nemotron reads the brief, decomposes the work and repairs it; CP-SAT proves it.
+
+The same loop fits autonomous earthmoving on Earth, where a fleet of electric machines shares
+batteries, exclusion zones and a hard handover date.
 
 ## How it works
 
+```mermaid
+flowchart LR
+  B["Brief<br/>plain English"] --> S
+  subgraph TF["Nebius Token Factory · NVIDIA Nemotron"]
+    S["Structure<br/>Nemotron 3.5 Lightning"]
+    G["Task graph and repair<br/>Nemotron 3 Ultra, reasoning"]
+    E["Explanation<br/>Nemotron 3 Super"]
+  end
+  subgraph VER["Deterministic verification"]
+    R["Rate table<br/>quantity to hours and Wh"]
+    C["Validator<br/>coverage, volume, supply, energy"]
+    X["OR-Tools CP-SAT<br/>precedence, robots, zones,<br/>batteries, horizon"]
+  end
+  S -- requirements --> G
+  G -- "tasks with quantities" --> R --> C --> X
+  C -. "conflicts + hint" .-> G
+  X -. "infeasibility core" .-> G
+  X -- "verified schedule" --> E
+  X -- "verified schedule" --> SIM["2D simulator<br/>failures, replans, Monte Carlo"]
+  SIM -. "robot failure" .-> X
+  X -. "no plan in 3 repairs" .-> A["CP-SAT-proven advice<br/>deadline, battery, spare robot"]
 ```
-brief (text)
-   │  F1  Nemotron (structure)          → Requirements JSON (site, zones, structures, robots, horizon)
-   ▼
-Requirements
-   │  F2  Nemotron (task graph)         → tasks: what and how much (quantity, unit, basis), robot type,
-   │      + deterministic rate model      zone, precedence → hours and Wh computed from the rate table
-   ▼
-TaskGraph ──► F3 validator (cycles, references, capability, energy + transit, critical path, coverage: phases + the brief's operations, volume)
-   │               │ conflicts
-   ▼               ▼
-F4 CP-SAT ───► infeasible? ── F5 Nemotron repair (≤ 3 rounds, fed the infeasibility core) ──┐
-   │ feasible (precedence, robots, zones, batteries, transit allowance, horizon)             │
-   ▼                                                                                        │
-Schedule + F6 explanation ──► F7 2D simulator ──► event (robot failure, low battery) ──► F8 replan ─┘
-                                                      CP-SAT reschedules first; Nemotron is asked only
-                                                      when the remaining fleet provably cannot finish
-```
 
-* **Models (Nebius Token Factory, OpenAI-compatible API).** Short, frequent structuring calls go to
-  `nvidia/Nemotron-3_5-Lightning`; task-graph generation and repair go to
-  `nvidia/Nemotron-3-Ultra-550b-a55b`; plan explanations use `nvidia/nemotron-3-super-120b-a12b`.
-  Routing is configurable through environment variables (see `backend/.env.example`).
-* **Token policy.** Reasoning and answer share `max_tokens`. The first live evaluation cut 35 % of
-  the 16,384-token reasoning calls (Ultra 78 of 190) and the re-ask at the same budget was
-  usually cut again, so a reasoning call now starts at 32,768 tokens and every ask adapts to how
-  the last one ended: a cut answer is asked again with twice the budget (65,536, with
-  proportionally more time), and only a cut at 65,536 is asked again without reasoning at the
-  normal 4,096 with a "compact JSON only" note; any other failure is re-asked as before (same
-  budget, the validation errors appended). The ask count is unchanged (two per call by
-  default) and the ladder carries over into the planner's re-ask of a rejected answer, so the
-  doubled rung is reached on the second ask and the reasoning-off fallback on the next call. A
-  budget below the default set in the environment (an old `backend/.env` pins 16,384) is
-  warned about, and `moonwright eval` prints the effective budgets. An answer that never
-  validates is shown as the person would say it:
-  `Nemotron 3 Ultra did not return a valid task graph after 2 asks: the answer was cut off at
-  32,768 tokens, then failed the schema`, one line per ask (`ask 2: task T3: 'after' must be a
-  list`), conflict ids `schema:json` (cut off, not JSON, empty) and
-  `schema:shape` (a schema violation), and a failed request as `The Token Factory request to
-  Nemotron 3 Ultra failed: APITimeoutError (Request timed out.)`. The call log records each
-  ask's own budget and thinking flag.
-* **Rate model (physical grounding).** The model states *what* and *how much* for every task
-  (`quantity`, `unit`, `basis`, e.g. `126 m3 = pi*(10 m)^2*0.4 m`); a six-row rate table in
-  `backend/moonwright/pipeline/rates.py` turns the quantity into whole hours and Wh (7 m3/h and
-  16 Wh/m3 for bulk excavation, 14 m2/h and 8.6 Wh/m2 for sintering, ...), so a plan cannot be made
-  feasible by shrinking numbers: an under-scoped graph becomes a real solver conflict and a repair has
-  to split or re-scope work. The units are illustrative lunar-rated low-power figures, every row an
-  assumption with its note (see Limitations). The model's own estimate is kept beside the computed
-  figure and an `estimate:<task>` advisory flags a gap of more than 50 %; tasks without a quantity
-  keep the model's hours.
-* **Volume: the work cannot be shrunk to fit.** In the first live evaluation the models satisfied
-  the solver by shrinking the work (a 20 m pad dug as a 12 m one, a 360 m3 borrow strip planned
-  as 600 m2 of stripping, a 300 m3 berm hauled twice): 85-91 % of the runs verified, only
-  38-45 % in scope. The validator now compares the m3 a structure's tasks plan with the volume
-  its dimensions imply (bowl, box, berm prism, a berm's key trench as its own dug shape) and
-  rejects a whole plan below 70 % of it as a `volume:<structure>` conflict that shows the
-  arithmetic and says what to add (`S2 (borrow_strip): dimensions 100 x 6 x 0.6 m = 360 m3 of
-  excavation; excavator tasks cover 120 m3 (33 %): T3 600 m2 counts 120 m3 at 0.2 m`, hint
-  `plan the remaining 240 m3 of S2 as excavator tasks in m3 (split above 60 m3) instead of
-  shrinking the work; keep the m2 stripping only for the top 0.2 m`). An excavator m2 task is a
-  surface layer up to 0.2 m (the rate table's m2 row), so it counts area x min(depth, 0.2 m),
-  capped at the footprint: a 10 x 10 x 0.15 m pad stripped and graded in m2 is fully covered
-  (the old rule read it as 0 %); a levelling pass after the dig earns nothing, and below the
-  stripped layer only digs in m3 count. A brief that allows a smaller size ("any diameter
-  between 12 m and 20 m") is recorded by the structure stage as `min_diameter_m` (likewise
-  `min_depth_m`, `min_length_m`, `min_width_m`, `min_height_m`) and the check judges the
-  smallest allowed volume, so the allowed re-scope stays plannable. Only what the brief states
-  is judged: a pit's sloped walls ("with a 1:1 sloped wall") are read from the brief, a key
-  trench needs its stated width, and a berm "built from pad spoil" is covered by all of that
-  spoil even when its prism would hold more. Spoil bladed into a windrow or backfilled is no
-  dig; the fill of a stockpile is judged neither way; an excess (`hauled twice over`) stays an
-  advisory; a replan's remaining graph is never judged. Structure tags resolve exactly as the
-  coverage check resolves them (id, type, label, zone; a haul placed in the berm's zone
-  builds the berm).
-* **Structuring guards.** The structure stage is told to copy every dimension the brief states
-  (the task-graph model never sees the brief, only the requirements), salvages `operations` that
-  strict JSON-schema decoding scrambled into stray keys (seen live with Lightning:
-  `"operations': [": "excavate"`) and says so on the requirements card, and warns there when a
-  structure has no dimensions, when zones overlap or when a listed operation has no robot type in
-  the fleet.
-* **Solver.** CP-SAT minimises makespan with optional intervals per (task, robot), `AddNoOverlap` per
-  robot and per safety zone, linear battery budgets per robot and a horizon bound. Travel between
-  zones is a per-task transit allowance (whole hours and 0.5 Wh per grid cell, an upper bound over
-  the zones a robot can be sent to) inside the robot intervals and the energy sums, so a verified
-  schedule replays in the simulator without overrunning itself. The validator charges every task
-  the same allowance (the least any robot of its type would be charged, from the robots' actual
-  positions on a replan), so a graph it passes at 3,999 of 4,000 Wh is no longer one CP-SAT
-  rejects at 4,037 Wh, and its energy verdicts name the travel share (`printer tasks need
-  4,037 Wh, about 38 Wh of it travel; its 1 robot carries 4,000 Wh`); one verdict per cause (a
-  type's overrun that one oversized task explains is reported as that task). Each constraint group sits behind an
-  assumption literal; on infeasibility the solver's sufficient-assumption core is shrunk by deletion
-  to a minimal set and returned as machine-readable conflict ids such as `energy:EX1` or
-  `precedence:T4->T2`, and an independent checker re-verifies every schedule (the verification
-  receipt in the trace).
-* **Repair loop.** Conflict ids plus a human hint go back to Nemotron with the previous graph,
-  together with the advisories on that graph (a 200 % double haul is cut in the same round as
-  the energy verdict), and the repair prompt says what each conflict kind needs (an energy
-  verdict moves or splits quantities, `after` edges alone change no energy, and work a robot
-  type cannot carry at all stays whole for the solver to prove; `volume:` adds the missing m3,
-  never shrinks the work; `scope:` adds the missing task of the right robot type; a smaller
-  quantity only where the brief allows it, stated in the notes). The loop stops at
-  the first solver-verified plan or after three repairs. The validator's structure
-  coverage check (`scope:<structure>`) refuses a repair that drops a required phase or a whole
-  structure, and every accepted repair carries a diff (added, removed, renumbered and changed
-  tasks, energy per robot type, scope drift in %) so a re-scope is visible instead of silent;
-  tasks are paired across a renumbering, so a split that shifts every later id reads as a split
-  plus the one task that was re-scoped, not as a dozen re-scoped tasks. Lightning also records,
-  per structure, the operations the brief explicitly asks for (`sintered crest` -> sinter, `built
-  from pad spoil` -> haul, `key trench` -> excavate, `inspected` -> survey); the coverage check
-  requires a task of the right robot type for each one, so a live graph that silently omits them
-  is a `scope:<structure>` conflict whose hint quotes the brief (`the brief asks for "on a key
-  trench 1.2 m wide and 0.8 m deep cut into firm material"`), and an operation the fleet cannot
-  staff is a warning on the requirements card, not a conflict. So is an operation the brief does
-  not support while it supports the alternative (`excavate` listed on a berm the brief says is
-  "built from a borrow strip ... placed and compacted"): the quote is always the phase's own verb,
-  never a noun that names another structure or a robot, so an over-declaration by the
-  structuring model cannot force invented work (seen live: a 35 m3 "foundation" dig added to
-  satisfy one).
-* **Advice when no repair can work.** When the repairs are exhausted, the loop is off or the brief
-  is impossible, the planner returns `PlanResult.suggestions`: resource changes each proven by a
-  real CP-SAT solve on the last graph (`EX1 needs 5,950 Wh (has 5,000 Wh): feasible at 62 h`, the
-  smallest battery to 50 Wh that CP-SAT still schedules; `one more excavator (EX3, 5,000 Wh like
-  EX1): feasible at 62 h`; `finishing needs 86 h, 26 h past the 60 h deadline (CP-SAT optimal)`),
-  changes that keep the deadline first, or one unverified `reduce_scope` naming the largest work
-  items when every single change was refuted (a verification solve that times out counts as
-  untried, never as refuted). The list rides on the final failed step of the trace too, so the UI
-  and `moonwright plan` show it with the verdict; a replan is offered only a later deadline or a
-  spare robot, in absolute mission hours against the brief's deadline and with a full battery
-  (`one more excavator (EX3, 5,000 Wh, a full battery): feasible at 85 h` next to the 80 h plan
-  it replaces).
-* **Simulation and replanning (solver first).** The simulator moves robots on the site grid, drains
-  batteries and injects failures. On an event the tasks underway are locked and CP-SAT reschedules
-  the remaining work in milliseconds; only when the remaining fleet provably cannot finish does the
-  infeasibility core go to Nemotron, which re-scopes the work for the solver to re-verify
-  (`ReplanRecord.escalated`). A repair that redefines a task underway is refused (`locked:<task>`)
-  and the previous plan stays in force; the UI shows the before/after schedules.
-* **Robustness (Monte Carlo, F9).** The verified plan is replayed N times with random robot
-  failures (exponential per-robot hazard) and task-duration jitter, replanning on every event, and
-  reports the probability of finishing within the horizon with a Wilson 95 % interval, finish-time
-  percentiles, a histogram, the outcome of every miss (`lost_only:<type>`: the only robot of a type
-  died, `replan_infeasible:<kind>`, `late`, `stuck`) and the fleet's single points of failure.
-  Replans are solver-only (CP-SAT re-schedules the remaining work), so 50 runs take about a second.
+1. **Structure.** Nemotron 3.5 Lightning turns the brief into requirements: site and safety zones,
+   structures with their dimensions and the operations the brief asks for, robots with batteries,
+   the deadline. The requirements card is editable; the planner only ever sees the card.
+2. **Task graph.** Nemotron 3 Ultra (reasoning on) proposes tasks with a robot type, zone,
+   precedence and a quantity (`126 m3 = pi * (10 m)^2 * 0.4 m`). A rate table turns quantities into
+   hours and Wh, so a plan cannot be made feasible by shrinking numbers.
+3. **Validate.** A deterministic validator checks references, cycles, robot capability, coverage of
+   every operation the brief asks for, planned volume against the structure's dimensions (a 20 m pad
+   dug as a 12 m one is a conflict), that every haul waits for the digs that supply its material,
+   and battery budgets with travel.
+4. **Schedule.** CP-SAT minimises the makespan with one interval per task and robot, no-overlap per
+   robot and per safety zone, battery budgets per robot and the deadline. If it is infeasible, every
+   constraint group sits behind an assumption literal, so the solver returns a minimal core:
+   `energy:EX1`, `precedence:T4->T2`, `horizon`, with a hint in numbers.
+5. **Repair.** The core, the hint and the previous graph go back to Nemotron. Up to three rounds;
+   every accepted repair carries a diff (added, removed, renumbered and changed tasks, scope drift
+   in %), so a re-scope is visible instead of silent.
+6. **Advise.** If no repair verifies, CP-SAT tries single changes on the last graph and returns only
+   the ones it can prove: a later deadline, a bigger battery, one more robot.
+7. **Simulate and replan.** The verified schedule runs in a 2D simulator that moves robots, drains
+   batteries and injects failures. CP-SAT reschedules the remaining work first (milliseconds);
+   Nemotron is asked only when the remaining fleet provably cannot finish. Monte Carlo replays the
+   plan 200 times with random failures and reports the probability of finishing on time, with a
+   95 % interval, and the robots the plan cannot afford to lose.
 
-## Quick start
+Details, edge cases and the reasoning behind each rule: [docs/design.md](docs/design.md).
 
-### Backend (Python 3.13, [uv](https://docs.astral.sh/uv/))
+## Nemotron on Nebius Token Factory
+
+| Role | Model | Why this model |
+| --- | --- | --- |
+| Structure the brief | `nvidia/Nemotron-3_5-Lightning`, reasoning off | short, frequent, schema-bound; 3 s median, a fraction of a cent |
+| Task graph and repair | `nvidia/Nemotron-3-Ultra-550b-a55b`, reasoning on | measured: more first-try plans, faster per token than Super, and honest on impossible briefs |
+| Explanation | `nvidia/nemotron-3-super-120b-a12b` | readable summaries of a verified plan at low cost |
+
+Every call goes through the OpenAI-compatible Token Factory API with `response_format: json_schema`
+(strict) and `chat_template_kwargs.enable_thinking` per role. Reasoning and answer share
+`max_tokens`, so reasoning calls start at 32,768 tokens and a cut answer is asked again at 65,536
+before falling back to a direct answer. Every request is logged (status, tokens, latency, request
+id, never prompt text) and summarised per model and role. Routing is one environment variable per
+role (`backend/.env.example`).
+
+## Evidence
+
+Live runs on Token Factory, 22 test briefs of five designed kinds (comfortable, battery-split,
+deadline-bound, impossible, re-scope allowed; the arithmetic of each is in
+[docs/eval-briefs.md](docs/eval-briefs.md)), three repeats, both model arms on the same
+requirements. Every run's plan is saved in the repository.
+
+| Nemotron 3 Ultra, 66 live runs | Run 1 | Run 2 |
+| --- | --- | --- |
+| Ended with a CP-SAT-verified plan | 85 % | 85 % (74-92 %) |
+| ... with the full work in scope | 45 % | 74 % (63-83 %) |
+| Verified on the first graph (no repair) | 70 % | 62 % |
+| Reasoning answers cut at the token limit | 78 of 190 | 4 of 121 |
+| Cost per plan (median / mean) | n/a | $0.05 / $0.09 |
+
+* **The repair loop is worth 23 points**: 62 % of runs verify on the first graph, 85 % after at most
+  three repairs fed the solver's core.
+* **Impossible briefs fail honestly.** On the three designed-impossible briefs, 7 of 9 Ultra runs ended
+  without a plan rather than shrink the work, 6 of them with CP-SAT-proven advice. Run 1's Super
+  arm had "verified" one of them 3 of 3 times by digging about half of the pad's volume; the volume check now
+  refuses that.
+* **Why run 2 differs from run 1**: the models had been satisfying the solver by shrinking the work
+  (a 20 m pad dug as a 12 m one). Volume became a hard conflict, and "in scope" now means 95 % of
+  every volume and area the brief states.
+* **What run 2 could not see.** CP-SAT schedules only the precedence edges it is given, so a haul
+  with no edge to its dig could start before the material existed. Rescoring run 2's saved plans
+  with the supply-order check added afterwards, 17 of 56 verified Ultra plans (14 of 51 Super) did
+  exactly that; the validator now rejects it and the repair loop adds the missing edges
+  ([rescored rows](docs/eval/2026-10-23-live-eval-run2/eval.rescored.csv)).
+
+Runs: [run 1](docs/eval/2026-10-23-live-eval-run1.md) (before the volume check),
+[run 2](docs/eval/2026-10-23-live-eval-run2/README.md) with all 198 saved plans. Method:
+[docs/design.md#evaluation](docs/design.md#evaluation).
+
+## Run it
+
+Offline, no API key (recorded Nemotron answers):
 
 ```bash
-cd backend
-uv sync
-# offline demo (no API key needed; uses recorded Nemotron outputs under fixtures/)
+cd backend && uv sync
 uv run moonwright plan examples/briefs/landing_pad.md --llm fixture
-uv run moonwright plan examples/briefs/tight_battery.md --llm fixture      # shows one repair round
-uv run moonwright simulate out/landing_pad.plan.json --fail EX2@30         # failure + replan
-uv run moonwright montecarlo out/landing_pad.plan.json --runs 50 --seed 1  # robustness: P(finish in time)
-uv run pytest
+uv run moonwright simulate out/landing_pad.plan.json --fail EX2@30        # a robot fails at hour 30
+uv run moonwright montecarlo out/landing_pad.plan.json --runs 200 --seed 1
+uv run moonwright serve                                                   # API on :8000
+cd ../frontend && pnpm install && pnpm dev                                # UI on :3000
 ```
 
-Live mode against Nebius Token Factory:
+Live: put `NEBIUS_API_KEY` in `backend/.env` (copy `backend/.env.example`), then
+`uv run moonwright plan examples/briefs/landing_pad.md --llm nebius`. The UI's top bar replays
+recorded runs without a backend. Commands, endpoints and settings: [docs/reference.md](docs/reference.md).
+`uv run pytest` runs the backend suite (no network).
 
-```bash
-cp .env.example .env            # then set NEBIUS_API_KEY (an .env from before phase 3e: delete
-                                # its MOONWRIGHT_THINKING_MAX_TOKENS=16384 line)
-uv run moonwright plan examples/briefs/landing_pad.md --llm nebius
-uv run moonwright plan examples/briefs/landing_pad.md --llm record   # live + saves fixtures
-uv run moonwright serve                                              # FastAPI on :8000
-```
+## Limitations
 
-Environment variables: `NEBIUS_API_KEY`, `NEBIUS_BASE_URL` (default
-`https://api.tokenfactory.nebius.com/v1/`; the us-central1 endpoint is tried automatically when a
-model answers 404 there), `MOONWRIGHT_MODEL_STRUCTURE|TASKGRAPH|REPAIR|EXPLAIN`,
-`MOONWRIGHT_THINKING` (`auto` = only task-graph generation and repair reason; `off` is the fast
-demo setting), `MOONWRIGHT_LLM` (`fixture` | `nebius` | `record`). Prices, token budgets and
-timeouts are documented in `backend/.env.example`.
+* **Verified means verified against the planning model**: precedence, robots, zones, battery budgets
+  with a transit allowance, supply order and the deadline. Travel is an allowance per task, not
+  terrain; the simulator is 2D and kinematic; failures are injected, not modelled.
+* **The rates are assumptions.** The rate table (`backend/moonwright/pipeline/rates.py`) uses
+  illustrative low-power figures; replace them with measured ones before trusting an hour.
+* **Checks only judge what the brief states.** A structure recorded without dimensions has no volume
+  to judge, and a repair may still re-scope work the brief leaves open (a berm crest's width); the
+  repair diff shows it.
+* **Repairs can fail.** A model can answer with an unchanged graph or a re-scoped one; the evaluation
+  counts these cases. Full list: [docs/design.md](docs/design.md#limitations-and-known-failures-full-list).
 
-### Frontend (Next.js 16, pnpm)
-
-```bash
-cd backend && uv run moonwright serve        # FastAPI on http://localhost:8000 (offline fixtures without a key)
-cd frontend
-pnpm install
-cp .env.example .env.local                  # NEXT_PUBLIC_API_URL=http://localhost:8000 (the backend's address)
-pnpm dev                                    # http://localhost:3000
-```
-
-`NEXT_PUBLIC_API_URL` is inlined into the browser bundle at build time, so restart `pnpm dev` after
-changing it (it can also be set in the shell: `NEXT_PUBLIC_API_URL=http://127.0.0.1:8010 pnpm dev`).
-The page runs the whole flow: brief (or one of the three example briefs) -> editable requirements
-card -> streamed progress trace (structure -> task graph -> validate -> schedule -> repair n) ->
-verified plan (Gantt, task table, explanation) -> 2D replay with injected failures and
-before/after replans -> Monte Carlo robustness. "Load sample result" shows a recorded run without a
-backend. `/dev/gantt` and `/dev/sim` are component galleries over the bundled sample payloads.
-
-## CLI
-
-| Command | What it does |
-| --- | --- |
-| `moonwright plan <brief.md>` | brief → requirements → task graph → validate → CP-SAT → repair loop → explanation; writes `out/<id>.plan.json`; when no plan is found it prints the solver's advice (`what would make it feasible:`); `--max-repairs 0` is the loop-off setting |
-| `moonwright simulate <plan.json> --fail EX2@30` | replays the plan in the 2D simulator, injects a robot failure at t = 30 h, replans, continues; writes `out/<id>.sim.json` |
-| `moonwright montecarlo <plan.json> --runs 50 --seed 1` | replays the plan N times with random robot failures (`--failure-rate` per robot-hour, default 0.002) and duration jitter (`--jitter`, default 0.15), `--max-replans` per run; prints completion / within-horizon rates, finish percentiles and a histogram; writes `out/<id>.mc.json` |
-| `moonwright eval --briefs examples/eval --loop both` | runs every brief with the repair loop on and off and reports feasible-plan rate (Wilson 95 % CI), first-try feasibility, repairs, makespan, scope drift, p50/p95 latency, tokens and cost at Token Factory list prices; `--models ultra,super` adds one set of conditions per model arm for the task-graph and repair roles (named `ultra/loop_on`, ...), `--thinking on\|off\|auto`, `--markdown PATH` writes the results document (per-condition table, per-brief matrix, how to read); `--repeat N`, `--workers N` (parallel runs, rows flushed to `--csv` as they finish), `--feedback core\|verdict` (ablation: the repair round gets the minimal core with hints, or only the verdict), `--max-answer-retries N` (schema / transport re-asks, both conditions), `--save-plans DIR` (every run's PlanResult as `DIR/<brief>__<arm>__<loop>__<repeat>.plan.json`, `plan_path` in the rows, plus each job's structuring), `--resume` (keep the rows an interrupted run left in `--csv`, run only the missing brief x condition x repeat cells, summarise old and new together) |
-| `moonwright serve` | FastAPI on :8000 (endpoints below); offline fixtures when `NEBIUS_API_KEY` is unset |
-
-## HTTP API (`backend/moonwright/api.py`)
-
-| Endpoint | Body -> response |
-| --- | --- |
-| `GET /health` | `{status, version, llm, examples}`; `llm` is the client kind the server uses (`fixture` offline) |
-| `GET /examples`, `GET /examples/{id}` | the example briefs `{id, title, text, text_markdown}` (`text` is plain prose, `text_markdown` the file as written; 404 for an unknown id) |
-| `POST /structure` | `{brief, brief_id?, llm?}` -> `{requirements, step, key}`; F1 only, so the user can correct the requirements before planning (200 with `requirements: null` when the model fails) |
-| `POST /plan` | `{brief}` **or** `{requirements}` (+ `brief_id?, max_repairs?, llm?, solver_time_limit_s?, explain?`) -> `PlanResult` (200 with `success: false` when no verified plan was found) |
-| `POST /plan/stream` | same body, `text/event-stream`: one `step` event per loop step as it happens, `: ping` keep-alives, then exactly one `result` or `error` event |
-| `POST /simulate` | `{plan, failures: [{robot, t_h}], max_replans?, max_repairs?, dt_h?, frame_stride?, brief_id?, llm?}` -> `SimResult` (frames, events, replans); 400 when the plan has no verified schedule |
-| `POST /montecarlo` | `{plan, runs? (1-200), failure_rate_per_robot_h?, duration_jitter?, seed?, max_replans? (0-5), max_repairs?, llm?, brief_id?}` -> `MonteCarloResult` (rates with a Wilson 95 % CI, finish statistics, histogram, outcomes, single points of failure, per-run samples whose `failures` can be posted to `/simulate` to replay that run) |
-
-Bodies that fail validation answer 422; well-formed but unusable input (a tampered schedule, an
-unknown robot) answers 400 with a `detail` string; anything unexpected is a JSON 500 with a
-`detail` (sent with CORS headers, so the UI shows the error instead of "cannot reach the
-backend").
-
-CORS allows every `http://localhost:*` / `http://127.0.0.1:*` origin out of the box. A deployed
-UI needs its origin allowed explicitly, with either or both of:
-
-```bash
-# exact origins: scheme + host [+ port], comma-separated, no path (a trailing slash is tolerated)
-MOONWRIGHT_CORS_ORIGINS="https://moonwright.vercel.app,https://moonwright-staging.vercel.app"
-# a pattern, e.g. every Vercel preview deployment (each preview has its own *.vercel.app origin)
-MOONWRIGHT_CORS_ORIGIN_REGEX='https://.*\.vercel\.app'
-```
-
-A page served over `https://` cannot call a plain `http://` backend (browsers block mixed
-content), so a Vercel-hosted frontend needs the backend behind TLS and `NEXT_PUBLIC_API_URL`
-set to that `https://` URL at build time.
-
-## Evaluation
-
-The core experiment toggles one variable, the repair loop (F5), over 22 test briefs
-(`backend/examples/eval/`, five kinds documented with their arithmetic in
-[`docs/eval-briefs.md`](docs/eval-briefs.md): comfortable, battery-split, horizon-bound,
-impossible, scope reduction allowed), with Nemotron 3 Ultra and Nemotron 3 Super as model arms.
-Metrics: feasible-plan rate (Wilson 95 % CI) and the share that is also *in scope* (every
-structure's planned volume and its compaction / sintering area at 95 % or more of the smallest
-size the brief allows: the validator rejects a volume under 70 %, and a plan that verified after
-trimming the work 15-25 % is a re-scope, not a success; an excess such as a berm hauled twice is
-reported, not counted against it), first-try
-feasibility, rejected answers (task-graph / repair answers cut off or off the schema), repairs
-to feasibility, makespan, p50/p95 latency, tokens and cost per run, per condition and per brief kind
-(`backend/examples/eval/kinds.json`). Each brief is structured once per repeat and every
-condition plans from that same requirements object (`requirements_sha` in the rows), so model
-arms and loop settings are a paired comparison rather than four samples of the structuring
-model. Three further measurements: robot failures injected into every verified plan to measure
-solver-only recovery versus escalation (`backend/scripts/replan_eval.py`; rates over the
-*askable* injections, a lost sole-of-type robot nobody can replace being counted apart),
-Nemotron-written schedules (no solver) fed to the same checker to count constraint violations
-(`backend/scripts/llm_schedule_check.py`), and the Token Factory call log summarised per model and
-role (`backend/scripts/llm_log_report.py`: calls, errors, re-asks, tokens, tok/s, latency, cost,
-request ids). `backend/scripts/brief_budget.py` prices any brief with the planner's own rate table
-(per-type Wh need versus fleet, packing, bounds, canonical graphs through validator and CP-SAT), so
-the test set's kinds are arithmetic, not opinion. Results will be published here once measured;
-numbers are never quoted before they exist. The exact commands, budgets and wall times are in
-[`docs/live-run-runbook.md`](docs/live-run-runbook.md).
-
-```bash
-cd backend
-uv run moonwright eval --briefs examples/eval --repeat 3 --loop both --models ultra,super \
-  --thinking auto --llm nebius --workers 3 --max-answer-retries 2 --save-plans out/eval_live_plans \
-  --out out/eval_live.json --csv out/eval_live.csv --markdown out/eval_live.md
-# killed or rate-limited part-way: the same command with --resume runs only the missing cells
-uv run python scripts/replan_eval.py out/live/*.plan.json --llm nebius --all-tasks \
-  --sole-of-type solver --max-escalations 10 --out out/replan_eval_live.json --markdown out/replan_eval_live.md
-uv run python scripts/llm_log_report.py out/llm_log.jsonl --since 2026-10-23T00:00:00+00:00 --markdown out/llm_log_report.md
-uv run python scripts/brief_budget.py --all examples/eval --graphs lazy,split
-uv run moonwright eval --briefs examples/eval --repeat 2 --loop on --feedback verdict --llm nebius   # ablation arm
-```
-
-`--workers` runs brief x condition x repeat in parallel and flushes each row to the CSV as it
-finishes; `--feedback verdict` tells the repair round only that the plan was infeasible (no core, no
-hints), which isolates what the minimal infeasibility core is worth; `--max-answer-retries` bounds
-schema / transport re-asks in both conditions so the loop-off condition is not conflated with JSON
-failures. `--save-plans DIR` keeps every run's plan (what `POST /plan` returns) for the replan
-evaluation and the write-up, and `--resume` continues a killed run from its CSV. Every Token
-Factory call is appended to `out/llm_log.jsonl` (`MOONWRIGHT_LLM_LOG`; status, model, tokens,
-latency, request id, the ask's `max_tokens` and thinking flag, never prompt or answer text).
-
-## Limitations and known failures
-
-* **Travel is a per-task transit allowance (an upper bound over the site), not terrain; the simulator
-  pays the actual distance.** No slope cost, path planning or congestion; a leg of any length costs a
-  whole hour in the planner, so verified makespans are a few hours above the work-only optimum.
-* **The rates are assumptions.** `backend/moonwright/pipeline/rates.py` uses illustrative lunar-rated
-  low-power units calibrated to the example briefs; the regolith-excavation literature (RASSOR,
-  Chariot/LANCE) is inspiration for the order of magnitude only. Replace the rows with measured ones
-  before trusting an hour figure. Tasks without a quantity keep the model's own estimate.
-* **"Verified" means verified against the planning model**: precedence, one task per robot at a
-  time, one robot per zone, battery budgets with the transit allowance, the horizon. A repair can
-  re-scope work (the shipped tight-battery fixture cuts a trench from 4000 to 2100 Wh): the repair
-  diff and scope-drift figure make it visible and the coverage check refuses a repair that drops a
-  phase or a structure, but a smaller scope that keeps every phase is accepted for the planner to
-  judge.
-* **The simulator is 2D and kinematic**: straight-line travel on a grid, no recharge, no night cycle,
-  no material-flow coupling between hauling and the work that consumes the fill; failures are injected,
-  not modelled.
-* **Repair-loop failures.** The model can answer with an unchanged graph, a schema-invalid one or a
-  re-scoped one; a replan whose remaining work has no feasible re-scope ends as
-  `replan_infeasible` in the Monte Carlo outcomes rather than inventing a plan. The eval counts these
-  cases and the measured rates will be reported here, never before they exist.
-* **The brief's operations are read by a model.** Lightning's `operations` list gates the coverage
-  contract: in the live smoke it declared a berm's key trench in one run (the omission was caught
-  and repaired) and left it out in the next (the trench was planned away unnoticed). Over-declared
-  operations become warnings, not conflicts, when the fleet cannot staff them (sinter with no
-  printer) or when the brief supports the alternative instead (excavate on a berm built from a
-  borrow strip); any other listed operation is strict about the robot type that performs it, so
-  an over-declaration the brief text cannot disprove still costs a task.
-* **The volume check is only as good as the structured dimensions.** A whole plan below 70 % of
-  a structure's volume is refused (`volume:<structure>`), but a structure the structure stage
-  recorded without dimensions has no volume to judge (nor does a key trench without its width,
-  or a stockpile), the 0.2 m stripping credit, the 1:1 section of a berm given by its height
-  alone and the vertical walls of a pit whose slope the brief does not state are model
-  assumptions, task names decide what a levelling pass or a rehandle is, a replan's remaining
-  work is not judged, and an excess (hauled twice over) is only an advisory: it verifies, and
-  the CLI's verdict line (`scope differs from the dimensions`) reports it. Between 70 % and
-  95 % a plan verifies but is not counted in scope. The advice on a failed run explores single
-  changes only (one battery, one spare, one deadline): a battery figure is the smallest one, to
-  50 Wh, under which CP-SAT still finds a schedule for that one change, in the planning model's
-  accounting (work plus transit allowance); a candidate whose verification solve times out is
-  reported as untried, never as refuted.
-* **Strict JSON-schema decoding and small models.** Under `response_format: json_schema` Lightning
-  occasionally drifts into Python-style quoting and the grammar keeps the output valid JSON with
-  scrambled keys; the structure stage salvages the `operations` it can recognise and reports it,
-  but a scrambled dimension would be lost (it is then flagged as a structure without dimensions).
-
-## Repository layout
+## Repository
 
 ```
-backend/
-  moonwright/schemas.py        shared data contract (Requirements, TaskGraph, Schedule, Failure, Event …)
-  moonwright/llm/              Token Factory client, offline fixture client, prompts
-  moonwright/pipeline/         structure → taskgraph → validate → schedule (CP-SAT) → loop → explain
-  moonwright/sim/              2D simulator, replanning and Monte Carlo robustness
-  moonwright/cli.py, api.py    command line and FastAPI
-  examples/briefs/             example briefs; fixtures/ holds recorded model outputs for offline runs
-  examples/eval/               the 22 evaluation briefs (docs/eval-briefs.md: kind, margins, expected outcome)
-  scripts/                     brief_budget, replan_eval, llm_log_report, llm_schedule_check (evaluation tooling)
-  tests/
-docs/                          phase plan, eval briefs, live-run runbook, architecture diagram, Devpost draft
-frontend/                      Next.js UI: brief input, requirements card, streamed trace, Gantt, 2D replay,
-                               before/after replans, Monte Carlo panel (src/components), API client (src/lib)
+backend/    Python 3.13 + uv: pipeline (structure, task graph, rates, validator, CP-SAT, repair loop,
+            advice), simulator, replanning, Monte Carlo, CLI, FastAPI, Token Factory client, tests
+frontend/   Next.js 16 UI: brief, editable requirements, streamed trace, Gantt, 2D replay, Monte Carlo
+docs/       design notes, reference, evaluation runs with saved plans, eval brief arithmetic
 ```
 
-## Hackathon compliance
+## Built for
 
-* Runtime calls to the Nebius Token Factory inference API (OpenAI-compatible) with NVIDIA Nemotron
-  open models; see `backend/moonwright/llm/tokenfactory.py`.
-* Physical AI track, simulation-based (allowed by the official FAQ); the demo video shows the key
-  modules (planning, solver verification, repair, simulated failure and replanning) in action.
-* Open-source license in the repository root; README with setup instructions (this file).
+The [Nebius × NVIDIA Global AI Hackathon](https://nebiusglobalaihackathon.devpost.com/), Physical AI
+track (simulation-based). Runtime calls go to Nebius Token Factory with NVIDIA Nemotron open models
+(`backend/moonwright/llm/tokenfactory.py`).
 
 ## License
 
-MIT (see `LICENSE`).
+MIT, see [LICENSE](LICENSE).

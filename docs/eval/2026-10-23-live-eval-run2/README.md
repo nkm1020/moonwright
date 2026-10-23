@@ -5,9 +5,10 @@ compaction / sintering area. Same matrix as run 1 (2026-10-23-live-eval-run1.md)
 Run 1 -> run 2, Ultra: verified 85 % -> 85 %, verified in scope 45 % -> 74 %, cut answers 78 of 190 Ultra calls -> 4 of 121,
 rejected answers -> 0 of 66. Super: 91 % -> 77 % verified (it no longer shrinks impossible briefs to pass), 38 % -> 58 % in scope.
 Known after the run (fixed later, see the README): Lightning sometimes records a brief's "four 10 m segments" as 4 compaction
-lifts, which marks correct crater_ramp plans out of scope; and in 13 of the 40 verified Ultra plans with digs and hauls a
-haul waits for no dig at all (it could start before any material exists), 8 more haul more than is dug before them. CP-SAT
-only sees the precedence edges it is given, so nothing caught this. Every run's PlanResult is
+lifts, which marks correct crater_ramp plans out of scope; and CP-SAT only sees the precedence edges it is given, so nothing
+checked that a haul waits for its material. Rescored with the phase-3g supply check (eval.rescored.csv, made by
+backend/scripts/rescore_eval.py), 17 of the 56 verified Ultra plans and 14 of the 51 verified Super plans let a haul start
+before enough material was dug. Every run's PlanResult is
 under plans/ (plan_path in eval.csv is relative to this folder); calls.md is the Token Factory call log summary. -->
 
 # Moonwright eval: 22 brief(s) x 2 condition(s) x 3 repeat(s)
