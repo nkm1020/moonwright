@@ -108,7 +108,9 @@ plan in the repository (`docs/eval/`).
   exact travel matched or beat every one and proved it optimal: shorter on 5, by up to 36 h.
 - **Replanning.** 102 robot failures injected into run 4's verified plans: CP-SAT alone recovered
   82 (80 %, CI 72-87 %) in a median 9 ms; the other 20 provably exceed the surviving batteries,
-  the case that goes back to Nemotron.
+  the case that goes back to Nemotron. Asked live for the first 10 of them ($1.13), Nemotron 3
+  Ultra re-scoped the remaining work into a CP-SAT-verified replan 8 times; twice no repair
+  verified and the previous plan stayed in force.
 - [MEASURE] Core-vs-verdict ablation: repairs fed the minimal core vs only the verdict.
 - [MEASURE] Monte Carlo on the landing-pad sortie (re-recorded on the final code): P(on time)
   and the effect of one spare per single-robot type.

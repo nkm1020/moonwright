@@ -84,6 +84,15 @@ A condition is `<arm>/<loop>`: the arm names the model that proposes the task gr
   work (an energy core), which is where Moonwright asks Nemotron to re-scope. The same measurement on run 3's 21 plans
   recovered 67 of 110 (61 %) with the solver of the time, whose travel model reserved the longest leg a robot could
   drive before every task, and 76 of 110 (69 %) with exact travel: the allowance alone cost 9 recoveries.
+* **Escalations to Nemotron, live** (`replan/run4_ultra_live.*`, the same 102 injections with `--llm nebius
+  --max-escalations 10`, Oct 24 04:21-04:37 KST, $1.13). Nemotron 3 Ultra was asked to re-scope the first 10
+  injections whose remaining work the surviving robots provably could not carry (energy cores: depleted_excavators'
+  excavators, large_fleet_pad_berm_road's compactors and printer); 8 came back with a replan CP-SAT verified (1-3
+  repair rounds, median model time 103 s), and in the other 2 the previous plan stayed in force. With the 82
+  solver-only replans, 90 of the 92 injections that were decided ended with a verified schedule; the last 10 were not
+  asked (budget). A re-scope trades work for time by design: two of large_fleet_pad_berm_road's verified replans
+  finish before the original plan (141 h and 146 h against 158 h) because the remaining compaction or sintering was
+  cut, which the replan's repair diff records.
 * **Nemotron writing the schedule itself** (run 3's `direct-schedule/`, re-solved with exact travel). Ultra's own
   schedules for the 21 verified run-3 graphs all pass `check_schedule`, but CP-SAT now finds one at least as short for
   all 21 and proves it optimal: equal on 16, shorter on 5 (large_fleet_pad_berm_road 197 h against 233 h, crater_ramp 69

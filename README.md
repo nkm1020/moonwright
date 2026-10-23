@@ -131,7 +131,9 @@ final checks, so the columns are judged alike.
   solver can say why.
 * **Robot failures are absorbed by the solver.** On run 4's plans, CP-SAT alone replanned 82 of 102
   injected failures (80 %) in a median 9 ms; the other 20 are provably beyond the surviving
-  batteries, which is when Nemotron is asked to re-scope.
+  batteries, which is when Nemotron is asked to re-scope. Asked live for the first 10 of those,
+  Nemotron 3 Ultra returned a CP-SAT-verified replan 8 times; twice the previous plan stayed in
+  force.
 
 Runs: [run 1](docs/eval/2026-10-23-live-eval-run1.md) (before the volume check),
 [run 2](docs/eval/2026-10-23-live-eval-run2/README.md), [run 3](docs/eval/2026-10-23-live-eval-run3/README.md),
