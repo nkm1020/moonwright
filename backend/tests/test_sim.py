@@ -144,7 +144,7 @@ class FakePlanner:
     def plan_from_requirements(self, req, *, key, prior_graph=None, context=None, variant=None,
                                start_offset_h=0, locked=None, max_repairs=None,
                                required_tasks=None, start_with_prior=False,
-                               robot_positions=None, reserved_ids=None):
+                               robot_positions=None, robot_ready_h=None, reserved_ids=None):
         locked = list(locked or [])
         self.calls.append({"req": req, "key": key, "prior_graph": prior_graph,
                            "context": context, "variant": variant,
@@ -152,6 +152,7 @@ class FakePlanner:
                            "required_tasks": list(required_tasks or []),
                            "start_with_prior": start_with_prior,
                            "robot_positions": robot_positions,
+                           "robot_ready_h": dict(robot_ready_h or {}),
                            "reserved_ids": list(reserved_ids or [])})
         if not self.succeed:
             return PlanResult(requirements=req, task_graph=prior_graph, success=False,
@@ -479,7 +480,8 @@ def test_build_replan_inputs_drops_failed_robot_and_shrinks_the_work():
         [ScheduleEntry(task="T1", robot="EX1", start_h=0, end_h=3)]
     assert "EX2" in context and "T2" in context and "98 h remain" in context
     assert "T1 (underway on EX1, 3 h left" in context
-    # the surviving robots' positions go to the travel allowance; the failed one is left out
+    # the surviving robots' positions are where their circuits start (the first legs CP-SAT
+    # times and charges); the failed one is left out
     assert robot_positions(frame, event) == {"EX1": (10.0, 30.0), "HL1": (4.0, 36.0)}
 
 
@@ -1149,9 +1151,9 @@ def _assert_replan_started_on_time(res, record) -> None:
 def test_undeclared_zones_keep_the_simulators_layout_through_a_replan():
     """Zones the site does not declare are laid out once by the simulator (A, B, C along the
     far edge) and kept. After T1 (zone A) is done and a robot fails, the remaining graph only
-    names B and C; laid out on their own they would take A's and B's cells, the transit
-    allowance would be unsound and the robots would start late. The replan inputs now declare
-    every placed zone where the simulator put it."""
+    names B and C; laid out on their own they would take A's and B's cells, the legs CP-SAT
+    times would not be the ones the robots drive and they would start late. The replan inputs
+    now declare every placed zone where the simulator put it."""
     req = _undeclared_site()
     graph = TaskGraph(tasks=[
         Task(id="T1", name="dig A", robot_type="excavator", duration_h=2, energy_wh=10, zone="A"),

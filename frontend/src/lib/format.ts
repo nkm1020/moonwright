@@ -622,10 +622,12 @@ interface PoolHint {
   pool: number;
 }
 
-/** The merged pool sentence, worded like the backend's own since phase 3d ("EX1 and EX2 each
- *  have 5,000 Wh; the excavator tasks need 9,930 Wh in total, about 30 Wh of it travel, and
- *  cannot be split across 2 excavators (10,000 Wh combined) without exceeding one budget."),
- *  so an older recording reads like a new one. */
+/** The merged pool sentence, worded like the backend's own of phases 3d to 3i ("EX1 and EX2
+ *  each have 5,000 Wh; the excavator tasks need 9,930 Wh in total, about 30 Wh of it travel,
+ *  and cannot be split across 2 excavators (10,000 Wh combined) without exceeding one
+ *  budget."), so an older recording reads like a newer one. Its travel share is the per-task
+ *  transit allowance those recordings were planned with, hence "about"; since phase 3k the
+ *  backend quotes the least travel any order needs and says "at least". */
 function renderPool(type: string, p: PoolHint): string {
   const ids = p.robots.map((r) => r.id);
   const sameBudget = p.robots.every((r) => r.budget === p.robots[0].budget);
@@ -648,7 +650,7 @@ function tidySentence(s: string): string {
 /**
  * A backend hint as the console prints it: numbers formatted like every other figure on the
  * page (text the backend already formatted, "EX1 and EX2 each have 5,000 Wh; the excavator
- * tasks need 9,930 Wh in total, about 30 Wh of it travel, ...", is kept as written), model
+ * tasks need at least 9,915 Wh in total, 15 Wh of it travel, ...", is kept as written), model
  * ids as names, m³ / m² / ×, duplicate sentences dropped, an offline backend's miss without
  * its lookup key or server setting (tidyOffline). Recordings made before phase 3d
  * also get "robot(s)" resolved and the solver's per-robot copies of the energy-pool sentence
@@ -852,22 +854,29 @@ function withNote(note: string, extra: string | null): string {
 /** The table rows of a failed schedule step's own budget rows (payload.budget, phase 3d):
  *  the exact figures the hint quotes rounded, the pool or the robot in the note with the
  *  travel share ("EX1 and EX2 combined, no split fits one battery · incl. 30 Wh travel",
- *  "tasks only it can run · incl. 41 Wh travel"). */
+ *  "tasks only it can run · incl. 41 Wh travel"; a row does not say which phase wrote it, and
+ *  its travel was an allowance before phase 3k, the least any order needs since). A robot
+ *  alone in its type has no split to blame: within its battery its row binds because of the
+ *  order it is held to (kind "order", phase 3k), never "no split fits one battery". */
 export function budgetPayloadRows(rows: readonly BudgetRow[]): BudgetTableRow[] {
   return rows.map((r) => {
     let note: string;
     let why: string | null = null;
-    if (r.kind === "type") {
-      note = r.robots.length > 1 ? `${joinAnd(r.robots)} combined` : r.robots.length === 1 ? r.robots[0] : "the type's robots";
+    if (r.kind === "type" && r.robots.length !== 1) {
+      note = r.robots.length > 1 ? `${joinAnd(r.robots)} combined` : "the type's robots";
       // within the pool, the row binds because no split of the work fits one battery each;
       // above it, the work exceeds even every battery of the type together
       if (r.demanded_wh <= r.budget_wh) why = "no split fits one battery";
+    } else if (r.kind === "type" || r.kind === "order") {
+      // one robot: its tasks in their cheapest order, which fits; the order it must keep does not
+      note = r.kind === "type" ? r.robots[0] : "its tasks in the cheapest order";
+      if (r.demanded_wh <= r.budget_wh) why = "the order it must keep costs more";
     } else {
       note = "tasks only it can run";
     }
     return {
       subject: r.subject,
-      kind: r.kind,
+      kind: r.kind === "order" ? "robot" : r.kind,
       budget: r.budget_wh,
       demanded: r.demanded_wh,
       unit: "Wh" as const,
@@ -933,19 +942,22 @@ export function budgetRows(
     base = (ti + 1) * 1e6;
     // validator, per robot type: "excavator tasks need 9900 Wh; its 2 robots carry 10000 Wh";
     // phase 3e: "printer tasks need 4,037 Wh, about 38 Wh of it travel; its 1 robot carries
-    // 4,000 Wh"
-    each(text, new RegExp(`(\\S+) tasks need ${NUM} Wh(?:, about ${NUM} Wh of it travel)?; its (\\d+) robots? (?:carry|carries) ${NUM} Wh`), (m) =>
+    // 4,000 Wh"; phase 3k (the least travel any order needs): "printer tasks need at least
+    // 4,001 Wh, 11 Wh of it travel; its 1 robot carries 4,000 Wh"
+    each(text, new RegExp(`(\\S+) tasks need (?:at least )?${NUM} Wh(?:, (?:about )?${NUM} Wh of it travel)?; its (\\d+) robots? (?:carry|carries) ${NUM} Wh`), (m) =>
       add({ subject: m[1], kind: "type", demanded: parseNum(m[2]), budget: parseNum(m[5]), unit: "Wh", note: withNote(fleet(m[4]), travel(m[3])) }),
     );
     // validator hint: "excavator tasks need 9900 Wh but its 2 robots carry only 10000 Wh
     // combined"; phase 3e: "printer tasks need 4,037 Wh, 3,999 Wh of work and about 38 Wh of
-    // travel, but its 1 robot carries only 4,000 Wh combined"
-    each(text, new RegExp(`(\\S+) tasks need ${NUM} Wh(?:, ${NUM} Wh of work and about ${NUM} Wh of travel,)? but its (\\d+) robots? (?:carry|carries) only ${NUM} Wh combined`), (m) =>
+    // travel, but its 1 robot carries only 4,000 Wh combined"; phase 3k: "printer tasks need
+    // at least 4,001 Wh, 3,990 Wh of work and 11 Wh of travel, but ..."
+    each(text, new RegExp(`(\\S+) tasks need (?:at least )?${NUM} Wh(?:, ${NUM} Wh of work and (?:about )?${NUM} Wh of travel,)? but its (\\d+) robots? (?:carry|carries) only ${NUM} Wh combined`), (m) =>
       add({ subject: m[1], kind: "type", demanded: parseNum(m[2]), budget: parseNum(m[6]), unit: "Wh", note: withNote(fleet(m[5]), travel(m[4])) }),
     );
     // validator: "T4 needs 5200 Wh but the largest excavator battery is 5000 Wh"; phase 3e:
-    // "T1 needs 4,200 Wh, about 38 Wh of it travel, but the largest excavator battery is 4,000 Wh"
-    each(text, new RegExp(`(\\S+) needs ${NUM} Wh(?:, about ${NUM} Wh of it travel,)? but the largest (\\S+) battery is ${NUM} Wh`), (m) =>
+    // "T1 needs 4,200 Wh, about 38 Wh of it travel, but the largest excavator battery is 4,000 Wh";
+    // phase 3k: "T1 needs at least 4,006 Wh, 11 Wh of it travel, but the largest ..."
+    each(text, new RegExp(`(\\S+) needs (?:at least )?${NUM} Wh(?:, (?:about )?${NUM} Wh of it travel,)? but the largest (\\S+) battery is ${NUM} Wh`), (m) =>
       add({ subject: m[1], kind: "task", demanded: parseNum(m[2]), budget: parseNum(m[5]), unit: "Wh", note: withNote(`largest ${m[4]} battery`, travel(m[3])) }),
     );
     // validator hint: "T4 (5200 Wh, largest excavator battery 5000 Wh)"
@@ -953,22 +965,25 @@ export function budgetRows(
       add({ subject: m[1], kind: "task", demanded: parseNum(m[2]), budget: parseNum(m[4]), unit: "Wh", note: `largest ${m[3]} battery` }),
     );
     // validator hint, phase 3e: "T1 (4,162 Wh of work plus about 38 Wh of travel, 4,200 Wh
-    // against the largest excavator battery of 4,000 Wh)"
-    each(text, new RegExp(`(\\S+) \\((?:${NUM} Wh of work plus about ${NUM} Wh of travel, )?${NUM} Wh against the largest (\\S+) battery of ${NUM} Wh\\)`), (m) =>
+    // against the largest excavator battery of 4,000 Wh)"; phase 3k: "... plus at least 11 Wh
+    // of travel, ..."
+    each(text, new RegExp(`(\\S+) \\((?:${NUM} Wh of work plus (?:about|at least) ${NUM} Wh of travel, )?${NUM} Wh against the largest (\\S+) battery of ${NUM} Wh\\)`), (m) =>
       add({ subject: m[1], kind: "task", demanded: parseNum(m[4]), budget: parseNum(m[6]), unit: "Wh", note: withNote(`largest ${m[5]} battery`, travel(m[3])) }),
     );
     if (solverEnergy) {
       // solver, the tasks only one robot can run: "EX1 would need 5200 Wh (incl. ~30 Wh of
       // travel) but has 5000 Wh." (3c); "PR1 would need 4,031 Wh, about 41 Wh of it travel,
-      // but has 4,000 Wh." (3d)
-      each(text, new RegExp(`(\\S+) would need ${NUM} Wh(?: \\(incl\\. ~${NUM} Wh of travel\\)|, about ${NUM} Wh of it travel,)? but has ${NUM} Wh`), (m) =>
+      // but has 4,000 Wh." (3d); "PR1 would need at least 4,029 Wh, 39 Wh of it travel, but
+      // has 4,000 Wh." (3k: the least travel any order needs)
+      each(text, new RegExp(`(\\S+) would need (?:at least )?${NUM} Wh(?: \\(incl\\. ~${NUM} Wh of travel\\)|, (?:about )?${NUM} Wh of it travel,)? but has ${NUM} Wh`), (m) =>
         add({ subject: m[1], kind: "robot", demanded: parseNum(m[2]), budget: parseNum(m[5]), unit: "Wh", note: withNote("tasks only it can run", travel(m[3] ?? m[4])) }),
       );
       // solver, a type's pool (3d): "EX1 and EX2 each have 5,000 Wh; the excavator tasks need
       // 9,930 Wh in total, about 30 Wh of it travel, and cannot be split across 2 excavators
       // (10,000 Wh combined) without exceeding one budget." / "... need 362 Wh in total, about
-      // 62 Wh of it travel, more than the 250 Wh the 2 excavators have combined."
-      each(text, new RegExp(`the (\\S+) tasks need ${NUM} Wh in total(?:, about ${NUM} Wh of it travel)?(?:,? and cannot be split across (\\d+) \\S+ \\(${NUM} Wh combined\\)|, more than the ${NUM} Wh the (\\d+) \\S+ have combined)`), (m) => {
+      // 62 Wh of it travel, more than the 250 Wh the 2 excavators have combined."; 3k: "...
+      // need at least 9,915 Wh in total, 15 Wh of it travel, and cannot be split ..."
+      each(text, new RegExp(`the (\\S+) tasks need (?:at least )?${NUM} Wh in total(?:, (?:about )?${NUM} Wh of it travel)?(?:,? and cannot be split across (\\d+) \\S+ \\(${NUM} Wh combined\\)|, more than the ${NUM} Wh the (\\d+) \\S+ have combined)`), (m) => {
         const split = m[4] !== undefined;
         const count = split ? m[4] : m[7];
         add({
@@ -977,9 +992,10 @@ export function budgetRows(
           demanded: parseNum(m[2]),
           budget: parseNum(split ? m[5] : m[6]),
           unit: "Wh",
-          note: withNote(`${robots(count)} combined`, travel(m[3])),
+          note: withNote(fleet(count), travel(m[3])),
           // "cannot be split ... without exceeding one budget": the row is the conflict itself
-          ...(split ? { binding: true, why: "no split fits one battery" } : {}),
+          // (one robot has no split to blame: the order it must keep costs more, phase 3k)
+          ...(split ? { binding: true, why: count === "1" ? "the order it must keep costs more" : "no split fits one battery" } : {}),
         });
       });
       // solver, pre-3d pool sentence: "EX1 has 5000 Wh, and the excavator tasks (9929.649 Wh in
@@ -1039,31 +1055,32 @@ export function budgetRows(
       );
       // solver, robot time: "EX1 runs one task at a time, and the 2 tasks only it can do
       // already take 20 h back to back plus up to 8 h of transit." / "..., and the task only it
-      // can do already takes 8 h plus up to 2 h of transit." (3d); "the 3 task(s) only it can
-      // do already take 120 h back to back" (before)
-      each(text, new RegExp(`(\\S+) runs one task at a time, and the (?:(\\d+) tasks?(?:\\(s\\))?|task) only it can do already takes? ${NUM} h(?: back to back)?(?: plus up to ${NUM} h of transit)?`), (m) => {
+      // can do already takes 8 h plus up to 2 h of transit." (3d; "plus at least 7 h of
+      // transit" since 3k, the least driving any order needs); "the 3 task(s) only it can do
+      // already take 120 h back to back" (before)
+      each(text, new RegExp(`(\\S+) runs one task at a time, and the (?:(\\d+) tasks?(?:\\(s\\))?|task) only it can do already takes? ${NUM} h(?: back to back)?(?: plus (up to|at least) ${NUM} h of transit)?`), (m) => {
         const n = m[2] ?? "1";
         add({
           subject: m[1],
           kind: "robot",
-          demanded: parseNum(m[3]) + (m[4] ? parseNum(m[4]) : 0),
+          demanded: parseNum(m[3]) + (m[5] ? parseNum(m[5]) : 0),
           budget: deadline,
           unit: "h",
-          note: `${n} ${n === "1" ? "task" : "tasks"} only it can do${m[4] ? `, incl. ${groupDigits(m[4])} h of transit` : ""}`,
+          note: `${n} ${n === "1" ? "task" : "tasks"} only it can do${m[5] ? `, incl. ${m[4]} ${groupDigits(m[5])} h of transit` : ""}`,
         });
       });
       // solver, a type's robot time: "EX1 and EX2 each run one task at a time; the excavator
-      // tasks total 40 h across 2 excavators plus up to 3 h of transit." (3d); "EX1 runs one task
-      // at a time; the excavator tasks total 120 h across 2 excavator robot(s) ..." (before).
-      // The type's robots together have the deadline once each.
-      each(text, new RegExp(`(?:runs|each run) one task at a time; the (\\S+) tasks total ${NUM} h across (\\d+) \\S+(?: robot\\(s\\))?(?: plus up to ${NUM} h of transit)?`), (m) =>
+      // tasks total 40 h across 2 excavators plus up to 3 h of transit." (3d; "plus at least
+      // 3 h" since 3k); "EX1 runs one task at a time; the excavator tasks total 120 h across 2
+      // excavator robot(s) ..." (before). The type's robots together have the deadline once each.
+      each(text, new RegExp(`(?:runs|each run) one task at a time; the (\\S+) tasks total ${NUM} h across (\\d+) \\S+(?: robot\\(s\\))?(?: plus (up to|at least) ${NUM} h of transit)?`), (m) =>
         add({
           subject: m[1],
           kind: "type",
-          demanded: parseNum(m[2]) + (m[4] ? parseNum(m[4]) : 0),
+          demanded: parseNum(m[2]) + (m[5] ? parseNum(m[5]) : 0),
           budget: deadline * Number(m[3]),
           unit: "h",
-          note: `${robots(m[3])} × ${fmtNum(deadline, 0)} h${m[4] ? `, incl. ${groupDigits(m[4])} h of transit` : ""}`,
+          note: `${robots(m[3])} × ${fmtNum(deadline, 0)} h${m[5] ? `, incl. ${m[4]} ${groupDigits(m[5])} h of transit` : ""}`,
         }),
       );
       // solver: "Zone Z1 admits one robot at a time, so its 5 tasks (60 h in total) cannot

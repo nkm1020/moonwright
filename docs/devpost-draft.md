@@ -29,12 +29,13 @@ guessing again.
 3. **Proof.** A deterministic validator catches structural defects (cycles, unknown references,
    missing phases for a structure, work no robot can do), then an OR-Tools CP-SAT model schedules
    the graph: precedence, one task per robot at a time, one robot per safety zone, per-robot
-   battery budgets including a transit allowance, the deadline, makespan minimised and proven.
+   battery budgets including every leg the robot drives (travel is exact: CP-SAT picks each
+   robot's order and pays the legs of that order), the deadline, makespan minimised and proven.
 4. **Repair with reasons.** When the model's graph is infeasible, CP-SAT returns a minimal set of
    conflicting constraints (for example `energy:EX1`, `precedence:T4->T2`) with the numbers behind
-   them ("EX1 and EX2 each have 5,000 Wh; the excavator tasks need 9,930 Wh in total, about 30 Wh
-   of it travel, and cannot be split across 2 excavators (10,000 Wh combined) without exceeding
-   one budget").
+   them ("EX1 and EX2 each have 5,000 Wh; the excavator tasks need at least 9,915 Wh in total,
+   15 Wh of it travel, and cannot be split across 2 excavators (10,000 Wh combined) without
+   exceeding one budget").
    That goes back to Nemotron, up to three rounds; every change the model makes is shown as a
    diff, and scope reductions are flagged for the planner's approval. Only solver-verified
    schedules reach the Gantt chart, together with a Nemotron-written explanation.
@@ -57,10 +58,12 @@ guessing again.
   uses `response_format` (JSON schema first, JSON mode as fallback) and every answer is validated
   with pydantic and re-asked with the validation errors when needed.
 - **Verification:** Python validator plus a CP-SAT model with optional intervals per
-  (task, robot), `AddNoOverlap` per robot (with a transit allowance) and per zone, linear energy
-  budgets and a makespan objective. Infeasibility explanations use assumption literals per named
-  constraint group, `SufficientAssumptionsForInfeasibility`, a deletion filter to make the core
-  minimal, and a multi-worker fallback for instances the single-worker proof cannot finish.
+  (task, robot), an `AddCircuit` per robot whose arcs time and charge the leg between two
+  consecutive tasks (exact, sequence-dependent travel), `AddNoOverlap` per robot and per zone,
+  linear energy budgets and a makespan objective. Infeasibility explanations use assumption
+  literals per named constraint group, `SufficientAssumptionsForInfeasibility`, a deletion
+  filter to make the core minimal, and a multi-worker fallback for instances the single-worker
+  proof cannot finish.
   Every schedule is re-verified by an independent checker before it is shown.
 - **Simulation and replanning:** a grid simulator with travel time and energy, battery depletion as
   a failure, event detection, and a replanning path that derives the remaining work from the
@@ -112,8 +115,8 @@ Nemotron-written schedules violated a constraint, and how robust the landing-pad
 
 ## Limitations and known failures
 
-- Travel is a per-task transit allowance (an upper bound over the site), not terrain; the
-  simulator pays the actual distance. The simulator is 2D and kinematic.
+- Travel is exact for the planning model (straight legs between zone centres in whole hours, in
+  the order CP-SAT picks), not terrain. The simulator is 2D and kinematic.
 - Durations and energies come from an illustrative rate model calibrated to the briefs' battery
   units, not from a specific robot's datasheet; quantities are the model's estimates from the
   structure dimensions and are shown with their basis.

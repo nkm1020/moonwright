@@ -72,7 +72,7 @@ uv run pytest                                                             # fixt
 ```
 
 `--llm record` overwrites `fixtures/<brief>/*.json`. The e2e tests quote the fixture makespans
-80 / 64 / 68 h and the hand-declared `operations` lists (`tests/test_coverage_ops.py:
+80 / 63 / 66 h and the hand-declared `operations` lists (`tests/test_coverage_ops.py:
 FIXTURE_OPERATIONS`), so after a re-recording update `tests/test_pipeline_e2e.py` and that table
 or keep the old fixtures (copy them aside first). Regenerate `frontend/public/samples` from
 `out/` afterwards (`plan` x3 `--llm fixture`, `simulate --fail EX2@30`, `montecarlo --runs 200

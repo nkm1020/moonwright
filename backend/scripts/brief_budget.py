@@ -44,8 +44,9 @@ how a brief's numbers are tuned.
 Assumptions (every one printed with the budget, every number an assumption of the rate table)
 --------------------------------------------------------------------------------------------
 * Durations and energies are the rate table's: ``ceil(quantity / rate)`` whole hours and
-  ``quantity x Wh/unit``; the CP-SAT model adds a whole-hour transit allowance per task and
-  0.5 Wh per grid cell driven, so a solver makespan is a few hours above the bounds here.
+  ``quantity x Wh/unit``; the CP-SAT model adds the whole hours and the 0.5 Wh per grid cell
+  of every leg each robot drives, so a solver makespan can sit a few hours above the bounds
+  here.
 * Phases per structure follow the kind of its type (pad, berm, road, pit, trench, apron,
   ramp, stockpile, borrow, fill, other) and the ``operations`` the structure lists; the
   defaults are documented at :data:`KIND_DEFAULTS`. Flags on a structure override them
@@ -868,8 +869,8 @@ def compute_budget(spec: dict[str, Any], source: str = "spec") -> Budget:
     assumptions = [
         ("rate table: duration_h = ceil(quantity / rate), energy_wh = quantity x Wh/unit "
          "(moonwright.pipeline.rates; illustrative lunar-rated figures, not measurements)"),
-        ("bounds ignore transit (CP-SAT adds whole-hour allowances and 0.5 Wh per cell) and "
-         "resource contention beyond one robot per zone"),
+        ("bounds ignore transit (CP-SAT adds the whole hours and 0.5 Wh per cell of every leg "
+         "a robot drives) and resource contention beyond one robot per zone"),
         ("one canonical task per phase per structure; a haul belongs to the receiving structure "
          "(its volume is the fill that structure needs) and waits for its source's excavation; "
          "spoil that another structure receives is not hauled twice"),

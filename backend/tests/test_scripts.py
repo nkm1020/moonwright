@@ -22,7 +22,7 @@ import pytest
 from moonwright.api import EXAMPLES_DIR
 from moonwright.cli import EXIT_NO_PLAN, EXIT_OK, main
 from moonwright.llm.tokenfactory import DEFAULT_LOG_PATH
-from moonwright.schemas import PlanResult
+from moonwright.schemas import PlanResult, Robot
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 ULTRA = "nvidia/Nemotron-3-Ultra-550b-a55b"
@@ -63,10 +63,11 @@ class TestReplanEval:
         plan = PlanResult.model_validate_json(landing_pad_plan.read_text())
         assert plan.schedule is not None
         by_robot = plan.schedule.by_robot()
-        # two fractions per scheduled task of every robot with work; idle robots are listed
+        # two fractions per scheduled task of every robot with work; the 80 h plan settled by
+        # phase 3k keeps all seven robots busy (the earlier one left HL1 idle; see the end)
         assert len(rows) == sum(2 * len(entries) for entries in by_robot.values())
-        idle = [r.id for r in plan.requirements.robots if r.id not in by_robot]
-        assert idle and report["idle_robots"] == {"landing_pad": idle}
+        assert set(by_robot) == {r.id for r in plan.requirements.robots}
+        assert report["idle_robots"] == {}
         assert all(0 <= r["fraction"] < 1 and r["t_h"] >= 0 for r in rows)
         for r in rows:
             entry = plan.schedule.entry(r["task"])
@@ -137,7 +138,15 @@ class TestReplanEval:
         assert text.startswith("# Replanning evaluation")
         assert "| `landing_pad` |" in text and "escalation cores" in text and "energy" in text
         assert "| HL2 | " in text and "(sole of type)" in text
-        assert f"Robots without scheduled work were not injected: `landing_pad`: {', '.join(idle)}." in text
+        assert "Robots without scheduled work" not in text
+        # a robot without scheduled work is listed instead of injected
+        spare = plan.model_copy(update={"requirements": plan.requirements.model_copy(update={
+            "robots": [*plan.requirements.robots,
+                       Robot(id="HL9", type="hauler", battery_wh=3000)]})})
+        injections, idle = module.injections_for(spare, "landing_pad", (0.5,), all_tasks=True)
+        assert idle == ["HL9"] and "HL9" not in {i.robot for i in injections}
+        assert "Robots without scheduled work were not injected: `landing_pad`: HL9." in \
+            module.markdown({**report, "idle_robots": {"landing_pad": idle}})
         # the summary row shows the askable denominator and the not-asked column, and the
         # how-to-read names not_asked_sole_type (so 10 + 4 of 28 is not a mystery)
         assert "| not asked (sole / budget) |" in text
@@ -387,15 +396,17 @@ class TestLlmLogReport:
 def test_simulate_prints_replan_advice_in_absolute_hours(landing_pad_plan, tmp_path, capsys):
     """EX2 lost at 10 h: the remaining excavator work is provably infeasible and, offline, the
     escalation has no answer. The advice used to read "feasible at 75 h" under "makespan
-    80h" (planner-relative hours, a spare cloned from EX1's remaining 4995 Wh); it is 85 h
-    with a full 5000 Wh battery now, in the record and in the step payload alike."""
+    80h" (planner-relative hours, a spare cloned from EX1's remaining 4995 Wh); it is 86 h
+    with a full 5000 Wh battery now, in the record and in the step payload alike (85 h before
+    phase 3k: the settled 80 h plan has EX1 an hour from finishing T5 at 10 h, locked to it,
+    where the old one had it waiting for T3)."""
     out = tmp_path / "ex2.sim.json"
     code = main(["simulate", str(landing_pad_plan), "--fail", "EX2@10", "--llm", "fixture",
                  "--out", str(out)])
     assert code == EXIT_NO_PLAN
     printed = capsys.readouterr().out
     assert "no feasible replan (validation: energy:excavator)" in printed
-    assert ("- add robot: one more excavator (EX3, 5,000 Wh, a full battery): feasible at 85 h "
+    assert ("- add robot: one more excavator (EX3, 5,000 Wh, a full battery): feasible at 86 h "
             "[CP-SAT verified]") in printed
     sim = json.loads(out.read_text())
     record = sim["replans"][0]
@@ -403,7 +414,7 @@ def test_simulate_prints_replan_advice_in_absolute_hours(landing_pad_plan, tmp_p
     assert record["after"]["requirements"]["horizon_h"] == 326     # relative, as documented
     (s,) = record["after"]["suggestions"]
     assert (s["kind"], s["makespan_h"], s["battery_wh"], s["robot_id"]) == (
-        "add_robot", 85, 5000.0, "EX3")
+        "add_robot", 86, 5000.0, "EX3")
     final = next(st for st in reversed(record["after"]["steps"])
                  if (st.get("payload") or {}).get("suggestions"))
     assert final["payload"]["time_base"] == "relative"

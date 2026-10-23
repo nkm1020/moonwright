@@ -2,17 +2,15 @@
 
 from __future__ import annotations
 
-import math
-
 import pytest
 from pydantic import ValidationError
 
-from moonwright.geometry import travel_wh
+from moonwright.geometry import leg_mwh
 from moonwright.llm.base import FIXTURES_DIR, SchemaMismatch, validate_into
 from moonwright.pipeline.schedule import (
     SolveOptions,
     _instance,
-    _least_allowance,
+    _travel_floor,
     budget_rows,
     solve_schedule,
 )
@@ -25,7 +23,7 @@ from moonwright.pipeline.validate import (
     tag_names,
     task_changes,
     task_phases,
-    transit_allowances,
+    travel_floor,
     validate_graph,
 )
 from moonwright.schemas import (
@@ -73,8 +71,8 @@ def task(
 def req(*robots: Robot, horizon: int = 336, zones: tuple[str, ...] = ("Z1", "Z2"),
         depot: tuple[int, int] | None = None) -> Requirements:
     """Zones Z1 (0, 10), Z2 (10, 10), ... on the default grid; the depot at the bottom centre
-    (20, 1) unless given, so every task carries a transit allowance (``depot=(0, 10)`` puts
-    the robots on Z1 and makes a single-zone graph travel-free)."""
+    (20, 1) unless given, so every robot has a leg to drive (``depot=(0, 10)`` puts the robots
+    on Z1 and makes a single-zone graph travel-free)."""
     return Requirements(
         site=Site(zones=[Zone(id=z, center=(10 * i, 10)) for i, z in enumerate(zones)],
                   depot=depot),
@@ -407,40 +405,44 @@ def test_energy_checks_are_exact_to_a_milli_wh() -> None:
     assert failure.details[0] == "T1 needs 4,201 Wh but the largest excavator battery is 4,200 Wh"
 
 
-# ----------------------------------------------------------------------------- transit
-def test_energy_checks_charge_the_solvers_transit_allowance() -> None:
+# ----------------------------------------------------------------------------- travel
+def test_energy_checks_charge_the_travel_no_schedule_avoids() -> None:
     """Live (phase 3e): a repair brought the printer to 3,999 of 4,000 Wh, the validator
-    passed it and CP-SAT failed it at 4,037 Wh with travel, one repair round wasted. Both
-    energy checks now charge every task the least transit allowance a robot of its type would
-    be charged, name it, and quote every figure through ``moonwright.text``."""
+    passed it and CP-SAT failed it at 4,037 Wh with travel, one repair round wasted, so both
+    energy checks charge travel. Since CP-SAT charges the legs of the order it picks (phase
+    3k), they charge only what no order avoids (``travel_floor``): per task the least leg into
+    its zone, per type the cheapest tree from the robots' starts through its zones; named,
+    and quoted through ``moonwright.text`` with "at least"."""
     r = req(robot("PR1", "printer", 4000), robot("EX1"))
-    # Z1 is 21.93 cells from the depot (20, 1): 10.966 Wh of allowance per printer task
-    leg = travel_wh(math.dist((20, 1), (0, 10)))
-    assert transit_allowances(r, graph(task("T1", type_="printer"))) == [to_mwh(leg)]
+    # Z1 is 21.93 cells from the depot (20, 1): 10.966 Wh, the second task there drives nothing
+    leg = leg_mwh((20, 1), (0, 10))
+    assert leg == 10966
+    assert travel_floor(r, graph(task("T1", type_="printer"))) == ([leg], {"printer": leg})
     g = graph(task("T1", type_="printer", energy=2000), task("T2", type_="printer", energy=1975))
-    assert validate_graph(r, g) is None                        # 3,975 + 22 Wh fits 4,000 Wh
+    assert validate_graph(r, g) is None                        # 3,975 + 11 Wh fits 4,000 Wh
     g = graph(task("T1", type_="printer", energy=2000), task("T2", type_="printer", energy=1990))
-    failure = must_fail(r, g)                                  # 3,990 Wh of work passed before
+    failure = must_fail(r, g)                                  # 3,990 Wh of work passed before 3e
     assert failure.conflicts == ["energy:printer"]
     assert failure.details == [
-        "printer tasks need 4,012 Wh, about 22 Wh of it travel; its 1 robot carries 4,000 Wh"]
+        "printer tasks need at least 4,001 Wh, 11 Wh of it travel; its 1 robot carries 4,000 Wh"]
     assert failure.hint == (
-        "Battery budgets are exceeded per robot type: printer tasks need 4,012 Wh, 3,990 Wh of "
-        "work and about 22 Wh of travel, but its 1 robot carries only 4,000 Wh combined; reduce "
-        "the quantities if the brief allows it or move work to other robot types.")
-    # a single task is charged its allowance too, against the largest battery of its type. The
-    # printer pool is short as well, but only because of T1: one cause, one verdict, and the
-    # hint says what the pool verdict would have said (splitting cannot fit it)
+        "Battery budgets are exceeded per robot type: printer tasks need at least 4,001 Wh, "
+        "3,990 Wh of work and 11 Wh of travel, but its 1 robot carries only 4,000 Wh combined; "
+        "reduce the quantities if the brief allows it or move work to other robot types.")
+    # a single task is charged the leg to its zone, against the largest battery of its type.
+    # The printer pool is short as well, but only because of T1: one cause, one verdict, and
+    # the hint says what the pool verdict would have said (splitting cannot fit it)
     failure = must_fail(r, graph(task("T1", type_="printer", energy=3995)))
     assert failure.conflicts == ["energy_task:T1"]
     assert failure.details == [
-        "T1 needs 4,006 Wh, about 11 Wh of it travel, but the largest printer battery is 4,000 Wh"]
+        ("T1 needs at least 4,006 Wh, 11 Wh of it travel, but the largest printer battery is "
+         "4,000 Wh")]
     assert failure.hint == (
-        "No single robot can power T1 (3,995 Wh of work plus about 11 Wh of travel, 4,006 Wh "
-        "against the largest printer battery of 4,000 Wh); split such tasks into smaller "
-        "quantities or move the work to another robot type. The fleet's 1 printer carries "
-        "4,000 Wh in all, so splitting T1 alone cannot fit it: keep the full work unless the "
-        "brief allows less.")
+        "No single robot can power T1 (3,995 Wh of work plus at least 11 Wh of travel, "
+        "4,006 Wh against the largest printer battery of 4,000 Wh); split such tasks into "
+        "smaller quantities or move the work to another robot type. The fleet's 1 printer "
+        "carries 4,000 Wh in all, so splitting T1 alone cannot fit it: keep the full work "
+        "unless the brief allows less.")
     # a pool overrun with a cause of its own (T2's 500 Wh on top) keeps its verdict, and the
     # task's hint no longer speaks for the pool
     failure = must_fail(r, graph(task("T1", type_="printer", energy=3995),
@@ -448,64 +450,67 @@ def test_energy_checks_charge_the_solvers_transit_allowance() -> None:
     assert failure.conflicts == ["energy_task:T1", "energy:printer"]
     assert "in all" not in failure.hint
     assert failure.details[1] == (
-        "printer tasks need 4,517 Wh, about 22 Wh of it travel; its 1 robot carries 4,000 Wh")
+        "printer tasks need at least 4,506 Wh, 11 Wh of it travel; its 1 robot carries 4,000 Wh")
     # with a second printer the pool fits and only the oversized task is a verdict
     two_printers = req(robot("PR1", "printer", 4000), robot("PR2", "printer", 4000), robot("EX1"))
     failure = must_fail(two_printers, graph(task("T1", type_="printer", energy=3995),
                                             task("T2", type_="printer", energy=500)))
     assert failure.conflicts == ["energy_task:T1"] and "in all" not in failure.hint
-    # the allowance is the longest leg a robot of the type could drive to the zone: from its
-    # start or from any zone a task of its type uses, exactly as the solver reserves it
+    # two zones: each task's least leg is the one from the depot, and the type's floor is the
+    # cheapest way to reach both (depot -> Z2 -> Z1, 6.727 + 5 Wh), not the sum of the legs
     far = graph(task("T1", type_="printer"), task("T2", type_="printer", zone="Z2"))
-    assert transit_allowances(r, far) == [
-        to_mwh(travel_wh(max(math.dist((20, 1), (0, 10)), math.dist((10, 10), (0, 10))))),
-        to_mwh(travel_wh(max(math.dist((20, 1), (10, 10)), math.dist((0, 10), (10, 10)))))]
+    to_z2 = leg_mwh((20, 1), (10, 10))
+    assert travel_floor(r, far) == ([leg, to_z2], {"printer": to_z2 + leg_mwh((10, 10), (0, 10))})
     # robots placed elsewhere (a replan) change the first leg; a type without robots has none
     at_z1 = {"PR1": (0.0, 10.0)}
-    assert transit_allowances(r, graph(task("T1", type_="printer")), at_z1) == [0]
-    assert transit_allowances(r, graph(task("T1", type_="crane"))) == [0]
-    # with two robots of a type the least allowance counts: never more than CP-SAT would demand
+    assert travel_floor(r, graph(task("T1", type_="printer")), at_z1) == ([0], {"printer": 0})
+    assert travel_floor(r, graph(task("T1", type_="crane"))) == ([0], {})
+    # with two robots of a type the nearer one counts: never more than CP-SAT would demand
     two = req(robot("PR1", "printer", 4000), robot("PR2", "printer", 4000))
-    assert transit_allowances(two, graph(task("T1", type_="printer")), {"PR2": (0.0, 10.0)}) == [0]
+    assert travel_floor(two, graph(task("T1", type_="printer")), {"PR2": (0.0, 10.0)}) == \
+        ([0], {"printer": 0})
 
 
-def test_validator_transit_matches_the_solver_on_the_tight_battery_fixture() -> None:
-    """The validator's energy figures are the solver's: per task the least allowance over the
-    robots of its type (``schedule._least_allowance``), so the pool it checks is the
-    ``budget_rows`` "type" row to the milli-Wh, and a pool one milli-Wh short is flagged with
-    the figures the solver would quote."""
+def test_validator_travel_matches_the_solver_on_the_tight_battery_fixture() -> None:
+    """The validator's pool figure is the solver's: the least travel the type's robots need to
+    reach its zones (``schedule._travel_floor``), so the pool it checks is the ``budget_rows``
+    "type" row to the milli-Wh, and a pool one milli-Wh short is flagged with the figures the
+    solver would quote."""
     r = Requirements.model_validate_json((FIXTURES_DIR / "tight_battery/structure.json").read_text())
     g = TaskGraph.model_validate_json((FIXTURES_DIR / "tight_battery/taskgraph_1.json").read_text())
+    excavator = [i for i, t in enumerate(g.tasks) if t.robot_type == "excavator"]
     inst = _instance(r, g, SolveOptions(), [])
-    assert transit_allowances(r, g) == [
-        _least_allowance(inst, i).allowance_mwh for i in range(len(g.tasks))]
-    assert validate_graph(r, g, coverage=True) is None   # 9,930 Wh fit the 10,000 Wh pool ...
+    legs, floors = travel_floor(r, g)
+    assert floors["excavator"] == _travel_floor(inst, ["EX1", "EX2"], excavator, hours=False)
+    assert validate_graph(r, g, coverage=True) is None   # 9,915 Wh fit the 10,000 Wh pool ...
     verdict = solve_schedule(r, g, SolveOptions(time_limit_s=5.0, num_workers=4, core_time_limit_s=3.0))
     assert isinstance(verdict, Failure) and verdict.conflicts == ["energy:EX1", "energy:EX2"]
     [row] = budget_rows(r, g, verdict)                   # ... but no split fits one battery
     demanded = to_mwh(row["demanded_wh"])
-    travel = sum(a for t, a in zip(g.tasks, transit_allowances(r, g), strict=True)
-                 if t.robot_type == "excavator")
-    assert demanded == 9929649 and to_mwh(row["travel_wh"]) == travel == 29649
-    assert demanded == sum(to_mwh(t.energy_wh) for t in g.tasks if t.robot_type == "excavator") + travel
+    # the depot (20, 8) to Z4 (8.2 cells) and to Z1 (10 cells), then Z1 to Z2 (12.6 cells)
+    assert demanded == 9915449 and to_mwh(row["travel_wh"]) == floors["excavator"] == 15449
+    assert demanded == sum(to_mwh(g.tasks[i].energy_wh) for i in excavator) + floors["excavator"]
+    # the per-task legs are each the leg from the depot: no order reaches a zone for less
+    assert [legs[i] for i in excavator] == [leg_mwh((20, 8), inst.cells[i]) for i in excavator]
 
     def with_pool(mwh_each: int) -> Requirements:
         return r.model_copy(update={"robots": [
             rb.model_copy(update={"battery_wh": mwh_each / 1000}) if rb.type == "excavator" else rb
             for rb in r.robots]})
 
-    assert validate_graph(with_pool(4964825), g) is None          # pool 9,929.650 >= 9,929.649
-    failure = must_fail(with_pool(4964824), g)                    # pool 9,929.648: one short
+    assert validate_graph(with_pool(4957725), g) is None          # pool 9,915.450 >= 9,915.449
+    failure = must_fail(with_pool(4957724), g)                    # pool 9,915.448: one short
     assert failure.conflicts == ["energy:excavator"]
     assert failure.details == [
-        "excavator tasks need 9,929.649 Wh, about 30 Wh of it travel; its 2 robots carry 9,929.648 Wh"]
-    assert "excavator tasks need 9,929.649 Wh, 9,900 Wh of work and about 30 Wh of travel, but " \
-           "its 2 robots carry only 9,929.648 Wh combined" in failure.hint
+        ("excavator tasks need at least 9,915.449 Wh, 15 Wh of it travel; its 2 robots carry "
+         "9,915.448 Wh")]
+    assert "excavator tasks need at least 9,915.449 Wh, 9,900 Wh of work and 15 Wh of travel, " \
+           "but its 2 robots carry only 9,915.448 Wh combined" in failure.hint
     # a replan passes the robots' positions to both: the figures still agree
     positions = {"EX1": (20.0, 18.0), "EX2": (8.0, 22.0), "HL1": (32.0, 22.0)}
     inst = _instance(r, g, SolveOptions(robot_positions=positions), [])
-    assert transit_allowances(r, g, positions) == [
-        _least_allowance(inst, i).allowance_mwh for i in range(len(g.tasks))]
+    assert travel_floor(r, g, positions)[1]["excavator"] == \
+        _travel_floor(inst, ["EX1", "EX2"], excavator, hours=False)
 
 
 # ----------------------------------------------------------------------------- schema hardening

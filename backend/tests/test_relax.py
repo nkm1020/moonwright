@@ -4,7 +4,7 @@ Every suggestion is checked two ways: the figures the module reports, and the pr
 (the modified requirements re-solved by CP-SAT under the original horizon, which must succeed
 exactly as the suggestion claims). The hand-made sites put every zone on the depot cell
 (``FLAT``) so energies are exact; one test moves a zone away to show that the battery figure
-counts the transit allowance the planning model reserves.
+counts the legs the planning model charges.
 """
 
 from __future__ import annotations
@@ -161,24 +161,24 @@ def test_battery_only_infeasibility_is_priced_at_the_solvers_own_use():
     assert isinstance(solve_schedule(shy, graph, SolveOptions()), Failure)
 
 
-def test_raise_battery_counts_the_transit_allowance_the_model_reserves():
-    """3000 + 3195 Wh of work in a zone 10 cells from the depot: the planning model charges
-    EX1 the 5 Wh allowance of every task (6205 Wh), the simulator would pay one 5 Wh leg
-    (6200 Wh). The figure is the model's, rounded up to 50 Wh, because a battery of 6200 Wh
-    would be refused by CP-SAT on re-planning while 6250 Wh is admitted."""
+def test_raise_battery_counts_the_legs_the_model_charges():
+    """3000 + 3195 Wh of work in a zone 10 cells from the depot: EX1 drives there once (5 Wh)
+    and works both tasks in place, so the planning model, the checker and the simulator all
+    charge 6,200 Wh, which is the figure, rounded up to 50 Wh. (The transit allowance charged
+    the 5 Wh before each task, 6,205 Wh, and the advice said 6,250 Wh.)"""
     site = Site(depot=(20, 8), zones=[Zone(id="Z1", center=(20, 18))])
     req = reqs([robot("EX1", "excavator", 5000)], horizon_h=100, site=site)
     graph = TaskGraph(tasks=[task("T1", "excavator", 4, 3000, "Z1"),
                              task("T2", "excavator", 3, 3195, "Z1")])
     failure = solve_schedule(req, graph, SolveOptions())
     assert isinstance(failure, Failure) and failure.conflicts == ["energy:EX1"]
-    assert "6,205 Wh" in failure.hint and "travel" in failure.hint
+    assert failure.hint == "EX1 would need at least 6,200 Wh, 5 Wh of it travel, but has 5,000 Wh."
     found = suggest_relaxations(req, graph, failure)
     raise_ = next(s for s in found if s.kind == "raise_battery")
-    assert raise_.battery_wh == 6250.0
+    assert raise_.battery_wh == 6200.0
     assert_proven(req, graph, raise_)
-    checker_only = req.model_copy(update={"robots": [robot("EX1", "excavator", 6200)]})
-    assert isinstance(solve_schedule(checker_only, graph, SolveOptions()), Failure)
+    short = req.model_copy(update={"robots": [robot("EX1", "excavator", 6199.999)]})
+    assert isinstance(solve_schedule(short, graph, SolveOptions()), Failure)
 
 
 def test_locked_tasks_stay_on_their_robot_while_advice_is_verified():
@@ -333,7 +333,8 @@ def test_budget_is_respected_and_untried_candidates_are_not_blamed(monkeypatch):
     # the budget ran out before every candidate was tried, so nothing is claimed either way
     assert found == []
     first, second = slow.opts
-    assert first.time_limit_s == pytest.approx(0.5, abs=0.01) and first.num_workers == 1
+    # every worker, interleaved in a fixed order: the same answer on every call
+    assert first.time_limit_s == pytest.approx(0.5, abs=0.01) and first.deterministic
     assert first.explain_infeasibility is False
     assert 0 < second.time_limit_s <= 0.2 + 0.05   # what was left of the budget
 

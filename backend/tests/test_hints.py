@@ -10,27 +10,29 @@ parentheses, no milli-Wh, the robots of one type sharing one pool sentence, and
 
 from __future__ import annotations
 
+import itertools
 import json
-import math
 import re
 from pathlib import Path
 
 import pytest
 
-from moonwright.geometry import travel_wh
+from moonwright.geometry import leg_mwh
 from moonwright.pipeline.schedule import (
     SolveOptions,
     _decimals_apart,
     _instance,
-    _least_allowance,
+    _travel_floor,
     _wh,
     budget_rows,
     solve_schedule,
 )
+from moonwright.pipeline.validate import validate_graph
 from moonwright.schemas import (
     Failure,
     Requirements,
     Robot,
+    Schedule,
     ScheduleEntry,
     Site,
     Task,
@@ -43,9 +45,11 @@ FAST = SolveOptions(time_limit_s=5.0, num_workers=4, core_time_limit_s=3.0)
 # every zone on the depot cell: no travel, so the figures are the task energies alone
 FLAT = Site(depot=(20, 20), zones=[Zone(id=f"Z{i}", center=(20, 20)) for i in range(1, 6)])
 # two zones 36 cells apart in the far corners, 41.15 cells from the depot (20, 1): at
-# 12 cells/h a first leg takes 4 h and the allowance of either zone is worth 20.573 Wh
+# 12 cells/h a first leg takes 4 h and 20.574 Wh (rounded up to the milli-Wh), the leg between
+# them 3 h and 18 Wh, so reaching both costs at least 38.574 Wh whatever the order
 FAR = Site(grid=(40, 40), zones=[Zone(id="Z1", center=(2, 38)), Zone(id="Z2", center=(38, 38))])
-LEG_WH = travel_wh(math.hypot(2 - 20, 38 - 1))   # 20.573 Wh
+LEG_WH = leg_mwh((20, 1), (2, 38)) / 1000         # 20.574 Wh
+BOTH_WH = LEG_WH + 18                              # depot -> one zone -> the other
 
 
 # ----------------------------------------------------------------------------- helpers
@@ -100,24 +104,25 @@ def test_tight_battery_core_gets_one_pool_sentence_with_whole_figures():
     failure = infeasible(req, graph)
     assert failure.conflicts == ["energy:EX1", "energy:EX2"]
     assert failure.hint == (
-        "EX1 and EX2 each have 5,000 Wh; the excavator tasks need 9,930 Wh in total, about "
-        "30 Wh of it travel, and cannot be split across 2 excavators (10,000 Wh combined) "
+        "EX1 and EX2 each have 5,000 Wh; the excavator tasks need at least 9,915 Wh in total, "
+        "15 Wh of it travel, and cannot be split across 2 excavators (10,000 Wh combined) "
         "without exceeding one budget.")
     assert_readable(failure.hint)
     assert failure.details == []   # unchanged: the solver's details stay empty
 
     # the numbers behind the sentence, exactly the model's: the type's work plus the least
-    # transit allowance of each task, against the two batteries combined
+    # travel any split and order needs to reach its three zones (depot -> Z4, depot -> Z1 ->
+    # Z2: 15.449 Wh; the per-task allowances made it 29.649 Wh), against both batteries
     inst = _instance(req, graph, FAST, [])
     typed = [i for i, t in enumerate(inst.tasks) if t.robot_type == "excavator"]
-    travel = sum(_least_allowance(inst, i).allowance_mwh for i in typed)
+    travel = _travel_floor(inst, ["EX1", "EX2"], typed, hours=False)
     [row] = budget_rows(req, graph, failure, FAST)
     assert row == {"kind": "type", "subject": "excavator", "robots": ["EX1", "EX2"],
                    "budget_wh": 10000.0,
                    "demanded_wh": pytest.approx((sum(inst.energy[i] for i in typed) + travel) / 1000),
                    "travel_wh": pytest.approx(travel / 1000)}
-    assert row["demanded_wh"] == pytest.approx(9929.649)
-    assert row["travel_wh"] == pytest.approx(29.649)
+    assert row["demanded_wh"] == pytest.approx(9915.449)
+    assert row["travel_wh"] == pytest.approx(15.449)
     # the sentence quotes the rows, rounded
     for key in ("budget_wh", "demanded_wh", "travel_wh"):
         assert f"{round(row[key]):,} Wh" in failure.hint
@@ -130,12 +135,13 @@ def test_per_robot_sentence_names_demand_travel_share_and_budget():
                              task("T3", "excavator", 2, 100, "Z1")])
     failure = infeasible(req, graph)
     assert failure.conflicts == ["energy:PR1"]
-    assert failure.hint == "PR1 would need 4,031 Wh, about 41 Wh of it travel, but has 4,000 Wh."
+    assert failure.hint == ("PR1 would need at least 4,029 Wh, 39 Wh of it travel, but has "
+                            "4,000 Wh.")
     assert_readable(failure.hint)
     [row] = budget_rows(req, graph, failure, FAST)
     assert row == {"kind": "robot", "subject": "PR1", "robots": ["PR1"], "budget_wh": 4000.0,
-                   "demanded_wh": pytest.approx(3990 + 2 * LEG_WH, abs=1e-3),
-                   "travel_wh": pytest.approx(2 * LEG_WH, abs=1e-3)}
+                   "demanded_wh": pytest.approx(3990 + BOTH_WH, abs=1e-9),
+                   "travel_wh": pytest.approx(BOTH_WH, abs=1e-9)}
 
 
 def test_without_travel_the_sentence_is_demand_against_budget():
@@ -183,20 +189,20 @@ def test_pool_sentence_lists_unequal_budgets_and_every_robot_of_the_type():
 
 
 def test_pool_sentence_says_when_the_work_exceeds_the_pool_itself():
-    """Three 100 Wh tasks on two 125 Wh robots in the far corners: with every task's least
-    leg the type's work is more than the two batteries together."""
+    """Three 100 Wh tasks on two 125 Wh robots in the far corners: with the least travel that
+    reaches both zones the type's work is more than the two batteries together."""
     req = reqs([robot("R1", "excavator", 125), robot("R2", "excavator", 125)], 50, FAR)
     graph = TaskGraph(tasks=[task("T1", "excavator", 4, 100, "Z1"),
                              task("T2", "excavator", 4, 100, "Z2"),
                              task("T3", "excavator", 4, 100, "Z1")])
     failure = infeasible(req, graph)
     assert failure.conflicts == ["energy:R1", "energy:R2"]
-    assert failure.hint == ("R1 and R2 each have 125 Wh; the excavator tasks need 362 Wh in "
-                            "total, about 62 Wh of it travel, more than the 250 Wh the "
+    assert failure.hint == ("R1 and R2 each have 125 Wh; the excavator tasks need at least "
+                            "339 Wh in total, 39 Wh of it travel, more than the 250 Wh the "
                             "2 excavators have combined.")
     [row] = budget_rows(req, graph, failure, FAST)
-    assert row["demanded_wh"] == pytest.approx(300 + 3 * LEG_WH, abs=1e-3)
-    assert row["travel_wh"] == pytest.approx(3 * LEG_WH, abs=1e-3) and row["budget_wh"] == 250.0
+    assert row["demanded_wh"] == pytest.approx(300 + BOTH_WH, abs=1e-9)
+    assert row["travel_wh"] == pytest.approx(BOTH_WH, abs=1e-9) and row["budget_wh"] == 250.0
 
 
 def over(need_wh: float, battery_wh: float) -> Failure:
@@ -348,6 +354,87 @@ def test_every_sentence_of_a_mixed_core_is_readable_and_counted_once():
          "demanded_wh": 6200.0, "travel_wh": 0.0},
         {"kind": "robot", "subject": "SV1", "robots": ["SV1"], "budget_wh": 1500.0,
          "demanded_wh": 2000.0, "travel_wh": 0.0}]
+
+
+# ----------------------------------------------------------------------------- orders (3k)
+# Three zones around a depot (the 3k review's first repro): one robot cannot branch, so the
+# least it drives is its cheapest route through them, not the tree that joins them
+AROUND = Site(grid=(40, 40), depot=(20, 20), zones=[
+    Zone(id="Z1", center=(0, 0)), Zone(id="Z2", center=(39, 0)), Zone(id="Z3", center=(20, 39))])
+# The second repro: Z1 4 cells from the depot (20, 1), Z2 33 cells further on
+LINE = Site(grid=(40, 40), depot=(20, 1), zones=[
+    Zone(id="Z1", center=(20, 5)), Zone(id="Z2", center=(20, 38))])
+
+
+def test_one_robot_is_charged_its_cheapest_route_not_a_tree():
+    """3k review: one 345 Wh excavator, three 100 Wh tasks in three zones around the depot.
+    The tree joining the zones to the depot costs 37.437 Wh, the cheapest route the robot can
+    drive 50.692 Wh. Priced on the tree, the validator passed the graph and the hint read
+    "the excavator tasks need at least 337 Wh in total, 37 Wh of it travel, and cannot be
+    split across 1 excavator (345 Wh combined)": sound figures, a false reason. Priced on the
+    route (``geometry.route_cost``), both name the shortfall."""
+    graph = TaskGraph(tasks=[task(f"T{k}", "excavator", 2, 100, z)
+                             for k, z in ((1, "Z1"), (2, "Z2"), (3, "Z3"))])
+    req = reqs([robot("EX1", "excavator", 345)], 1000, AROUND)
+    zones = [(0, 0), (39, 0), (20, 39)]
+    route = min(sum(leg_mwh(p, q) for p, q in itertools.pairwise([(20, 20), *order]))
+                for order in itertools.permutations(zones))
+    assert route == 50692   # depot, Z3, Z2, Z1 (the star the tree prices is 37,437 mWh)
+    inst = _instance(req, graph, FAST, [])
+    assert _travel_floor(inst, ["EX1"], [0, 1, 2], hours=False) == route
+    verdict = validate_graph(req, graph)
+    assert verdict is not None and verdict.conflicts == ["energy:excavator"]
+    assert verdict.details == [
+        "excavator tasks need at least 351 Wh, 51 Wh of it travel; its 1 robot carries 345 Wh"]
+    failure = infeasible(req, graph)
+    assert failure.conflicts == ["energy:EX1"]
+    assert failure.hint == "EX1 would need at least 351 Wh, 51 Wh of it travel, but has 345 Wh."
+    assert budget_rows(req, graph, failure, FAST) == [
+        {"kind": "robot", "subject": "EX1", "robots": ["EX1"], "budget_wh": 345.0,
+         "demanded_wh": 350.692, "travel_wh": 50.692}]
+    # the figure is the solver's own: the work and that route, to the milli-Wh, fit
+    exact = reqs([robot("EX1", "excavator", 350.692)], 1000, AROUND)
+    assert isinstance(solve_schedule(exact, graph, FAST), Schedule)
+
+
+def test_an_order_the_edges_force_is_the_conflict_not_a_split():
+    """3k review: one robot runs T1 in Z1, then T2 in Z2, then T3 back in Z1. In its cheapest
+    order (Z1, Z1, Z2) its 300 Wh of work and 18.5 Wh of legs fit 326.75 Wh; the order the
+    edges force drives 35 Wh. Energy depends on the order since phase 3k, and only robot:R1
+    ties the order to time, so the core is the battery, the edge that forces the return and
+    robot:R1. The hint used to blame "a split across 1 excavator" and add a sentence about
+    hours for robot:R1 with no deadline in the core; it now names the order."""
+    graph = TaskGraph(tasks=[task("T1", "excavator", 2, 100, "Z1"),
+                             task("T2", "excavator", 2, 100, "Z2", after=("T1",)),
+                             task("T3", "excavator", 2, 100, "Z1", after=("T2",))])
+    req = reqs([robot("R1", "excavator", 326.75)], 1000, LINE)
+    assert validate_graph(req, graph) is None   # the cheapest order fits: no verdict before
+    failure = infeasible(req, graph)
+    assert failure.conflicts == ["energy:R1", "precedence:T2->T3", "robot:R1"]
+    assert failure.hint == (
+        "R1 has 327 Wh, which cannot cover its 300 Wh of work and the legs of the order the "
+        "precedence edges force; the cheapest order alone drives 19 Wh. T3 cannot start until "
+        "T2 finishes (T2 takes 2 h); the precedence chain through this edge is 6 h long.")
+    assert "split" not in failure.hint and "transit" not in failure.hint
+    assert_readable(failure.hint)
+    assert budget_rows(req, graph, failure, FAST) == [
+        {"kind": "order", "subject": "R1", "robots": ["R1"], "budget_wh": 326.75,
+         "demanded_wh": 318.5, "travel_wh": 18.5}]
+    # the forced order itself (2 + 16.5 + 16.5 Wh of legs) fits 335 Wh
+    assert isinstance(solve_schedule(reqs([robot("R1", "excavator", 335)], 1000, LINE), graph,
+                                     FAST), Schedule)
+    # a deadline in another core (the hauler's 20 h against 15 h) leaves this one as it was;
+    # the hauler's robot group keeps its sentence about hours
+    hauled = TaskGraph(tasks=[*graph.tasks, task("T4", "hauler", 10, 100, "Z1"),
+                              task("T5", "hauler", 10, 100, "Z1")])
+    failure = infeasible(reqs([robot("R1", "excavator", 326.75), robot("HL1", "hauler", 3000)],
+                              15, LINE), hauled)
+    assert failure.conflicts == ["energy:R1", "horizon", "precedence:T2->T3", "robot:HL1",
+                                 "robot:R1"]
+    assert failure.hint.startswith(
+        "R1 has 327 Wh, which cannot cover its 300 Wh of work and the legs of the order the "
+        "precedence edges force; the cheapest order alone drives 19 Wh.")
+    assert "R1 runs one task" not in failure.hint and "HL1 runs one task at a time" in failure.hint
 
 
 # ----------------------------------------------------------------------------- budget rows

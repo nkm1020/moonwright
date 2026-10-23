@@ -76,9 +76,11 @@ included, energy per robot type before and after, scope drift); an answer that r
 id gets no diff, the validate step names the duplicate.
 ``schedule`` (failed, ``energy:<robot>`` in the core): ``{"budget": [...]}`` from
 :func:`moonwright.pipeline.schedule.budget_rows`, one row per robot type whose work no split
-across its batteries fits and one per robot whose own tasks exceed its battery (``kind``,
-``subject``, ``robots``, ``budget_wh``, ``demanded_wh``, ``travel_wh``, exact Wh): the figures
-the hint sentence quotes rounded, for the UI's budget table; the model never sees them.
+across its batteries fits, one per robot whose own tasks exceed its battery and one per robot
+alone in its type whose tasks fit only in an order the core rules out (``kind`` "type",
+"robot" or "order", ``subject``, ``robots``, ``budget_wh``, ``demanded_wh``, ``travel_wh``,
+exact Wh): the figures the hint sentence quotes rounded, for the UI's budget table; the model
+never sees them.
 ``validate``: ``{"advisories": [...]}`` when the step that produced the graph carried
 advisories (the rate model's estimate warnings, or its note that nothing was grounded).
 The *final failed step* of a run that ends without a schedule (the verdict the repair budget
@@ -131,7 +133,7 @@ structure one of whose hauls is in the verdict gets no note at all.
 ``verdict`` feedback mode passes none. The validator's volume and supply checks judge a whole
 plan only: ``validate_graph(volume=False)`` (which switches the supply check off with it) for
 the remaining graph of a replan and its repairs, ``True`` otherwise; it also gets the
-replan's ``robot_positions``, so its energy checks charge the transit the solver charges.
+replan's ``robot_positions``, so its energy checks start the robots where the solver does.
 """
 
 from __future__ import annotations
@@ -204,7 +206,7 @@ def unstructured_result(step: LoopStep, brief: str) -> PlanResult:
 
 
 def travel_modelled() -> bool:
-    """Whether CP-SAT budgets travel (the travel allowance adds ``robot_positions`` to
+    """Whether CP-SAT times and charges travel (the travel model adds ``robot_positions`` to
     :class:`SolveOptions`); the verification receipt reports it honestly either way."""
     return any(f.name == "robot_positions" for f in fields(SolveOptions))
 
@@ -276,6 +278,7 @@ class Planner:
         required_tasks: Collection[str] | None = None,
         start_with_prior: bool = False,
         robot_positions: Positions | None = None,
+        robot_ready_h: Mapping[str, float] | None = None,
         reserved_ids: Collection[str] | None = None,
     ) -> PlanResult:
         """Generate (or, with ``prior_graph``, adapt) a task graph and schedule it.
@@ -289,15 +292,17 @@ class Planner:
         "Scope of a replan" in the module docstring for what is refused and when.
         ``start_with_prior`` makes the run solver-first: no model call for the first graph,
         ``prior_graph`` is verified as it is and the model is asked only to repair a verdict.
-        ``robot_positions`` (robot id -> grid cell) tells the travel allowance where each robot
-        is now; it is passed on only when :class:`SolveOptions` models travel. See the module
-        docstring for how the two budgets treat verdicts and rejected answers.
+        ``robot_positions`` (robot id -> grid cell) tells the travel model where each robot is
+        now; it is passed on only when :class:`SolveOptions` models travel, and so is
+        ``robot_ready_h`` (robot id -> the hour it may set off from there, a replan at a
+        fractional hour). See the module docstring for how the two budgets treat verdicts and
+        rejected answers.
         ``reserved_ids`` are robot ids the advice on a failed run must not hand to a spare (the
         robots a replan has lost); when None they are read from ``context``.
         """
         steps: list[LoopStep] = []
         max_repairs = self.max_repairs if max_repairs is None else max_repairs
-        opts = self._solve_options(start_offset_h, robot_positions)
+        opts = self._solve_options(start_offset_h, robot_positions, robot_ready_h)
         replan = prior_graph is not None   # advised with REPLAN_SUGGESTION_KINDS only
         reserved = (list(reserved_ids) if reserved_ids is not None
                     else _failed_robots_in(context))
@@ -433,12 +438,15 @@ class Planner:
         notes = [str(a) for a in advisories if not _repeats_verdict(str(a), conflicts)]
         return notes or None
 
-    def _solve_options(self, start_offset_h: int, robot_positions: Positions | None) -> SolveOptions:
+    def _solve_options(self, start_offset_h: int, robot_positions: Positions | None,
+                       robot_ready_h: Mapping[str, float] | None = None) -> SolveOptions:
         kwargs: dict[str, Any] = {"time_limit_s": self.solver_time_limit_s,
                                   "start_offset_h": start_offset_h}
         if robot_positions is not None and travel_modelled():
             kwargs["robot_positions"] = {r: (float(x), float(y))
                                          for r, (x, y) in robot_positions.items()}
+        if robot_ready_h and travel_modelled():
+            kwargs["robot_ready_h"] = {r: float(h) for r, h in robot_ready_h.items()}
         return SolveOptions(**kwargs)
 
     def _check(
@@ -470,8 +478,8 @@ class Planner:
         rules of ``scope`` (module docstring, "Scope of a replan"); ``advisories`` ride on the
         validate step's payload; ``coverage`` enables the validator's structure coverage check
         and ``volume`` its volume check (both for fresh plans only, module docstring "What a
-        repair is told"); the validator's energy checks charge the transit of the robot
-        positions in ``opts``, as the solver does; ``previous`` is the graph a repair
+        repair is told"); the validator's energy checks start the robots at the positions in
+        ``opts``, as the solver does; ``previous`` is the graph a repair
         answered, so a structure the repair stopped serving is reported with the tasks it
         lost. ``final`` says no repair round can follow this verdict, so a failed step gets
         the solver-grounded advice in its payload before it is reported (:meth:`_advise`);
@@ -608,8 +616,10 @@ def verification_receipt(req: Requirements, graph: TaskGraph, schedule: Schedule
 
     A robot's ``used_wh`` is its ``work_wh`` plus the ``travel_wh`` of the legs its sequence
     actually drives (the first one from where ``opts`` says it starts, the depot by default,
-    then zone to zone, at 0.5 Wh per cell): the figure a disturbance-free replay spends, and
-    at most what CP-SAT reserved with its transit allowance.
+    then zone to zone, at 0.5 Wh per cell, each leg rounded up to a milli-Wh): exactly what
+    CP-SAT charged that sequence, and what a disturbance-free replay spends. The key
+    ``travel_allowance`` keeps its pre-3k name for the saved plans the UI reads: true when the
+    solver times and charges travel.
     """
     tasks = {t.id: t for t in graph.tasks}
     work = {r.id: 0 for r in req.robots}  # milli-Wh of work per robot

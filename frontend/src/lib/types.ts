@@ -391,7 +391,8 @@ export interface VerificationReceipt {
   zone_groups: number;
   /** one row per robot in requirements order: work_wh is the energy of its entries, travel_wh
    *  the legs its sequence drives (depot to first zone, then zone to zone, 0.5 Wh per cell: what
-   *  a replay spends, at most what CP-SAT reserved), used_wh = work_wh + travel_wh, pct of budget */
+   *  a replay spends; since phase 3k exactly what CP-SAT charged, before it at most what its
+   *  per-task transit allowance reserved), used_wh = work_wh + travel_wh, pct of budget */
   battery: {
     robot: string;
     used_wh: number;
@@ -406,7 +407,8 @@ export interface VerificationReceipt {
   status: "optimal" | "feasible";
   objective_bound_h: number | null;
   solve_time_s: number;
-  /** true when CP-SAT budgeted transit between zones (time and 0.5 Wh per cell) */
+  /** true when CP-SAT timed and charged travel between zones (whole hours and 0.5 Wh per cell
+   *  per leg); the name predates phase 3k, which made the legs exact instead of an allowance */
   travel_allowance: boolean;
   /** "independent check_schedule passed" */
   recheck: string;
@@ -426,11 +428,15 @@ export interface SchedulePayload {
  * the single batteries (or, when demanded_wh > budget_wh, it exceeds even the pool): `robots`
  * is every robot of the type, `budget_wh` their batteries combined. kind "robot": the tasks
  * only that robot can run (locked to it, or it is the only robot of its type) exceed its
- * battery. `travel_wh` is the transit allowance inside `demanded_wh`. Rows come in the order
- * the conflicts first name them.
+ * battery. kind "order" (phase 3k): the only robot of its type, whose tasks fit its battery in
+ * their cheapest order (`demanded_wh`, within `budget_wh`) but not in the order the conflict's
+ * precedence edges, deadline or zones hold it to. `travel_wh` is the travel inside
+ * `demanded_wh`: since phase 3k the least any order and split of the tasks needs, so
+ * `demanded_wh` is a lower bound (a per-task transit allowance before it). Rows come in the
+ * order the conflicts first name them.
  */
 export interface BudgetRow {
-  kind: "type" | "robot";
+  kind: "type" | "robot" | "order";
   subject: string;
   robots: string[];
   budget_wh: number;
@@ -470,7 +476,7 @@ export const SUGGESTION_COPY = {
   /** chip of reduce_scope (never verified) */
   unverified: "not solver-verified",
   footer:
-    "Each change was re-solved by CP-SAT on the last task graph; figures are in the planning model's units (work + transit allowance)",
+    "Each change was re-solved by CP-SAT on the last task graph; figures are in the planning model's units (work + the legs each robot drives)",
   /** note of the failed-replan variant: its hours need no offset */
   replanNote: "Hours are absolute simulator time against the brief's deadline",
 } as const;
@@ -623,7 +629,7 @@ export function isMatchedDiff(diff: RepairDiff): diff is RepairDiff & { renumber
 function isBudgetRow(v: unknown): v is BudgetRow {
   if (!isRecord(v)) return false;
   return (
-    (v.kind === "type" || v.kind === "robot") &&
+    (v.kind === "type" || v.kind === "robot" || v.kind === "order") &&
     typeof v.subject === "string" &&
     Array.isArray(v.robots) &&
     v.robots.every((r) => typeof r === "string") &&

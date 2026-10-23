@@ -356,8 +356,8 @@
    {
     "task": "T4",
     "robot": "EX1",
-    "start_h": 30,
-    "end_h": 42
+    "start_h": 29,
+    "end_h": 41
    },
    {
     "task": "T5",
@@ -368,8 +368,8 @@
    {
     "task": "T6",
     "robot": "HL1",
-    "start_h": 42,
-    "end_h": 52
+    "start_h": 41,
+    "end_h": 51
    },
    {
     "task": "T7",
@@ -385,15 +385,15 @@
    },
    {
     "task": "T9",
-    "robot": "CP2",
-    "start_h": 42,
-    "end_h": 50
+    "robot": "CP1",
+    "start_h": 41,
+    "end_h": 49
    },
    {
     "task": "T10",
     "robot": "CP2",
-    "start_h": 52,
-    "end_h": 60
+    "start_h": 51,
+    "end_h": 59
    },
    {
     "task": "T11",
@@ -404,28 +404,28 @@
    {
     "task": "T12",
     "robot": "SV1",
-    "start_h": 60,
-    "end_h": 64
+    "start_h": 59,
+    "end_h": 63
    }
   ],
-  "makespan_h": 64,
+  "makespan_h": 63,
   "status": "optimal",
-  "objective_bound_h": 64,
-  "solve_time_s": 0.004904
+  "objective_bound_h": 63,
+  "solve_time_s": 0.015940000000000003
  },
- "explanation": "The plan grades and compacts the 120 m access road from the landing pad to the habitat site, excavates the 8 m by 8 m foundation pit and shapes a small protective berm from the spoil, using five robots in twelve tasks. SV1 stakes the centreline and the foundation corners, then EX1, the only excavator, works west in sequence: road segment A, road segment B, then the foundation pit. HL1 clears grading spoil to the shoulders and later carries foundation spoil to the berm line. CP1 and CP2 compact the two road segments in parallel as soon as each is graded, then finish the foundation base and the berm. SV1 inspects the road once both segments are compacted and finishes with an as-built survey of the foundation and berm. The verified schedule completes in 64 hours of the 240-hour window, transit between zones included. The single excavator is the tightest resource: its three digging tasks form a 32-hour chain (35 hours with the moves between zones) that everything downstream waits on, and it uses about 3,900 of its 5,000 Wh. The solver proved the makespan optimal and verified precedence, per-robot sequencing, one robot per zone and all battery budgets.",
+ "explanation": "The plan grades and compacts the 120 m access road from the landing pad to the habitat site, excavates the 8 m by 8 m foundation pit and shapes a small protective berm from the spoil, using five robots in twelve tasks. SV1 stakes the centreline and the foundation corners, then EX1, the only excavator, works west in sequence: road segment A, road segment B, then the foundation pit. HL1 clears grading spoil to the shoulders and later carries foundation spoil to the berm line. CP1 and CP2 compact the two road segments in parallel as soon as each is graded, then finish the foundation base and the berm. SV1 inspects the road once both segments are compacted and finishes with an as-built survey of the foundation and berm. The verified schedule completes in 63 hours of the 240-hour window, transit between zones included. The single excavator is the tightest resource: its three digging tasks form a 32-hour chain (34 hours with the moves between zones) that everything downstream waits on, and it uses about 3,900 of its 5,000 Wh. The solver proved the makespan optimal and verified precedence, per-robot sequencing, one robot per zone and all battery budgets.",
  "steps": [
   {
    "stage": "structure",
    "attempt": 1,
    "ok": true,
    "failure": null,
-   "duration_s": 0.002607458969578147,
+   "duration_s": 0.00264945812523365,
    "usage": {
     "model": "fixture:structure.json",
     "input_tokens": 0,
     "output_tokens": 0,
-    "latency_s": 0.0004771669628098607
+    "latency_s": 0.0004540409427136183
    },
    "message": "3 structures, 5 robots, horizon 240h",
    "payload": {
@@ -446,12 +446,12 @@
    "attempt": 1,
    "ok": true,
    "failure": null,
-   "duration_s": 0.0016711660427972674,
+   "duration_s": 0.0014440829399973154,
    "usage": {
     "model": "fixture:taskgraph_1.json",
     "input_tokens": 0,
     "output_tokens": 0,
-    "latency_s": 0.000447999918833375
+    "latency_s": 0.0002049580216407776
    },
    "message": "12 tasks",
    "payload": {
@@ -467,7 +467,7 @@
    "attempt": 1,
    "ok": true,
    "failure": null,
-   "duration_s": 0.0004045419627800584,
+   "duration_s": 0.000568541930988431,
    "usage": null,
    "message": "12 tasks valid",
    "payload": {
@@ -481,11 +481,11 @@
    "attempt": 1,
    "ok": true,
    "failure": null,
-   "duration_s": 0.007033333997242153,
+   "duration_s": 0.019620874896645546,
    "usage": null,
-   "message": "makespan 64h (optimal)",
+   "message": "makespan 63h (optimal)",
    "payload": {
-    "makespan_h": 64,
+    "makespan_h": 63,
     "status": "optimal",
     "verified": true,
     "verification": {
@@ -495,51 +495,51 @@
      "battery": [
       {
        "robot": "EX1",
-       "used_wh": 3916.571,
+       "used_wh": 3916.572,
        "work_wh": 3900.0,
-       "travel_wh": 16.571,
+       "travel_wh": 16.572,
        "budget_wh": 5000.0,
        "pct": 78.3
       },
       {
        "robot": "HL1",
-       "used_wh": 1617.379,
+       "used_wh": 1617.38,
        "work_wh": 1600.0,
-       "travel_wh": 17.379,
+       "travel_wh": 17.38,
        "budget_wh": 3000.0,
        "pct": 53.9
       },
       {
        "robot": "CP1",
-       "used_wh": 1405.0,
-       "work_wh": 1400.0,
-       "travel_wh": 5.0,
+       "used_wh": 2209.5,
+       "work_wh": 2200.0,
+       "travel_wh": 9.5,
        "budget_wh": 3500.0,
-       "pct": 40.1
+       "pct": 63.1
       },
       {
        "robot": "CP2",
-       "used_wh": 3020.571,
-       "work_wh": 3000.0,
-       "travel_wh": 20.571,
+       "used_wh": 2217.38,
+       "work_wh": 2200.0,
+       "travel_wh": 17.38,
        "budget_wh": 3500.0,
-       "pct": 86.3
+       "pct": 63.4
       },
       {
        "robot": "SV1",
-       "used_wh": 966.571,
+       "used_wh": 966.572,
        "work_wh": 950.0,
-       "travel_wh": 16.571,
+       "travel_wh": 16.572,
        "budget_wh": 1500.0,
        "pct": 64.4
       }
      ],
-     "tightest_robot": "CP2",
-     "horizon_used_h": 64,
+     "tightest_robot": "EX1",
+     "horizon_used_h": 63,
      "horizon_h": 240,
      "status": "optimal",
-     "objective_bound_h": 64,
-     "solve_time_s": 0.005,
+     "objective_bound_h": 63,
+     "solve_time_s": 0.016,
      "travel_allowance": true,
      "recheck": "independent check_schedule passed"
     }
@@ -550,12 +550,12 @@
    "attempt": 1,
    "ok": true,
    "failure": null,
-   "duration_s": 0.0006244159303605556,
+   "duration_s": 0.0004916251637041569,
    "usage": {
     "model": "fixture:explain.json",
     "input_tokens": 0,
     "output_tokens": 0,
-    "latency_s": 0.00048758299089968204
+    "latency_s": 0.00041016703471541405
    },
    "message": null,
    "payload": null

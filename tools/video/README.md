@@ -17,7 +17,7 @@ scene describes the task graph as Nemotron 3 Ultra's job (not as this run's outp
 repair scene calls its repair a prepared one. The only Nemotron output on screen is the
 Impossible deadline sample, a recorded live run, and the narration credits it as such. The
 evidence slide reports the live evaluation (docs/eval/2026-10-23-live-eval-run2, the Nemotron 3
-Ultra arm). The failure injection, the replan and both Monte Carlo runs (59% baseline and the
+Ultra arm). The failure injection, the replan and both Monte Carlo runs (60% baseline and the
 spare-robot what-if) are computed live during the capture.
 
 ## One command
@@ -120,7 +120,7 @@ sample-identical to "Nemmatron" (NEM-uh-tron) and her "Nebius" is closest to NEE
 once with any new voice. A scene has:
 
 - `id`, `kind` (`slide` or `ui`) and `narration`.
-- Optional: `caption` (shown instead of the narration, timed sentence by sentence, e.g. "9,930 Wh"
+- Optional: `caption` (shown instead of the narration, timed sentence by sentence, e.g. "9,915 Wh"
   where the voice says the number in words), `voDelay` (seconds before the voice starts),
   `pauseBefore` (`{"<sentence index>": seconds}` of extra silence before a sentence),
   `minDuration`, `transition` (`{"type": "dip" | "fade", "duration": 0.5}`, default a cut),

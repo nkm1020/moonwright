@@ -143,7 +143,9 @@ def test_cli_plan_then_simulate_landing_pad_with_ex2_failure(tmp_path, capsys):
     assert "t=  30.00h  robot_failure  EX2" in out
     assert "#1 at t=30.00h after robot_failure EX2:" in out
     assert f"makespan {plan.schedule.makespan_h}h -> " in out
-    assert "; CP-SAT rescheduled 11 tasks in " in out and "Nemotron not needed" in out
+    # EX2 is 72 % into T3 at 30 h in the settled 80 h plan (the earlier one had it 79 % into
+    # T4, 11 tasks left): T1, T2, T4, T5 and T6 are done, so 9 remain, T3 again in full
+    assert "; CP-SAT rescheduled 9 tasks in " in out and "Nemotron not needed" in out
     assert "completed at t=" in out
 
     sim = SimResult.model_validate_json(sim_path.read_text())

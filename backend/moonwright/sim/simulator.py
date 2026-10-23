@@ -35,17 +35,18 @@ Implementation notes
   is free and starts working once ``start_h <= t``, every ``after`` task was done before the
   step began and nobody else works in the zone. Arriving ends the robot's step; work begins
   next step.
-* Travel and the planner: the solver reserves a per-task transit allowance (an upper bound over
-  the site, see ``moonwright.pipeline.schedule``), not terrain; the simulator pays the actual
-  straight-line distance, which is never longer. Geometry is shared through
-  ``moonwright.geometry`` (:func:`depot_position`, :func:`zone_positions`), so planner and
-  simulator place every zone in the same cell. A robot that leaves as soon as it is free
-  therefore arrives on or before the scheduled start of a solver schedule, and a
-  disturbance-free replay of a verified plan starts every task on time and raises no event
-  (with a ``dt_h`` that divides an hour; a coarser step would delay starts to its grain).
+* Travel and the planner: the solver times and charges the legs of each robot's actual
+  sequence (``moonwright.pipeline.schedule``, "Travel"): straight lines between zone centres,
+  not terrain, each leg rounded up to whole hours, which is what the simulator drives here.
+  Geometry is shared through ``moonwright.geometry`` (:func:`depot_position`,
+  :func:`zone_positions`), so planner and simulator place every zone in the same cell. A robot
+  that leaves as soon as it is free therefore arrives on or before the scheduled start of a
+  solver schedule, and a disturbance-free replay of a verified plan starts every task on time
+  and raises no event (with a ``dt_h`` that divides an hour; a coarser step would delay starts
+  to its grain).
 * Zone safety: two robots never have status "working" in the same zone during the same step; a
   robot that is ready while its zone is busy waits at the zone with status "idle".
-* Battery: the verifier budgets each robot's work plus a transit allowance against its whole
+* Battery: the verifier budgets each robot's work plus the legs it drives against its whole
   battery, so a verified plan may legitimately drain a robot to a few percent; an alarm at a
   fixed reserve would therefore fire on plans the solver proved sound. ``battery_low`` is
   instead the simulator's own forecast under the plan in force: it fires when the battery

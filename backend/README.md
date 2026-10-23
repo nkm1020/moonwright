@@ -3,7 +3,7 @@
 Natural-language construction brief -> Nemotron (Nebius Token Factory) structures it and proposes a
 task graph with quantities -> a deterministic rate model turns quantities into hours and Wh ->
 validator + OR-Tools CP-SAT verify and schedule it (precedence, one task per robot, one robot per
-zone, batteries with a transit allowance, horizon) -> infeasibility cores go back to Nemotron for
+zone, batteries with the legs each robot drives, horizon) -> infeasibility cores go back to Nemotron for
 repair -> the verified schedule runs in a 2D simulator that reschedules with the solver on robot
 failure and escalates to Nemotron only when the remaining fleet provably cannot finish.
 
@@ -40,12 +40,13 @@ Every command answers `--help`; `--llm fixture|nebius|record` picks the model cl
   with a base-power energy floor; a graph with no quantity at all (the hand-made fixtures, a
   solver-only replan) is returned unchanged. A gap of more than 50 % between the estimate and the
   computed figure is an `estimate:<task>` advisory in the step payload (a warning, never a conflict).
-* **Transit allowance** (`moonwright/pipeline/schedule.py`, `moonwright/geometry.py`). For every
-  (task, robot) the solver reserves `T = ceil(max distance to the task's zone over the robot's start
-  and every zone it can be sent to / speed)` whole hours before the task and `0.5 Wh` per cell in the
-  robot's energy sum; the first task cannot start before the first leg. Group names are unchanged, so
-  cores and repair hints read as before; `check_schedule` re-verifies the actual legs of every robot's
-  sequence. A disturbance-free replay of a verified plan fires no `task_overrun` event.
+* **Transit allowance** (`moonwright/pipeline/schedule.py`, `moonwright/geometry.py`; replaced by
+  exact travel in phase 3k, see below). For every (task, robot) the solver reserved `T =
+  ceil(max distance to the task's zone over the robot's start and every zone it can be sent to /
+  speed)` whole hours before the task and `0.5 Wh` per cell in the robot's energy sum; the first task
+  cannot start before the first leg. Group names are unchanged, so cores and repair hints read as
+  before; `check_schedule` re-verifies the actual legs of every robot's sequence. A
+  disturbance-free replay of a verified plan fires no `task_overrun` event.
 * **Structure coverage** (`moonwright/pipeline/validate.py`). `scope:<structure>` when a landing pad,
   berm, road or foundation lacks a required phase for which the fleet has the robot type, when a
   structure has no task, or when a repair dropped every task of a structure (fresh plans and their
@@ -112,7 +113,8 @@ Every command answers `--help`; `--llm fixture|nebius|record` picks the model cl
   ids (extend_horizon on horizon / timing cores, raise_battery for `energy:<robot>` and the
   validator's `energy:<type>` / `energy_task:<task>`, add_robot for the blamed types or a type the
   fleet lacks) and verifies each with a real CP-SAT solve on a modified copy of the requirements
-  (at most 2 s per solve, one worker, 6 s per call, no solve started with less than 0.1 s left;
+  (at most 2 s per solve, deterministic (one worker until phase 3k, the interleaved portfolio
+  since), 6 s per call, no solve started with less than 0.1 s left;
   `Planner(suggest_budget_s=...)`, 0 disables). A `raise_battery` figure is the smallest battery
   on the 50 Wh grid that CP-SAT still schedules (binary search between the battery the robot has
   and what the lifted solve charged it; a search cut short reports "is enough", never "needs").
@@ -158,8 +160,9 @@ Every command answers `--help`; `--llm fixture|nebius|record` picks the model cl
   5,000 Wh; the excavator tasks need 9,930 Wh in total, about 30 Wh of it travel, and cannot be
   split across 2 excavators (10,000 Wh combined) without exceeding one budget.`, the recorded
   tight_battery verdict); a robot whose own tasks exceed its battery reads `PR1 would need
-  4,031 Wh, about 41 Wh of it travel, but has 4,000 Wh.`; the horizon hint says by how much each
-  bound overshoots the deadline. The prose and the numbers come from one table:
+  4,031 Wh, about 41 Wh of it travel, but has 4,000 Wh.` (since phase 3k the travel is a lower
+  bound and both read "need at least ..., N Wh of it travel", see below); the horizon hint
+  says by how much each bound overshoots the deadline. The prose and the numbers come from one table:
   `budget_rows(req, graph, failure, opts, locked)` returns the rows behind the `energy:<robot>`
   conflicts (`kind` `type` | `robot`, `subject`, `robots`, `budget_wh`, `demanded_wh`,
   `travel_wh`, exact to the milli-Wh), and the failed `schedule` step carries them as
@@ -256,11 +259,13 @@ cut at 16,384 tokens, and the validator's energy check ignored the transit CP-SA
   plan), `False` switches it off, `True` forces it; the planner passes `False` for a replan's
   remaining graph and its repairs. Graphs without quantities and structures without a positive
   volume are untouched.
-* **Validator transit** (`pipeline/validate.py: transit_allowances`). Both energy checks charge
-  every task the transit allowance CP-SAT reserves (the least over the robots of its type, so
-  the validator never demands more than the solver; the planner passes a replan's
+* **Validator transit** (`pipeline/validate.py: transit_allowances`; phase 3e as it was built.
+  Phase 3k replaced it with `travel_floor`, the travel no order avoids, see "Pipeline notes
+  (phase 3k)"). Both energy checks charged
+  every task the transit allowance CP-SAT then reserved (the least over the robots of its type,
+  so the validator never demanded more than the solver; the planner passes a replan's
   `robot_positions`), equal to the solver's `budget_rows` figure to the milli-Wh on the
-  tight_battery fixture, and name it: `printer tasks need 4,037 Wh, about 38 Wh of it travel;
+  tight_battery fixture, and named it: `printer tasks need 4,037 Wh, about 38 Wh of it travel;
   its 1 robot carries 4,000 Wh`, `T1 needs 4,006 Wh, about 11 Wh of it travel, but the largest
   printer battery is 4,000 Wh`. One verdict per cause: a type's overrun that its oversized
   tasks alone explain is reported as `energy_task:<task>` only, with the sentence `The fleet's 1
@@ -506,6 +511,109 @@ Ultra sizes a berm as its box, twice the triangular section the volume check mea
   only one the supply check did not already reject; propellant_pit_and_berm's 2 x 150 m3 (two
   plans, already rejected by supply) is no double count, its base width being no number the
   brief states, and depleted_excavators ultra #2 (159 %) keeps its advisory.
+
+## Pipeline notes (phase 3k)
+
+`scripts/llm_schedule_check.py` gave Nemotron 3 Ultra the requirements and the verified task
+graph of 21 run-3 plans and asked it to write the schedule itself (`out/llm_sched/ultra.json`).
+All 21 answers passed `check_schedule`, which times and charges the actual legs, and 9 were
+shorter than CP-SAT's "optimal" makespan: four_mast_pads 43 vs 60 h, shielding_mound 36 vs 45 h,
+three_pads_in_order 33 vs 38 h, habitat_berm 49 vs 55 h, depleted_excavators 32 vs 35 h,
+landing_pad 89 vs 93 h, small_fleet 121 vs 126 h, solar 74 vs 76 h, one_surveyor 45 vs 47 h.
+The solver had reserved, before every task, the longest leg its robot could ever drive to that
+zone, even between two tasks in one zone, and charged that allowance's energy for every task.
+
+* **Exact, sequence-dependent travel** (`pipeline/schedule.py`, "Travel"). Per robot, an
+  `AddCircuit` over its start (the depot, its `robot_positions` entry, or the zone of the locked
+  task it is on) and the tasks it may run: a task's self-loop is `NOT x[i,r]`, the start's
+  `idle[r]`; an arc k -> l times `s_l >= s_k + d_k + ceil(dist / speed)` (0 within one zone) on
+  `[arc, robot group literal]` and is charged its leg in the energy row (`geometry.leg_mwh`, 0.5
+  Wh per cell rounded up to a milli-Wh per leg, the same function `check_schedule` and
+  `sequence_travel` use); the hard first-leg bound stays; the way back is free. The circuit is
+  unconditional; under `robot:<r>` a NoOverlap over `[s_i, s_i + d_i]` stays for propagation
+  and one row (work plus the leg hours of the arcs end by the makespan) helps the bound; group
+  names are unchanged. A lock that starts at or before `start_offset_h` (a replan's running task)
+  is the task its robot is on: forced first arc, no leg. A later lock is a stop like any other
+  with a pinned start (the robot may work before it, its leg is timed and charged), and one its
+  robot cannot reach by that start is a `robot:<r>` verdict of the precheck. A robot whose
+  tasks all share one zone centre gets no circuit (no order to pick: the no-overlap is exact
+  and the energy row pays the first leg once, `busy[r]`). On the same 21 graphs the
+  solver now finishes at or below the model every time (four_mast_pads 41 h, shielding_mound 36
+  h, three_pads_in_order 31 h, landing_pad 89 h). An enumeration of every assignment and order
+  (`tests/test_schedule.py: brute_force_makespan`) agrees with CP-SAT on 4,000 random five-task
+  instances, half of them with hours elapsed, frame positions and a lock; the allowance missed
+  the optimum on 88 of the first 200. An independent brute force of the 3k review (every
+  assignment and start order under `check_schedule`'s rules) agrees on its 900 tiny instances,
+  later locks included.
+* **Twins and settling.** Every hard model starts interchangeable tasks (same type, zone,
+  duration, energy and edges: the prompt's equal splits) in graph order, which proves the
+  canonical "fine" graph of four_mast_pads optimal at 25 h in under 2 s (6 to 8 s without it;
+  the allowance model stopped at 46 h after 10 s). Exact travel leaves many optimal schedules
+  (the landing-pad fixture had 3 different 80 h ones in 30 solves, and its EX2-at-30 h replan 9
+  or 11 tasks to reschedule depending on which), so an optimal makespan is then settled: one
+  more solve holds it and minimises the sum of the starts, on CP-SAT's portfolio interleaved in
+  a fixed order (`interleave_search`: the same answer whatever the worker count) within 0.2
+  deterministic seconds. Whenever it finds a schedule in that budget the same graph gets the same
+  schedule: 86 of the 87 feasible graphs measured below (all but four_mast_pads "fine", which
+  keeps the race's schedule), the fixtures (1 schedule in 30 solves each) and the run-3
+  four_mast_pads graph (1 in 12, where one settling worker found nothing and 12 solves gave 7).
+  The sum is the least the budget reached, not always the least there is. A solve on one worker,
+  or with `SolveOptions.deterministic`, is not settled: it breaks ties the same way already.
+* **Hints state lower bounds** (`_travel_floor`, `geometry.cheapest_legs` / `spanning_cost` /
+  `route_cost`). An energy or robot-time sentence counts only the travel no order and split can
+  avoid: for one robot its cheapest route through the zones of its tasks (Held-Karp, exact up to
+  10 zones), for several the cheapest tree joining those zones to their starts, priced on the
+  cheapest chains of legs (a per-leg rounding can make a detour a milli-Wh cheaper than the
+  straight leg). So the demand reads "at least": `PR1 would need at least 4,029 Wh, 39 Wh of it
+  travel, but has 4,000 Wh.`, `... the excavator tasks need at least 9,915 Wh in total, 15 Wh of
+  it travel, and cannot be split ...` (the tight-battery core, 9,930 Wh and "about 30 Wh" under
+  the allowance), `... already take 8 h back to back plus at least 7 h of transit.`;
+  `budget_rows` hands the same figures over. A robot alone in its type whose tasks fit its
+  battery in their cheapest order gets the order form instead, never a split across one robot:
+  `R1 has 327 Wh, which cannot cover its 300 Wh of work and the legs of the order the
+  precedence edges force; the cheapest order alone drives 19 Wh.` (a `budget_rows` row of kind
+  `order`), and a `robot:<r>` group that only ties that order to time (no deadline in its core)
+  is explained by the same sentence. The validator charges the same floors (`travel_floor`:
+  per task the least leg into its zone, per type the tree, or the lone robot's route), so it
+  still never rejects a graph CP-SAT would accept, and matches `budget_rows` to the milli-Wh on a
+  fresh plan. `relax.py` reads a robot's need from the legs of its actual sequence
+  (`sequence_travel`): two tasks in one zone 10 cells out need one 5 Wh leg, so a raised battery
+  of 6,200 Wh is proven where the allowance asked for 6,250 Wh.
+* **After the 3k review.** (1) Three zones around a depot, one 345 Wh excavator, three 100 Wh
+  tasks: the tree floor (37 Wh) let the validator pass the graph and the hint blame "a split
+  across 1 excavator"; the route floor (51 Wh) rejects it with `excavator tasks need at least
+  351 Wh`. (2) Likely cores (`_likely_cores`): a robot type's batteries together are a hard
+  trial before the single-worker assumption solve, which timed out on the circuits of the run-3
+  four_mast_pads graph twice over (48 tasks, excavators 650 Wh short): 15.4 s and a 32-group
+  core with precedence edges in it, now 0.9 s and `energy:EX1, energy:EX2`; every later core
+  search opens with one hard trial on the groups left. (3) Monte Carlo replans and relaxation
+  solves run deterministically on every worker (`SolveOptions.deterministic`) instead of on one
+  worker, and are not settled: 200 Monte Carlo runs of four_mast_pads "fine" take 26 s (39.5 s
+  on one worker with settling, one of its replans cut at the 10 s limit, 49 s in the review;
+  2 s at base, under the allowance), and the extend_horizon advice on the run-3 four_mast_pads
+  graph at 40 h reads "finishing needs 41 h ... (CP-SAT optimal)" again. The Monte Carlo panel
+  shows the time a run has taken.
+  (4) A replan at a fractional hour lets the robots that are not on a locked task set off at the
+  fraction (`SolveOptions.robot_ready_h`, `geometry.arrival_hour`), so their first leg is timed
+  from when they are free: 20 of 75 replanned runs finish after their replanned makespan (22 of
+  78 before, 12 of 86 at base); the rest trace to locked tasks, which the simulator finishes up
+  to that fraction of an hour after their planned end, as at base, where the allowance's slack
+  absorbed it. None finishes past its deadline. (5) Locks, above.
+* **Measured** (base 74b9f42 vs phase 3k, `SolveOptions(time_limit_s=10)`, 8 workers): of the 63
+  canonical graphs (lazy, split, fine, serial over the 22 eval briefs) feasible in both, 31 got
+  shorter (four_mast_pads lazy 34 -> 20 h, three_pads_in_order split 40 -> 32 h, two_pads 61 -> 57
+  h) and 32 kept their makespan; no infeasibility verdict, core or validator verdict changed;
+  the slowest feasible solve is four_mast_pads fine at 1.5 s (it timed out at 10 s before) and
+  the 88 solves took 3.6 s together (10.6 s before). The 21 run-3 graphs: 10 shorter, 11 equal,
+  none above the model's, the slowest 0.8 s. The fixtures: landing_pad 80 h, access_road 64 ->
+  63 h, tight_battery 68 -> 66 h (their recorded explanations now say so, edited by hand: see
+  their `_note`), every replay on time with no event. The price is paid on tight instances:
+  explanations one hour below each graph's optimum take 0.32 s on average (0.16 s at base, one
+  hour below its own), the travel-heavy four_mast_pads graphs the slowest (fine: 15.9 s, the
+  explanation budget, with a 55-group core; a deletion filter without the budget, 4 s per
+  trial, still keeps 53 of the 58 groups after 107 s; run-3: 5.1 s, 24 groups, of which 3.4 s
+  is the assumption solve); 40 Monte Carlo runs of the run-3 four_mast_pads plan take 3.9 s
+  (0.8 s at base, on its 60 h plan), and the landing pad's 200 runs about 2 s, as before.
 
 ## Evaluation flags
 

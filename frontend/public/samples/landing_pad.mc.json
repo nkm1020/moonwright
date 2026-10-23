@@ -1,35 +1,33 @@
 {
  "runs": 200,
- "completed": 118,
- "completion_rate": 0.59,
- "within_horizon_rate": 0.59,
+ "completed": 120,
+ "completion_rate": 0.6,
+ "within_horizon_rate": 0.6,
  "within_horizon_ci": [
-  0.5208,
-  0.6558
+  0.5308,
+  0.6654
  ],
  "horizon_h": 336,
  "finish_h": {
-  "mean": 81.858,
+  "mean": 82.042,
   "p50": 81.0,
-  "p90": 85.075,
+  "p90": 85.025,
   "min": 77.0,
-  "max": 97.5
+  "max": 103.0
  },
- "replans_mean": 0.58,
- "failures_mean": 0.995,
+ "replans_mean": 0.6,
+ "failures_mean": 1.005,
  "outcomes": {
-  "completed": 118,
+  "completed": 120,
+  "lost_only:surveyor": 24,
   "lost_only:compactor": 23,
-  "lost_only:surveyor": 23,
-  "lost_only:printer": 16,
+  "lost_only:printer": 17,
   "replan_infeasible:energy": 6,
   "lost_only:printer,surveyor": 3,
   "lost_only:compactor,printer": 2,
   "lost_only:compactor,surveyor": 2,
-  "lost_only:excavator,printer": 2,
   "lost_only:hauler": 2,
-  "replan_infeasible:energy,energy_task": 2,
-  "replan_infeasible:energy_task": 1
+  "lost_only:excavator,printer": 1
  },
  "single_points_of_failure": [
   "compactor",
@@ -50,12 +48,12 @@
   {
    "start_h": 56.0,
    "end_h": 84.0,
-   "count": 94
+   "count": 95
   },
   {
    "start_h": 84.0,
    "end_h": 112.0,
-   "count": 24
+   "count": 25
   },
   {
    "start_h": 112.0,
@@ -121,7 +119,7 @@
    "outcome": "lost_only:hauler",
    "finished_at_h": null,
    "events": 2,
-   "replans": 1,
+   "replans": 2,
    "failures": [
     {
      "robot": "HL1",
@@ -208,7 +206,7 @@
    "outcome": "lost_only:surveyor",
    "finished_at_h": null,
    "events": 2,
-   "replans": 2,
+   "replans": 1,
    "failures": [
     {
      "robot": "HL2",
@@ -405,7 +403,7 @@
    "outcome": "lost_only:printer",
    "finished_at_h": null,
    "events": 2,
-   "replans": 1,
+   "replans": 2,
    "failures": [
     {
      "robot": "HL1",
@@ -422,9 +420,9 @@
    "completed": true,
    "within_horizon": true,
    "outcome": "completed",
-   "finished_at_h": 81.5,
+   "finished_at_h": 80.0,
    "events": 1,
-   "replans": 1,
+   "replans": 0,
    "failures": [
     {
      "robot": "HL2",
@@ -530,9 +528,9 @@
    "completed": true,
    "within_horizon": true,
    "outcome": "completed",
-   "finished_at_h": 85.25,
-   "events": 2,
-   "replans": 0,
+   "finished_at_h": 85.0,
+   "events": 1,
+   "replans": 1,
    "failures": [
     {
      "robot": "HL1",
@@ -647,9 +645,9 @@
    "completed": true,
    "within_horizon": true,
    "outcome": "completed",
-   "finished_at_h": 83.25,
+   "finished_at_h": 79.25,
    "events": 1,
-   "replans": 1,
+   "replans": 0,
    "failures": [
     {
      "robot": "HL2",
@@ -673,8 +671,8 @@
    "within_horizon": false,
    "outcome": "lost_only:surveyor",
    "finished_at_h": null,
-   "events": 3,
-   "replans": 1,
+   "events": 2,
+   "replans": 2,
    "failures": [
     {
      "robot": "HL1",
@@ -814,12 +812,16 @@
    "within_horizon": false,
    "outcome": "lost_only:printer,surveyor",
    "finished_at_h": null,
-   "events": 3,
+   "events": 4,
    "replans": 2,
    "failures": [
     {
      "robot": "EX1",
      "t_h": 34.61
+    },
+    {
+     "robot": "HL1",
+     "t_h": 58.55
     },
     {
      "robot": "PR1",
@@ -861,7 +863,7 @@
    "completed": true,
    "within_horizon": true,
    "outcome": "completed",
-   "finished_at_h": 88.0,
+   "finished_at_h": 94.0,
    "events": 1,
    "replans": 1,
    "failures": [
@@ -927,12 +929,12 @@
   },
   {
    "seed": 57,
-   "completed": false,
-   "within_horizon": false,
-   "outcome": "replan_infeasible:energy",
-   "finished_at_h": null,
+   "completed": true,
+   "within_horizon": true,
+   "outcome": "completed",
+   "finished_at_h": 88.0,
    "events": 2,
-   "replans": 1,
+   "replans": 2,
    "failures": [
     {
      "robot": "EX1",
@@ -1043,7 +1045,7 @@
    "completed": true,
    "within_horizon": true,
    "outcome": "completed",
-   "finished_at_h": 80.25,
+   "finished_at_h": 80.0,
    "events": 0,
    "replans": 0,
    "failures": []
@@ -1132,9 +1134,9 @@
    "completed": true,
    "within_horizon": true,
    "outcome": "completed",
-   "finished_at_h": 80.0,
+   "finished_at_h": 77.0,
    "events": 1,
-   "replans": 0,
+   "replans": 1,
    "failures": [
     {
      "robot": "HL1",
@@ -1193,7 +1195,7 @@
    "outcome": "completed",
    "finished_at_h": 80.0,
    "events": 1,
-   "replans": 0,
+   "replans": 1,
    "failures": [
     {
      "robot": "HL1",
@@ -1302,7 +1304,7 @@
    "outcome": "lost_only:compactor",
    "finished_at_h": null,
    "events": 2,
-   "replans": 1,
+   "replans": 2,
    "failures": [
     {
      "robot": "HL1",
@@ -1529,9 +1531,9 @@
    "completed": true,
    "within_horizon": true,
    "outcome": "completed",
-   "finished_at_h": 85.0,
+   "finished_at_h": 84.25,
    "events": 1,
-   "replans": 1,
+   "replans": 0,
    "failures": [
     {
      "robot": "HL2",
@@ -1631,7 +1633,7 @@
    "outcome": "lost_only:printer",
    "finished_at_h": null,
    "events": 2,
-   "replans": 1,
+   "replans": 2,
    "failures": [
     {
      "robot": "HL1",
@@ -1682,9 +1684,9 @@
    "completed": true,
    "within_horizon": true,
    "outcome": "completed",
-   "finished_at_h": 97.5,
+   "finished_at_h": 82.25,
    "events": 1,
-   "replans": 1,
+   "replans": 0,
    "failures": [
     {
      "robot": "HL2",
@@ -1814,9 +1816,9 @@
    "completed": true,
    "within_horizon": true,
    "outcome": "completed",
-   "finished_at_h": 82.25,
+   "finished_at_h": 96.0,
    "events": 1,
-   "replans": 0,
+   "replans": 1,
    "failures": [
     {
      "robot": "HL1",
@@ -1878,10 +1880,10 @@
    "seed": 123,
    "completed": false,
    "within_horizon": false,
-   "outcome": "lost_only:excavator,printer",
+   "outcome": "lost_only:printer",
    "finished_at_h": null,
    "events": 4,
-   "replans": 2,
+   "replans": 1,
    "failures": [
     {
      "robot": "EX1",
@@ -1942,7 +1944,7 @@
    "within_horizon": false,
    "outcome": "lost_only:compactor",
    "finished_at_h": null,
-   "events": 3,
+   "events": 4,
    "replans": 2,
    "failures": [
     {
@@ -2004,9 +2006,9 @@
    "completed": true,
    "within_horizon": true,
    "outcome": "completed",
-   "finished_at_h": 80.25,
+   "finished_at_h": 85.0,
    "events": 1,
-   "replans": 0,
+   "replans": 1,
    "failures": [
     {
      "robot": "HL1",
@@ -2181,9 +2183,9 @@
    "completed": true,
    "within_horizon": true,
    "outcome": "completed",
-   "finished_at_h": 80.0,
+   "finished_at_h": 78.0,
    "events": 1,
-   "replans": 0,
+   "replans": 1,
    "failures": [
     {
      "robot": "HL1",
@@ -2230,9 +2232,9 @@
    "completed": true,
    "within_horizon": true,
    "outcome": "completed",
-   "finished_at_h": 78.0,
+   "finished_at_h": 80.0,
    "events": 2,
-   "replans": 1,
+   "replans": 0,
    "failures": [
     {
      "robot": "EX1",
@@ -2279,9 +2281,9 @@
    "completed": true,
    "within_horizon": true,
    "outcome": "completed",
-   "finished_at_h": 77.0,
+   "finished_at_h": 80.0,
    "events": 3,
-   "replans": 1,
+   "replans": 0,
    "failures": [
     {
      "robot": "EX1",
@@ -2342,9 +2344,9 @@
    "completed": true,
    "within_horizon": true,
    "outcome": "completed",
-   "finished_at_h": 81.5,
+   "finished_at_h": 80.0,
    "events": 1,
-   "replans": 1,
+   "replans": 0,
    "failures": [
     {
      "robot": "EX2",
@@ -2394,7 +2396,7 @@
    "outcome": "lost_only:surveyor",
    "finished_at_h": null,
    "events": 2,
-   "replans": 1,
+   "replans": 2,
    "failures": [
     {
      "robot": "HL1",
@@ -2463,12 +2465,12 @@
   },
   {
    "seed": 162,
-   "completed": false,
-   "within_horizon": false,
-   "outcome": "replan_infeasible:energy",
-   "finished_at_h": null,
+   "completed": true,
+   "within_horizon": true,
+   "outcome": "completed",
+   "finished_at_h": 80.25,
    "events": 1,
-   "replans": 1,
+   "replans": 0,
    "failures": [
     {
      "robot": "EX1",
@@ -2509,10 +2511,10 @@
    "seed": 165,
    "completed": false,
    "within_horizon": false,
-   "outcome": "replan_infeasible:energy,energy_task",
+   "outcome": "replan_infeasible:energy",
    "finished_at_h": null,
    "events": 2,
-   "replans": 2,
+   "replans": 1,
    "failures": [
     {
      "robot": "EX1",
@@ -2634,9 +2636,9 @@
    "completed": true,
    "within_horizon": true,
    "outcome": "completed",
-   "finished_at_h": 82.25,
-   "events": 2,
-   "replans": 0,
+   "finished_at_h": 82.0,
+   "events": 1,
+   "replans": 1,
    "failures": [
     {
      "robot": "HL1",
@@ -2649,7 +2651,7 @@
    "completed": true,
    "within_horizon": true,
    "outcome": "completed",
-   "finished_at_h": 87.0,
+   "finished_at_h": 90.0,
    "events": 1,
    "replans": 1,
    "failures": [
@@ -2663,10 +2665,10 @@
    "seed": 176,
    "completed": false,
    "within_horizon": false,
-   "outcome": "replan_infeasible:energy_task",
+   "outcome": "replan_infeasible:energy",
    "finished_at_h": null,
-   "events": 2,
-   "replans": 2,
+   "events": 3,
+   "replans": 1,
    "failures": [
     {
      "robot": "EX1",
@@ -2710,7 +2712,7 @@
    "outcome": "lost_only:surveyor",
    "finished_at_h": null,
    "events": 2,
-   "replans": 2,
+   "replans": 1,
    "failures": [
     {
      "robot": "HL2",
@@ -2771,9 +2773,9 @@
    "completed": true,
    "within_horizon": true,
    "outcome": "completed",
-   "finished_at_h": 84.25,
+   "finished_at_h": 84.0,
    "events": 2,
-   "replans": 0,
+   "replans": 1,
    "failures": [
     {
      "robot": "EX1",
@@ -2864,14 +2866,18 @@
    "seed": 190,
    "completed": false,
    "within_horizon": false,
-   "outcome": "replan_infeasible:energy,energy_task",
+   "outcome": "lost_only:surveyor",
    "finished_at_h": null,
-   "events": 1,
+   "events": 3,
    "replans": 1,
    "failures": [
     {
      "robot": "EX1",
      "t_h": 38.76
+    },
+    {
+     "robot": "SV1",
+     "t_h": 83.93
     }
    ]
   },
@@ -2915,7 +2921,7 @@
    "completed": true,
    "within_horizon": true,
    "outcome": "completed",
-   "finished_at_h": 94.0,
+   "finished_at_h": 103.0,
    "events": 2,
    "replans": 1,
    "failures": [
@@ -2934,7 +2940,7 @@
    "completed": true,
    "within_horizon": true,
    "outcome": "completed",
-   "finished_at_h": 93.0,
+   "finished_at_h": 98.0,
    "events": 1,
    "replans": 1,
    "failures": [
@@ -2960,8 +2966,8 @@
    "within_horizon": false,
    "outcome": "lost_only:compactor",
    "finished_at_h": null,
-   "events": 4,
-   "replans": 1,
+   "events": 3,
+   "replans": 2,
    "failures": [
     {
      "robot": "EX2",
@@ -2984,7 +2990,7 @@
    "outcome": "lost_only:printer",
    "finished_at_h": null,
    "events": 3,
-   "replans": 1,
+   "replans": 2,
    "failures": [
     {
      "robot": "EX1",
@@ -3035,5 +3041,5 @@
    ]
   }
  ],
- "elapsed_s": 2.142
+ "elapsed_s": 2.132
 }
