@@ -367,7 +367,7 @@ def test_three_pads_in_order_fails_only_when_the_pads_are_chained(bb: ModuleType
 def test_relaxation_briefs_name_the_shortfall(bb: ModuleType) -> None:
     berm = outcome(bb, "small_fleet_long_berm", "lazy")
     assert berm["stage"] == "validate" and "energy:excavator" in berm["conflicts"]
-    assert "5760 Wh" in berm["hint"] and "5000 Wh" in berm["hint"]
+    assert "5,760 Wh" in berm["hint"] and "5,000 Wh" in berm["hint"]
     pad = outcome(bb, "front_loaded_excavation", "split")
     assert pad["stage"] == "schedule" and set(pad["conflicts"]) == {"horizon", "zone:Z1"}
     assert "60 h horizon" in pad["hint"] and "Zone Z1 admits one robot at a time" in pad["hint"]

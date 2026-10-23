@@ -151,9 +151,9 @@ def test_battery_only_infeasibility_is_priced_at_the_solvers_own_use():
     raise_, add = found
     assert raise_.battery_wh == 6200.0   # exactly the 6200 Wh the schedule charges EX1
     assert raise_.robot_type == "excavator" and raise_.makespan_h == 7
-    assert raise_.detail == "EX1 needs 6200 Wh (has 5000 Wh): feasible at 7 h"
+    assert raise_.detail == "EX1 needs 6,200 Wh (has 5,000 Wh): feasible at 7 h"
     assert add.robot_type == "excavator" and add.battery_wh == 5000.0 and add.makespan_h == 4
-    assert add.detail == "one more excavator (EX2, 5000 Wh like EX1): feasible at 4 h"
+    assert add.detail == "one more excavator (EX2, 5,000 Wh like EX1): feasible at 4 h"
     for s in found:
         assert_proven(req, graph, s)
     # 50 Wh less than the figure is still infeasible: the amount is the solver's own use
@@ -172,7 +172,7 @@ def test_raise_battery_counts_the_transit_allowance_the_model_reserves():
                              task("T2", "excavator", 3, 3195, "Z1")])
     failure = solve_schedule(req, graph, SolveOptions())
     assert isinstance(failure, Failure) and failure.conflicts == ["energy:EX1"]
-    assert "6205 Wh" in failure.hint and "travel" in failure.hint
+    assert "6,205 Wh" in failure.hint and "travel" in failure.hint
     found = suggest_relaxations(req, graph, failure)
     raise_ = next(s for s in found if s.kind == "raise_battery")
     assert raise_.battery_wh == 6250.0
@@ -205,7 +205,7 @@ def test_capability_missing_adds_a_robot_of_the_new_type_sized_to_its_work():
     assert [(s.kind, s.robot_type, s.robot_id) for s in found] == [("add_robot", "printer", "PR1")]
     (s,) = found
     assert s.battery_wh == 2700.0 and s.makespan_h == 14 and s.verified
-    assert s.detail == "a printer (PR1, 2700 Wh; the fleet has none): feasible at 14 h"
+    assert s.detail == "a printer (PR1, 2,700 Wh; the fleet has none): feasible at 14 h"
     assert_proven(req, graph, s)
 
 
@@ -255,8 +255,8 @@ def test_every_candidate_failing_yields_one_reduce_scope_naming_the_work():
     assert not s.verified and s.makespan_h is None
     assert s.detail.startswith("None of the changes tried (")
     assert "a bigger battery on EX1" in s.detail and "one more hauler" in s.detail
-    assert "T1 for S1 (126 m3, 18 h, 2016 Wh)" in s.detail
-    assert "T2 for S2 (188 m3, 16 h, 1316 Wh)" in s.detail
+    assert "T1 for S1 (126 m3, 18 h, 2,016 Wh)" in s.detail
+    assert "T2 for S2 (188 m3, 16 h, 1,316 Wh)" in s.detail
     assert s.detail.endswith("so cut or defer scope there.")
 
 
@@ -371,7 +371,7 @@ def test_inputs_are_never_mutated():
 # ----------------------------------------------------------------------------- fixture graph
 def test_tight_battery_first_graph_gets_three_proven_changes():
     """The shipped infeasible graph (energy core on EX1 and EX2): either battery raised to
-    5950 Wh, or a third excavator, each proven feasible at 62 h of the 168 h window."""
+    5,950 Wh, or a third excavator, each proven feasible at 62 h of the 168 h window."""
     req = Requirements.model_validate_json((FIXTURES / "tight_battery" / "structure.json").read_text())
     graph = TaskGraph.model_validate_json((FIXTURES / "tight_battery" / "taskgraph_1.json").read_text())
     failure = solve_schedule(req, graph, SolveOptions())
@@ -382,8 +382,8 @@ def test_tight_battery_first_graph_gets_three_proven_changes():
         ("raise_battery", "EX2", 5950.0, 62),
         ("add_robot", "EX3", 5000.0, 62),
     ]
-    assert found[0].detail == "EX1 needs 5950 Wh (has 5000 Wh): feasible at 62 h"
-    assert found[2].detail == "one more excavator (EX3, 5000 Wh like EX1): feasible at 62 h"
+    assert found[0].detail == "EX1 needs 5,950 Wh (has 5,000 Wh): feasible at 62 h"
+    assert found[2].detail == "one more excavator (EX3, 5,000 Wh like EX1): feasible at 62 h"
     for s in found:
         assert_proven(req, graph, s)
     assert suggest_relaxations(req, graph, failure, SolveOptions()) == found   # deterministic
@@ -412,18 +412,18 @@ def test_new_robot_ids_follow_the_fleets_naming():
 def test_format_suggestions_lists_one_bullet_per_change():
     req, _ = battery_case()
     suggestions = [
-        Suggestion(kind="raise_battery", detail="EX1 needs 6200 Wh (has 5000 Wh): feasible at 7 h",
+        Suggestion(kind="raise_battery", detail="EX1 needs 6,200 Wh (has 5,000 Wh): feasible at 7 h",
                    robot_id="EX1", robot_type="excavator", battery_wh=6200, makespan_h=7,
                    verified=True),
-        Suggestion(kind="reduce_scope", detail="Nothing works; cut T1 (4 h, 3000 Wh)."),
+        Suggestion(kind="reduce_scope", detail="Nothing works; cut T1 (4 h, 3,000 Wh)."),
     ]
     failed = PlanResult(requirements=req, success=False,
                         failure=Failure(kind="infeasible", conflicts=["energy:EX1"]),
                         suggestions=suggestions)
     assert format_suggestions(failed) == [
         "what would make it feasible:",
-        "  - raise battery: EX1 needs 6200 Wh (has 5000 Wh): feasible at 7 h [CP-SAT verified]",
-        "  - reduce scope: Nothing works; cut T1 (4 h, 3000 Wh). [not solver-verified]",
+        "  - raise battery: EX1 needs 6,200 Wh (has 5,000 Wh): feasible at 7 h [CP-SAT verified]",
+        "  - reduce scope: Nothing works; cut T1 (4 h, 3,000 Wh). [not solver-verified]",
     ]
     assert format_suggestions(PlanResult(requirements=req, success=False)) == []
     assert format_suggestions(PlanResult(requirements=req, success=True,
@@ -431,7 +431,7 @@ def test_format_suggestions_lists_one_bullet_per_change():
     # the JSON shape the UI reads
     data = json.loads(failed.model_dump_json())
     assert data["suggestions"][0] == {
-        "kind": "raise_battery", "detail": "EX1 needs 6200 Wh (has 5000 Wh): feasible at 7 h",
+        "kind": "raise_battery", "detail": "EX1 needs 6,200 Wh (has 5,000 Wh): feasible at 7 h",
         "makespan_h": 7, "robot_type": "excavator", "robot_id": "EX1", "battery_wh": 6200.0,
         "horizon_h": None, "verified": True,
     }
@@ -486,7 +486,7 @@ def test_raise_battery_reports_the_smallest_battery_that_works():
         ("raise_battery", "EX1", 5200.0, 6), ("raise_battery", "EX2", 5200.0, 6),
         ("add_robot", "EX3", 5000.0, 6)]
     for s in found[:2]:
-        assert s.detail == f"{s.robot_id} needs 5200 Wh (has 5000 Wh): feasible at 6 h"
+        assert s.detail == f"{s.robot_id} needs 5,200 Wh (has 5,000 Wh): feasible at 6 h"
         assert_proven(req, graph, s)
         shy = applied(req, s.model_copy(update={"battery_wh": 5150.0}))
         assert isinstance(solve_schedule(shy, graph, SolveOptions()), Failure)
@@ -507,7 +507,7 @@ def test_a_search_cut_short_reports_enough_never_a_need(monkeypatch):
     found = suggest_relaxations(req, graph, verdict(req, graph))
     assert [(s.kind, s.battery_wh, s.makespan_h, s.verified) for s in found] == [
         ("raise_battery", 6200.0, 7, True)]
-    assert found[0].detail == ("a battery of 6200 Wh on EX1 is enough (has 5000 Wh; a smaller one "
+    assert found[0].detail == ("a battery of 6,200 Wh on EX1 is enough (has 5,000 Wh; a smaller one "
                                "may be, the search ran out of time): feasible at 7 h")
 
 
@@ -517,7 +517,7 @@ def test_rebase_suggestion_moves_a_replans_advice_to_absolute_hours():
                      detail="one more excavator (EX3, 4995 Wh like EX1): feasible at 75 h")
     moved = rebase_suggestion(add, shift_h=10, deadline_h=336, spare_batteries={"excavator": 5000.0})
     assert (moved.makespan_h, moved.battery_wh, moved.horizon_h) == (85, 5000.0, None)
-    assert moved.detail == "one more excavator (EX3, 5000 Wh, a full battery): feasible at 85 h"
+    assert moved.detail == "one more excavator (EX3, 5,000 Wh, a full battery): feasible at 85 h"
     later = Suggestion(kind="extend_horizon", makespan_h=64, horizon_h=64, verified=True,
                        detail="finishing needs 64 h, 2 h past the 62 h deadline (CP-SAT optimal)")
     moved = rebase_suggestion(later, shift_h=22, deadline_h=84)
@@ -528,7 +528,7 @@ def test_rebase_suggestion_moves_a_replans_advice_to_absolute_hours():
                        detail="a printer (PR2, 2700 Wh; the fleet has none): feasible at 14 h")
     moved = rebase_suggestion(sized, shift_h=3, deadline_h=100, spare_batteries={"printer": 4000.0})
     assert moved.battery_wh == 4000.0
-    assert moved.detail == ("a printer (PR2, 4000 Wh, a full battery; the fleet has none): "
+    assert moved.detail == ("a printer (PR2, 4,000 Wh, a full battery; the fleet has none): "
                             "feasible at 17 h")
     # a "full" battery smaller than the proven one never lowers a figure; nothing to move stays
     assert rebase_suggestion(add, shift_h=0, deadline_h=336, spare_batteries={"excavator": 4000.0}) == add

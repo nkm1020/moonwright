@@ -78,7 +78,7 @@ Time convention (one place: :func:`replan_offset_h` and :func:`remaining_horizon
   is never earlier than the simulator can achieve), and a spare robot is stated with the
   full battery of its type in the original fleet rather than a survivor's remaining charge
   (a bigger battery admits every schedule the smaller one did, so the claim stays proven).
-  "one more excavator (EX3, 5000 Wh, a full battery): feasible at 85 h" next to "makespan
+  "one more excavator (EX3, 5,000 Wh, a full battery): feasible at 85 h" next to "makespan
   80 h" then reads as what it is: 5 h later than the original plan.
   A task "in progress" is one with ``frame.progress > 0`` whose robot (``current_task``) is not
   failed; its remaining energy is ``original energy_wh * (1 - progress)``.
@@ -341,11 +341,12 @@ def _scope_failure(graph2: TaskGraph, locked: list[ScheduleEntry], result: PlanR
         conflicts += [f"missing:{t}" for t in unscheduled]
         details += [f"{t} was remaining but is not in the replanned schedule" for t in unscheduled]
     if changed:
-        reasons.append(f"redefined the remaining task(s) {', '.join(changed)}")
+        reasons.append(f"redefined the remaining {_task_list(changed)}")
     if relocked:
-        reasons.append(f"redefined the running task(s) {', '.join(relocked)}")
+        reasons.append(f"redefined the running {_task_list(relocked)}")
     if moved:
-        reasons.append(f"moved the running task(s) {', '.join(moved)} off their robot or start")
+        whose = "its robot or start" if len(moved) == 1 else "their robots or starts"
+        reasons.append(f"moved the running {_task_list(moved)} off {whose}")
         details += [f"{t} must continue on its robot from time 0" for t in moved]
     return Failure(
         kind="validation",
@@ -353,6 +354,11 @@ def _scope_failure(graph2: TaskGraph, locked: list[ScheduleEntry], result: PlanR
         hint="Replan refused: it " + " and ".join(reasons) + "; the previous plan stays in force.",
         details=details,
     )
+
+
+def _task_list(ids: list[str]) -> str:
+    """'task T2', 'tasks T2, T3' (a real plural, never "task(s)")."""
+    return f"task {ids[0]}" if len(ids) == 1 else f"tasks {', '.join(ids)}"
 
 
 def _shift_step(step: LoopStep, offset_h: int, horizon_h: int,
@@ -414,7 +420,8 @@ def _first_verdict(result: PlanResult) -> Failure | None:
 def _outcome_step(result: PlanResult, before: Schedule, *, escalated: bool, offset_h: int,
                   remaining: int) -> LoopStep:
     """The closing ``replan`` step of the trace: how the remaining work was rescheduled (module
-    docstring, "Solver first"), with makespans in absolute simulator hours."""
+    docstring, "Solver first"), with makespans in absolute simulator hours. The message is
+    human text, so it carries no time-base flag; ``payload["time_base"]`` says "absolute"."""
     verdict = _first_verdict(result)
     core = ", ".join(verdict.conflicts) if verdict and verdict.conflicts else (
         verdict.kind if verdict else "infeasible")
@@ -433,9 +440,10 @@ def _outcome_step(result: PlanResult, before: Schedule, *, escalated: bool, offs
     else:
         head = f"infeasible ({core}), Nemotron not asked (no repair budget)"
     if schedule is not None:
-        tail = f"makespan {before.makespan_h} h -> {schedule.makespan_h} h (absolute)"
+        tail = f"makespan {before.makespan_h} h -> {schedule.makespan_h} h"
         if escalated:
-            tail += f", verified after {result.repairs} repair(s)"
+            repairs = "1 repair" if result.repairs == 1 else f"{result.repairs} repairs"
+            tail += f", verified after {repairs}"
         failure = None
     else:
         failure = result.failure

@@ -460,7 +460,7 @@
   "makespan_h": 80,
   "status": "optimal",
   "objective_bound_h": 80,
-  "solve_time_s": 0.033066000000000005
+  "solve_time_s": 0.007862000000000001
  },
  "explanation": "Moonwright builds the 20 m landing pad and the 60 m blast berm at LS-1 in fourteen tasks with seven robots. SV1 stakes the site first, then the two excavators split the pad strip, the bowl excavation, the berm key trench and the hauler approach lane between them. The hauler fleet moves strip spoil to the stockpile and bowl spoil onto the berm line and stages feedstock for the printer, while CP1 compacts the pad subgrade and later the berm. PR1 sinters the pad surface and then the berm crest, and SV1 inspects both structures. The verified schedule finishes in 80 hours including transit between zones, just over three days of the 14-day deadline, so time is not the binding constraint. Battery is the tighter constraint: PR1 spends about 3,400 of its 4,000 Wh on the two sintering tasks, and the printer is also the pinch point in time, since the berm crest waits for the pad surface. The CP-SAT solver proved this makespan optimal and verified every precedence edge, one task per robot at a time, one robot per zone and every battery budget.",
  "steps": [
@@ -469,12 +469,12 @@
    "attempt": 1,
    "ok": true,
    "failure": null,
-   "duration_s": 0.0031422500032931566,
+   "duration_s": 0.002478917012922466,
    "usage": {
     "model": "fixture:structure.json",
     "input_tokens": 0,
     "output_tokens": 0,
-    "latency_s": 0.0012920830631628633
+    "latency_s": 0.000434999936260283
    },
    "message": "2 structures, 7 robots, horizon 336h",
    "payload": {
@@ -495,12 +495,12 @@
    "attempt": 1,
    "ok": true,
    "failure": null,
-   "duration_s": 0.0024433330399915576,
+   "duration_s": 0.001427666051313281,
    "usage": {
     "model": "fixture:taskgraph_1.json",
     "input_tokens": 0,
     "output_tokens": 0,
-    "latency_s": 0.0002745409728959203
+    "latency_s": 0.0003225000109523535
    },
    "message": "14 tasks",
    "payload": {
@@ -516,7 +516,7 @@
    "attempt": 1,
    "ok": true,
    "failure": null,
-   "duration_s": 0.00029383297078311443,
+   "duration_s": 0.0003095830325037241,
    "usage": null,
    "message": "14 tasks valid",
    "payload": {
@@ -530,7 +530,7 @@
    "attempt": 1,
    "ok": true,
    "failure": null,
-   "duration_s": 0.03973883297294378,
+   "duration_s": 0.012338583008386195,
    "usage": null,
    "message": "makespan 80h (optimal)",
    "payload": {
@@ -604,7 +604,7 @@
      "horizon_h": 336,
      "status": "optimal",
      "objective_bound_h": 80,
-     "solve_time_s": 0.033,
+     "solve_time_s": 0.008,
      "travel_allowance": true,
      "recheck": "independent check_schedule passed"
     }
@@ -615,12 +615,12 @@
    "attempt": 1,
    "ok": true,
    "failure": null,
-   "duration_s": 0.00042995798867195845,
+   "duration_s": 0.0008651249809190631,
    "usage": {
     "model": "fixture:explain.json",
     "input_tokens": 0,
     "output_tokens": 0,
-    "latency_s": 0.0003475829726085067
+    "latency_s": 0.0005648749647662044
    },
    "message": null,
    "payload": null

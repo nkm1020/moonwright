@@ -411,21 +411,21 @@
   "makespan_h": 64,
   "status": "optimal",
   "objective_bound_h": 64,
-  "solve_time_s": 0.005037000000000001
+  "solve_time_s": 0.004592000000000001
  },
- "explanation": "The plan grades and compacts the 120 m access road from the landing pad to the habitat site, excavates the 8 m by 8 m foundation pit and shapes a small protective berm from the spoil, using five robots in twelve tasks. SV1 stakes the centreline and the foundation corners, then EX1, the only excavator, works west in sequence: road segment A, road segment B, then the foundation pit. HL1 clears grading spoil to the shoulders and later carries foundation spoil to the berm line. CP1 and CP2 compact the two road segments in parallel as soon as each is graded, then finish the foundation base and the berm. SV1 inspects the road once both segments are compacted and finishes with an as-built survey of the foundation and berm. The verified schedule completes in 64 hours of the 240-hour window, transit between zones included. The single excavator is the tightest resource: its three digging tasks form a 32-hour chain (35 hours with the moves between zones) that everything downstream waits on, and it uses about 3900 of its 5000 Wh. The solver proved the makespan optimal and verified precedence, per-robot sequencing, one robot per zone and all battery budgets.",
+ "explanation": "The plan grades and compacts the 120 m access road from the landing pad to the habitat site, excavates the 8 m by 8 m foundation pit and shapes a small protective berm from the spoil, using five robots in twelve tasks. SV1 stakes the centreline and the foundation corners, then EX1, the only excavator, works west in sequence: road segment A, road segment B, then the foundation pit. HL1 clears grading spoil to the shoulders and later carries foundation spoil to the berm line. CP1 and CP2 compact the two road segments in parallel as soon as each is graded, then finish the foundation base and the berm. SV1 inspects the road once both segments are compacted and finishes with an as-built survey of the foundation and berm. The verified schedule completes in 64 hours of the 240-hour window, transit between zones included. The single excavator is the tightest resource: its three digging tasks form a 32-hour chain (35 hours with the moves between zones) that everything downstream waits on, and it uses about 3,900 of its 5,000 Wh. The solver proved the makespan optimal and verified precedence, per-robot sequencing, one robot per zone and all battery budgets.",
  "steps": [
   {
    "stage": "structure",
    "attempt": 1,
    "ok": true,
    "failure": null,
-   "duration_s": 0.0019689169712364674,
+   "duration_s": 0.002261374960653484,
    "usage": {
     "model": "fixture:structure.json",
     "input_tokens": 0,
     "output_tokens": 0,
-    "latency_s": 0.00038166705053299665
+    "latency_s": 0.00041025003883987665
    },
    "message": "3 structures, 5 robots, horizon 240h",
    "payload": {
@@ -446,12 +446,12 @@
    "attempt": 1,
    "ok": true,
    "failure": null,
-   "duration_s": 0.0015434159431606531,
+   "duration_s": 0.0014214159455150366,
    "usage": {
     "model": "fixture:taskgraph_1.json",
     "input_tokens": 0,
     "output_tokens": 0,
-    "latency_s": 0.00026466697454452515
+    "latency_s": 0.0003560419427230954
    },
    "message": "12 tasks",
    "payload": {
@@ -467,7 +467,7 @@
    "attempt": 1,
    "ok": true,
    "failure": null,
-   "duration_s": 0.00029754103161394596,
+   "duration_s": 0.00025937496684491634,
    "usage": null,
    "message": "12 tasks valid",
    "payload": {
@@ -481,7 +481,7 @@
    "attempt": 1,
    "ok": true,
    "failure": null,
-   "duration_s": 0.006891665980219841,
+   "duration_s": 0.006387375062331557,
    "usage": null,
    "message": "makespan 64h (optimal)",
    "payload": {
@@ -550,12 +550,12 @@
    "attempt": 1,
    "ok": true,
    "failure": null,
-   "duration_s": 0.000399957993067801,
+   "duration_s": 0.00040254206396639347,
    "usage": {
     "model": "fixture:explain.json",
     "input_tokens": 0,
     "output_tokens": 0,
-    "latency_s": 0.00032716698478907347
+    "latency_s": 0.0003037919523194432
    },
    "message": null,
    "payload": null

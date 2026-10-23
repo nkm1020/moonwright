@@ -34,7 +34,7 @@ from moonwright.pipeline.loop import (
     verification_receipt,
 )
 from moonwright.pipeline.rates import UNGROUNDED_ADVISORY
-from moonwright.pipeline.schedule import SolveOptions, sequence_travel
+from moonwright.pipeline.schedule import SolveOptions, budget_rows, sequence_travel
 from moonwright.schemas import (
     LoopStep,
     PlanResult,
@@ -242,6 +242,35 @@ def test_verdict_feedback_mode_blanks_the_core_for_the_model_only():
     assert verdict.failure is not None and set(verdict.failure.conflicts) == ENERGY_CORE
 
 
+def test_a_failed_schedule_step_hands_the_ui_the_budget_rows_behind_its_hint():
+    """The figures the energy hint quotes ride on the failed ``schedule`` step's payload as
+    :func:`budget_rows` (``budget``): on every energy verdict, whether or not a repair follows,
+    next to the advice when the step is final (the suggestions tests). No other step carries
+    them, and they are a UI channel: the repair prompt gets the Failure only, and in
+    ``verdict`` mode the model learns the kind while the trace still shows the rows."""
+    client = Scripted({("taskgraph", 1): INFEASIBLE, ("repair", 2): FEASIBLE})
+    result = planner(client).plan_from_requirements(REQ, key="k")
+    assert result.success
+    verdict = result.steps[2]
+    assert verdict.stage == "schedule" and not verdict.ok and verdict.failure is not None
+    assert verdict.payload == {"budget": budget_rows(REQ, PRIOR_INFEASIBLE, verdict.failure)}
+    [row] = verdict.payload["budget"]
+    assert row == {"kind": "type", "subject": "excavator", "robots": ["EX1", "EX2"],
+                   "budget_wh": 10000.0, "demanded_wh": 9929.649, "travel_wh": 29.649}
+    for key in ("budget_wh", "demanded_wh", "travel_wh"):   # the sentence quotes them, rounded
+        assert f"{round(row[key]):,} Wh" in verdict.failure.hint
+    assert all("budget" not in (s.payload or {}) for s in result.steps if s is not verdict)
+    assert "demanded_wh" not in client.prompts[1]
+    assert PlanResult.model_validate_json(result.model_dump_json()) == result
+
+    client = Scripted({("taskgraph", 1): INFEASIBLE, ("repair", 2): FEASIBLE})
+    result = planner(client, feedback_mode="verdict").plan_from_requirements(REQ, key="k")
+    assert failure_block(client.prompts[1]) == {"kind": "infeasible", "conflicts": [],
+                                                "hint": "", "details": []}
+    assert "demanded_wh" not in client.prompts[1]
+    assert set(result.steps[2].payload or {}) == {"budget"}
+
+
 # --------------------------------------------------------------------------- required tasks
 REMAINING = TaskGraph.model_validate(FEASIBLE)   # stands in for a replan's remaining graph
 
@@ -415,14 +444,22 @@ def test_start_with_prior_escalates_only_on_a_verdict_and_lets_the_repair_rescop
     assert "PREVIOUS TASK GRAPH" in prompt and '"energy:EX1"' in prompt and "EX3 failed" in prompt
     assert "REMAINING TASK GRAPH" in prompt
     # the repair re-scoped (and renumbered) the work, which is what it was asked for: it is
-    # accepted, and the repair step's diff says exactly what changed
+    # accepted, and the repair step's diff says exactly what changed: the one-pass bowl (T2)
+    # became two halves, the key trench (T3, now T4) was cut down, every later id shifted by
+    # one, and no compactor or hauler moved
     diff = result.steps[2].payload["diff"]
-    assert diff["added"] == ["T11"] and diff["removed"] == []
+    assert diff["removed"] == ["T2"] and diff["added"] == ["T2", "T3"]
+    assert diff["renumbered"] == [{"from": f"T{i}", "to": f"T{i + 1}"} for i in range(3, 11)]
     assert diff["scope_drift_pct"] == -10.8
     assert diff["per_type_energy_before"]["excavator"] == 9900.0
     assert diff["per_type_energy_after"]["excavator"] == 8200.0
-    assert {"task": "T2", "field": "energy_wh", "before": 4000.0, "after": 2100.0} in diff["changed"]
-    assert {"task": "T2", "field": "duration_h", "before": 24, "after": 14} in diff["changed"]
+    assert diff["changed"] == [
+        {"task": "T4", "from": "T3", "field": "name",
+         "before": "Cut berm key trench and borrow pit",
+         "after": "Cut berm key trench (shallow cut, berm fill from pad spoil)"},
+        {"task": "T4", "from": "T3", "field": "duration_h", "before": 24, "after": 14},
+        {"task": "T4", "from": "T3", "field": "energy_wh", "before": 4000.0, "after": 2100.0},
+    ]
     assert diff["total_energy_wh_before"] == 15700.0 and diff["total_energy_wh_after"] == 14000.0
     assert result.task_graph == TaskGraph.model_validate(FEASIBLE)
 
@@ -439,7 +476,7 @@ def test_a_repair_may_not_redefine_a_locked_task():
     assert result.failure is not None and result.failure.kind == "validation"
     assert result.failure.conflicts == ["locked:T2"]
     assert result.failure.details == [
-        "T2 is underway on EX1 and changed: duration_h 14 (needs 24); energy_wh 2100 (needs 4000)"]
+        "T2 is underway on EX1 and changed: duration_h 14 (needs 24); energy_wh 2,100 (needs 4,000)"]
     assert "running task(s) T2" in result.failure.hint
 
     # the guard on its own: intact locks pass, a lock on a redefined task does not
@@ -448,6 +485,57 @@ def test_a_repair_may_not_redefine_a_locked_task():
     assert check_locked_tasks(REMAINING, None, locked) is None
     guard = check_locked_tasks(REMAINING, PRIOR_INFEASIBLE, locked)
     assert guard is not None and guard.conflicts == ["locked:T2"]
+
+
+def test_a_locked_task_is_judged_by_its_id_however_the_diff_pairs_it():
+    """The scope guards read ids, the diff pairs tasks on a stable identity: a running task
+    the repair renamed and cut is ``locked:T2`` whether the diff pairs the two definitions by
+    their slot (same id, new name, same place) or by the id the model kept (same id, new
+    name, new zone); either way the rename, the cut and the move are ``changed`` rows."""
+    locked = [ScheduleEntry(task="T2", robot="EX1", start_h=0, end_h=24)]
+    renamed = {"tasks": [dict(t, name="Excavate pad bowl (full depth)", duration_h=20,
+                              energy_wh=3300) if t["id"] == "T2" else t
+                         for t in INFEASIBLE["tasks"]]}
+    rezoned = {"tasks": [dict(t, zone="Z4") if t["id"] == "T2" else t
+                         for t in renamed["tasks"]]}
+    cut = ["duration_h 20 (needs 24)", "energy_wh 3,300 (needs 4,000)"]
+    rows = [{"task": "T2", "field": "name",
+             "before": next(t["name"] for t in INFEASIBLE["tasks"] if t["id"] == "T2"),
+             "after": "Excavate pad bowl (full depth)"},
+            {"task": "T2", "field": "duration_h", "before": 24, "after": 20},
+            {"task": "T2", "field": "energy_wh", "before": 4000.0, "after": 3300.0}]
+    for answer, why, diff_lists in (
+        (renamed, cut, {"added": [], "removed": [], "renumbered": [], "changed": rows}),
+        (rezoned, ["zone Z4 (was Z1)", *cut],
+         {"added": [], "removed": [], "renumbered": [], "changed": [
+             *rows, {"task": "T2", "field": "zone", "before": "Z1", "after": "Z4"}]}),
+    ):
+        client = Scripted({("repair", 2): answer})
+        result = planner(client, max_repairs=1).plan_from_requirements(
+            REQ, key="k", prior_graph=PRIOR_INFEASIBLE, variant="replan",
+            required_tasks=PRIOR_INFEASIBLE.ids(), start_with_prior=True, locked=locked)
+        assert not result.success and result.failure is not None
+        assert result.failure.conflicts[0] == "locked:T2"
+        assert result.failure.details[0] == ("T2 is underway on EX1 and changed: "
+                                             + "; ".join(why))
+        diff = result.steps[2].payload["diff"]
+        assert {k: diff[k] for k in diff_lists} == diff_lists
+        guard = check_locked_tasks(TaskGraph.model_validate(answer), PRIOR_INFEASIBLE, locked)
+        assert guard is not None and guard.conflicts == ["locked:T2"]
+
+
+def test_an_answer_that_repeats_an_id_carries_no_diff():
+    """The diff is attached before validation; an answer with two ``T2`` would list the id as
+    kept and added at once, so such an answer gets no diff and the validate step speaks."""
+    doubled = {"tasks": [dict(t, id="T2") if t["id"] == "T3" else t for t in INFEASIBLE["tasks"]]}
+    client = Scripted({("repair", 2): doubled})
+    result = planner(client, max_repairs=1).plan_from_requirements(
+        REQ, key="k", prior_graph=PRIOR_INFEASIBLE, variant="replan",
+        required_tasks=PRIOR_INFEASIBLE.ids(), start_with_prior=True)
+    repair = result.steps[2]
+    assert repair.stage == "repair" and repair.ok and "diff" not in (repair.payload or {})
+    assert not result.success and result.failure is not None
+    assert "duplicate:T2" in result.failure.conflicts
 
 
 # --------------------------------------------------------------------------- payloads
@@ -501,14 +589,15 @@ def test_repair_diff_lists_every_changed_field():
              quantity=60, unit="m3", basis="60 m3 bowl"),
         Task(id="T2", name="haul", robot_type="excavator", duration_h=6, energy_wh=900.0004,
              zone="Z3"),
-        Task(id="T4", name="new", robot_type="hauler", duration_h=1, energy_wh=50, zone="Z2"),
-    ])
+        Task(id="T4", name="new", robot_type="hauler", duration_h=1, energy_wh=50, zone="Z3"),
+    ])   # T4 is not T3 renamed: a new name in another zone is an added task (test_graph_diff)
     diff = graph_diff(before, after)
-    assert diff["added"] == ["T4"] and diff["removed"] == ["T3"]
+    assert diff["added"] == ["T4"] and diff["removed"] == ["T3"] and diff["renumbered"] == []
     assert diff["changed"] == [
         {"task": "T1", "field": "duration_h", "before": 10, "after": 5},
         {"task": "T1", "field": "energy_wh", "before": 4000.0, "after": 2000.0},
         {"task": "T1", "field": "quantity", "before": None, "after": 60.0},
+        {"task": "T1", "field": "unit", "before": None, "after": "m3"},
         {"task": "T2", "field": "robot_type", "before": "hauler", "after": "excavator"},
         {"task": "T2", "field": "zone", "before": "Z1", "after": "Z3"},
         {"task": "T2", "field": "after", "before": ["T1"], "after": []},
@@ -520,7 +609,8 @@ def test_repair_diff_lists_every_changed_field():
     assert diff["total_duration_h_before"] == 18 and diff["total_duration_h_after"] == 12
 
     same = graph_diff(before, before)
-    assert (same["added"], same["removed"], same["changed"], same["scope_drift_pct"]) == ([], [], [], 0.0)
+    assert (same["added"], same["removed"], same["changed"], same["renumbered"],
+            same["scope_drift_pct"]) == ([], [], [], [], 0.0)
 
 
 def test_advisories_of_the_graph_step_ride_on_its_validate_step(monkeypatch):
@@ -620,7 +710,7 @@ def test_on_step_sees_the_diff_and_the_receipt_when_the_step_is_reported():
 
     client = Scripted({("taskgraph", 1): INFEASIBLE, ("repair", 2): FEASIBLE})
     Planner(client, explain=False, on_step=on_step).plan_from_requirements(REQ, key="k")
-    assert seen["diff"]["added"] == ["T11"] and seen["receipt"]["recheck"] == RECHECK_NOTE
+    assert seen["diff"]["added"] == ["T2", "T3"] and seen["receipt"]["recheck"] == RECHECK_NOTE
 
 
 def test_plan_reports_the_structure_step_before_asking_for_the_task_graph():
@@ -698,9 +788,10 @@ def test_exhausted_run_attaches_solver_grounded_suggestions_before_the_step_is_r
     final = result.steps[-1]
     assert final.stage == "schedule" and not final.ok and final.payload is not None
     dumped = [s.model_dump(mode="json") for s in result.suggestions]
-    assert final.payload == {"suggestions": dumped}
+    budget = budget_rows(REQ, PRIOR_INFEASIBLE, result.failure)
+    assert final.payload == {"budget": budget, "suggestions": dumped}
     # ... and had it the moment it was reported; no other step was touched
-    assert seen[-1] == ("schedule", False, {"suggestions": dumped})
+    assert seen[-1] == ("schedule", False, {"budget": budget, "suggestions": dumped})
     assert all("suggestions" not in p for p in payloads(seen)[:-1])
     assert PlanResult.model_validate_json(result.model_dump_json()) == result
 
@@ -719,6 +810,7 @@ def test_replan_infeasibility_is_advised_with_a_spare_or_a_later_deadline_only()
         ("add_robot", "excavator", "EX3")]
     assert result.suggestions[0].verified
     assert result.steps[-1].payload == {
+        "budget": budget_rows(REQ, PRIOR_INFEASIBLE, result.failure),
         "suggestions": [result.suggestions[0].model_dump(mode="json")]}
 
     # the spare never takes the id of a robot the replan lost: the ids come from the caller,
@@ -744,7 +836,7 @@ def test_replan_infeasibility_is_advised_with_a_spare_or_a_later_deadline_only()
     assert not result.success and result.repairs == 1
     assert [s.kind for s in result.suggestions] == ["add_robot"]
     verdicts = [s for s in result.steps if s.stage == "schedule"]
-    assert len(verdicts) == 2 and verdicts[0].payload is None
+    assert len(verdicts) == 2 and set(verdicts[0].payload or {}) == {"budget"}
     assert verdicts[1].payload is not None and "suggestions" in verdicts[1].payload
 
 
@@ -803,7 +895,8 @@ def test_advice_is_computed_once_for_the_final_verdict_with_the_planners_options
     assert isinstance(opts, SolveOptions) and opts.time_limit_s == 3.0
     assert kwargs == {"locked": None, "kinds": None, "reserved_ids": [], "budget_s": 2.5}
     verdicts = [s for s in result.steps if s.stage == "schedule"]
-    assert verdicts[0].payload is None and "suggestions" in (verdicts[1].payload or {})
+    assert set(verdicts[0].payload or {}) == {"budget"}
+    assert "suggestions" in (verdicts[1].payload or {})
     assert len(result.suggestions) == 3
 
 
@@ -811,7 +904,7 @@ def test_suggest_budget_zero_disables_the_advice_and_its_errors_never_surface(mo
     result = planner(Scripted({("taskgraph", 1): INFEASIBLE}), max_repairs=0,
                      suggest_budget_s=0).plan_from_requirements(REQ, key="k")
     assert not result.success and result.suggestions == []
-    assert result.steps[-1].payload is None
+    assert set(result.steps[-1].payload or {}) == {"budget"}   # the rows ride on the verdict
     with pytest.raises(ValueError, match="suggest_budget_s"):
         Planner(Scripted({}), suggest_budget_s=-1)
     assert Planner(Scripted({})).suggest_budget_s == 6.0
@@ -824,7 +917,7 @@ def test_suggest_budget_zero_disables_the_advice_and_its_errors_never_surface(mo
                      ).plan_from_requirements(REQ, key="k")
     assert not result.success and result.failure is not None
     assert set(result.failure.conflicts) == ENERGY_CORE and result.suggestions == []
-    assert result.steps[-1].payload is None
+    assert set(result.steps[-1].payload or {}) == {"budget"}   # the rows ride on the verdict
 
 
 def test_plan_result_round_trips_with_suggestions_empty_by_default():
@@ -837,7 +930,7 @@ def test_plan_result_round_trips_with_suggestions_empty_by_default():
     assert PlanResult.model_validate(data).suggestions == []
 
     advised = PlanResult(requirements=REQ, success=False, suggestions=[
-        Suggestion(kind="raise_battery", detail="EX1 needs 5950 Wh (has 5000 Wh): feasible at 62 h",
+        Suggestion(kind="raise_battery", detail="EX1 needs 5,950 Wh (has 5,000 Wh): feasible at 62 h",
                    robot_type="excavator", robot_id="EX1", battery_wh=5950, makespan_h=62,
                    verified=True),
         Suggestion(kind="reduce_scope", detail="cut the bowl (24 h, 4000 Wh)"),

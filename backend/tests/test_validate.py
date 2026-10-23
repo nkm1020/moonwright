@@ -246,7 +246,7 @@ def test_energy_task_exceeds_largest_battery_of_its_type() -> None:
     assert "energy_task:T1" in failure.conflicts
     assert "energy_task:T2" not in failure.conflicts  # 4000 Wh fits EX1's 5000 Wh
     assert "energy:excavator" in failure.conflicts  # 9600 Wh total > 8000 Wh fleet, as well
-    assert "5500 Wh" in failure.hint and "5000 Wh" in failure.hint
+    assert "5,500 Wh" in failure.hint and "5,000 Wh" in failure.hint
 
 
 def test_energy_task_alone_when_fleet_total_fits() -> None:
@@ -290,7 +290,7 @@ def test_type_energy_sum_exceeds_fleet_batteries() -> None:
               task("T4", type_="hauler", energy=2500))
     failure = must_fail(r, g)
     assert failure.conflicts == ["energy:excavator"]
-    assert "excavator" in failure.hint and "11000 Wh" in failure.hint and "10000 Wh" in failure.hint
+    assert "excavator" in failure.hint and "11,000 Wh" in failure.hint and "10,000 Wh" in failure.hint
 
 
 # ----------------------------------------------------------------------------- combinations
@@ -371,11 +371,11 @@ def test_energy_checks_are_exact_to_a_milli_wh() -> None:
     # ... and one milli-Wh over is a conflict, quoted with the figures that were compared
     failure = must_fail(r, graph(task("T1", energy=2100.126), task("T2", energy=2100.125)))
     assert failure.conflicts == ["energy:excavator"]
-    assert "4200.251 Wh" in failure.hint and "4200.25 Wh" in failure.hint
+    assert "4,200.251 Wh" in failure.hint and "4,200.25 Wh" in failure.hint
     failure = must_fail(r, graph(task("T1", energy=4200.251)))
     assert failure.conflicts == ["energy_task:T1", "energy:excavator"]
     assert failure.details[0] == (
-        "T1 needs 4200.251 Wh but the largest excavator battery is 4200.25 Wh")
+        "T1 needs 4,200.251 Wh but the largest excavator battery is 4,200.25 Wh")
 
 
 # ----------------------------------------------------------------------------- schema hardening

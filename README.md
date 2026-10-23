@@ -83,8 +83,10 @@ Schedule + F6 explanation ──► F7 2D simulator ──► event (robot failu
 * **Repair loop.** Conflict ids plus a human hint go back to Nemotron with the previous graph. The
   loop stops at the first solver-verified plan or after three repairs. The validator's structure
   coverage check (`scope:<structure>`) refuses a repair that drops a required phase or a whole
-  structure, and every accepted repair carries a diff (added, removed and changed tasks, energy per
-  robot type, scope drift in %) so a re-scope is visible instead of silent. Lightning also records,
+  structure, and every accepted repair carries a diff (added, removed, renumbered and changed
+  tasks, energy per robot type, scope drift in %) so a re-scope is visible instead of silent;
+  tasks are paired across a renumbering, so a split that shifts every later id reads as a split
+  plus the one task that was re-scoped, not as a dozen re-scoped tasks. Lightning also records,
   per structure, the operations the brief explicitly asks for (`sintered crest` -> sinter, `built
   from pad spoil` -> haul, `key trench` -> excavate, `inspected` -> survey); the coverage check
   requires a task of the right robot type for each one, so a live graph that silently omits them
@@ -98,15 +100,15 @@ Schedule + F6 explanation ──► F7 2D simulator ──► event (robot failu
   satisfy one).
 * **Advice when no repair can work.** When the repairs are exhausted, the loop is off or the brief
   is impossible, the planner returns `PlanResult.suggestions`: resource changes each proven by a
-  real CP-SAT solve on the last graph (`EX1 needs 5950 Wh (has 5000 Wh): feasible at 62 h`, the
-  smallest battery to 50 Wh that CP-SAT still schedules; `one more excavator (EX3, 5000 Wh like
+  real CP-SAT solve on the last graph (`EX1 needs 5,950 Wh (has 5,000 Wh): feasible at 62 h`, the
+  smallest battery to 50 Wh that CP-SAT still schedules; `one more excavator (EX3, 5,000 Wh like
   EX1): feasible at 62 h`; `finishing needs 86 h, 26 h past the 60 h deadline (CP-SAT optimal)`),
   changes that keep the deadline first, or one unverified `reduce_scope` naming the largest work
   items when every single change was refuted (a verification solve that times out counts as
   untried, never as refuted). The list rides on the final failed step of the trace too, so the UI
   and `moonwright plan` show it with the verdict; a replan is offered only a later deadline or a
   spare robot, in absolute mission hours against the brief's deadline and with a full battery
-  (`one more excavator (EX3, 5000 Wh, a full battery): feasible at 85 h` next to the 80 h plan
+  (`one more excavator (EX3, 5,000 Wh, a full battery): feasible at 85 h` next to the 80 h plan
   it replaces).
 * **Simulation and replanning (solver first).** The simulator moves robots on the site grid, drains
   batteries and injects failures. On an event the tasks underway are locked and CP-SAT reschedules

@@ -102,7 +102,9 @@ from moonwright.schemas import (
     SimResult,
     Task,
     TaskGraph,
+    to_mwh,
 )
+from moonwright.text import wh as _wh
 
 __all__ = ["FailureInjection", "Simulator", "depot_position", "zone_positions"]
 
@@ -496,9 +498,9 @@ class Simulator:
                                                else "")
                 self._emit(Event(
                     t_h=self._t, kind="battery_low", robot=r.id, task=r.current_task,
-                    detail=(f"{r.id} has {r.battery_wh:.0f} Wh left but its remaining work "
-                            f"({what}, travel included) needs {need:.0f} Wh; it will run dry "
-                            "under the current plan"),
+                    detail=(f"{r.id} has {_wh(to_mwh(r.battery_wh))} left but its remaining "
+                            f"work ({what}, travel included) needs {_wh(to_mwh(need))}; it "
+                            "will run dry under the current plan"),
                 ))
 
     def _emit(self, event: Event) -> None:

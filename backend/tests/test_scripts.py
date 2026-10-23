@@ -395,7 +395,7 @@ def test_simulate_prints_replan_advice_in_absolute_hours(landing_pad_plan, tmp_p
     assert code == EXIT_NO_PLAN
     printed = capsys.readouterr().out
     assert "no feasible replan (validation: energy:excavator)" in printed
-    assert ("- add robot: one more excavator (EX3, 5000 Wh, a full battery): feasible at 85 h "
+    assert ("- add robot: one more excavator (EX3, 5,000 Wh, a full battery): feasible at 85 h "
             "[CP-SAT verified]") in printed
     sim = json.loads(out.read_text())
     record = sim["replans"][0]

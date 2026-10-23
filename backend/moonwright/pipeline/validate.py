@@ -139,6 +139,8 @@ from moonwright.schemas import (
     fmt_wh,
     to_mwh,
 )
+from moonwright.text import join_and as _join_and
+from moonwright.text import plural as _plural
 
 __all__ = [   # tag_names / structure_tasks live in ``tags`` and stay importable from here
     "brief_evidence", "check_scope", "covered_phases", "hauls_into", "missing_operations",
@@ -918,13 +920,3 @@ def _served_types(
             out.append((typ, [t for t in graph.tasks if t.robot_type == typ], robots))
     return out
 
-
-def _plural(n: int, noun: str) -> str:
-    return f"{n} {noun}" if n == 1 else f"{n} {noun}s"
-
-
-def _join_and(parts: list[str]) -> str:
-    """'a', 'a and b', 'a, b and c'."""
-    if len(parts) <= 2:
-        return " and ".join(parts)
-    return ", ".join(parts[:-1]) + " and " + parts[-1]
