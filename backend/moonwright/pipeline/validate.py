@@ -210,20 +210,36 @@ On top of its kind, every operation a structure lists (``Structure.operations``:
 the brief explicitly asks for on it, "sintered crest" -> sinter, "built from pad spoil" ->
 haul, "key trench" -> excavate, "inspected" -> survey) is required as a group of its own
 (:func:`required_phases`), under the same fleet rule: an operation no robot of the fleet can
-perform is a site warning (``moonwright.pipeline.structure.site_warnings``), never a conflict.
+perform is never required (since phase 3j the structure stage drops it from the
+requirements with a note, ``moonwright.pipeline.structure.correct_operations``; requirements
+edited by hand can still list one), never a conflict.
 A listed operation is met only by a task of its own robot type doing that phase
 (:func:`performs`: a listed ``haul`` by a hauler task tagged with the receiving structure or
 placed in its zone, a listed ``sinter`` by a printer task), not by the lenient name-keyword
 union that serves the kind heuristic, so a hauler named "Haul bowl spoil" does not stand in
-for the key trench the brief asked for. The hint names the operation and quotes the brief
-where :func:`brief_evidence` finds the ask ("S2 (blast_berm) lists sinter (the brief asks for
+for the key trench the brief asked for. The ``haul`` of a structure dug for its material (a
+body its dimensions dig, or a type that names a dig: never a placed body, a pile, a mound or
+a fill crossing, :func:`_source`) is also met by a hauler task that waits, through any chain
+of ``after`` edges, for a dig serving it (:func:`source_hauls`, phase 3j): the coverage
+contract tags a haul with the structure that receives it, so live (the habitat berm demo,
+tries 1 and 3) a borrow strip whose digs fed the berm's hauls read "lists haul ... but no task
+hauls to it", and the repairs invented a haul into the strip, or a second 120 m3 of strip fill
+tagged with it. Where such a haul still lacks, the hint says what is true: "S3 (borrow_strip)
+lists haul (...) but no hauler task is tagged S3 or waits for its digs (T6, T7); a structure
+dug for its material is hauled by the hauls that wait for its digs, so make the haul of that
+material wait for them, tagged with the structure it fills, rather than adding a haul tagged
+with the dug structure." The hint names the operation and quotes the brief where
+:func:`brief_evidence` finds the ask ("S2 (blast_berm) lists sinter (the brief asks for
 "with a sintered crest to resist plume erosion") but no task sinters it; add a printer task
 tagged S2"); the evidence is the phase's own verbs (excavat/dig/trench/cut, never a noun such
 as "borrow" that names the structure the material comes from), so a berm "built from a
-borrow strip" is not quoted as an ask to excavate the berm. One over-declaration a small
-structuring model makes is caught here rather than planned: when a structure of a known kind
-lists both alternatives of one of its kind groups ("excavate or haul" of a berm, "excavate or
-grade" of a pad) and the brief supports only one of them, the other is *unsupported*
+borrow strip" is not quoted as an ask to excavate the berm, and it comes from the
+structure's own entry or a line that names it, never from an entry its name or its figures
+give another structure (phase 3j: the strip's hint above quoted the berm's "about 280 cubic
+metres of fill"). One over-declaration a small structuring model makes is caught here rather
+than planned: when a structure of a known kind lists both alternatives of one of its kind
+groups ("excavate or haul" of a berm, "excavate or grade" of a pad) and the brief supports
+only one of them, the other is *unsupported*
 (:func:`unsupported_operations`): not required, reported on the requirements card by the
 structure stage, and never a reason to invent work (seen live: ``excavate`` listed on a berm
 the brief says is "built from a borrow strip ... placed and compacted", and the repair added
@@ -288,9 +304,11 @@ from moonwright.pipeline.rates import (
 )
 from moonwright.pipeline.tags import (
     brief_lines,
+    entry_owners,
     haul_target,
     hauls_into,
     name_score,
+    serving_tasks,
     structure_tasks,
     tag_names,
 )
@@ -314,9 +332,9 @@ from moonwright.text import whole_wh as _whole_wh
 __all__ = [   # tag_names / structure_tasks live in ``tags`` and stay importable from here
     "SUPPLY_SLACK", "SUPPLY_SLACK_M3", "Supply", "brief_evidence", "check_scope",
     "covered_phases", "hauls_into", "missing_operations", "missing_phases", "needs_quantity",
-    "performs", "required_phases", "structure_kind", "structure_tasks", "supply_advisories",
-    "supply_report", "tag_names", "task_changes", "task_phases", "transit_allowances",
-    "unstaffed_operations", "unsupported_operations", "validate_graph",
+    "performs", "required_phases", "source_hauls", "structure_kind", "structure_tasks",
+    "supply_advisories", "supply_report", "tag_names", "task_changes", "task_phases",
+    "transit_allowances", "unstaffed_operations", "unsupported_operations", "validate_graph",
 ]
 
 Positions = Mapping[str, tuple[float, float]]
@@ -1339,6 +1357,19 @@ _PHASE_RULES_TEXT = (
     "least one task; a phase is only required while the fleet has its robot type"
 )
 _OPERATIONS_RULE_TEXT = "every operation a structure lists needs a task tagged with it"
+# the haul a structure dug for its material lists is carried by the hauls that wait for its
+# digs (:func:`source_hauls`); live, "add a hauler task tagged S2" made a repair haul the
+# borrow strip's 120 m3 into the berm zone a second time
+_SOURCE_RULE = ("a structure dug for its material is hauled by the hauls that wait for its "
+                "digs, so make the haul of that material wait for them, tagged with the "
+                "structure it fills, rather than adding a haul tagged with the dug structure.")
+# a structure is dug for its material only on positive evidence (:func:`_source`): a type that
+# names material brought onto it never is, whatever its dimensions ("shielding_mound",
+# "earth_bridge", an "embankment" recorded with a depth), and one whose dimensions give no
+# body is only when its type names a dig ("borrow_pit", "quarry")
+_FILLED_TYPE = re.compile(r"\b(?:mound|fill|backfill|bridge|embankment|cover|crossing|causeway|"
+                          r"levee|dyke|dike)s?\b")
+_DUG_TYPE = re.compile(r"\b(?:borrow|pit|strip|cut|trench|quarry|excavation)s?\b")
 _QUOTE_MAX = 80                                       # longest brief quote in a hint
 _CLAUSE_SPLIT = re.compile(r"\.(?=\s|$)|[;:,\n()]")  # clause boundaries; "0.5 m" stays whole
 _WORDS = re.compile(r"[a-z0-9]+")
@@ -1455,8 +1486,9 @@ def missing_phases(req: Requirements, structure: Structure, tasks: list[Task],
     strings, judged by the lenient union of :func:`task_phases`, then every listed operation
     no task :func:`performs` (once each); ``['any work']`` for a structure of unknown kind
     that lists no staffable operation and has no task at all. ``hauls`` are the hauler tasks
-    placed in the structure's zone whatever their tag (:func:`moonwright.pipeline.tags.hauls_into`):
-    they count for its haul, and for nothing else."""
+    placed in the structure's zone whatever their tag (:func:`moonwright.pipeline.tags.hauls_into`)
+    and, for a structure dug for its material, the hauls that wait for its digs
+    (:func:`source_hauls`): they count for its haul, and for nothing else."""
     groups, listed = _required(req, structure)
     if not groups and not listed and structure_kind(structure.type) is None:
         return [] if tasks else ["any work"]
@@ -1487,7 +1519,9 @@ def missing_operations(req: Requirements, structure: Structure, tasks: list[Task
 
 def unstaffed_operations(req: Requirements, structure: Structure) -> list[tuple[str, str]]:
     """``(operation, robot type)`` for every operation ``structure`` lists that no robot of
-    the fleet can perform: the coverage check never asks for it (a site warning does)."""
+    the fleet can perform: the coverage check never asks for it, and the structure stage
+    drops it from the requirements with a note
+    (``moonwright.pipeline.structure.correct_operations``, phase 3j)."""
     fleet = {r.type for r in req.robots}
     return [(op, _CANONICAL_TYPE[op]) for op in structure.operations
             if _CANONICAL_TYPE[op] not in fleet]
@@ -1509,13 +1543,19 @@ def brief_evidence(brief: str | None, phase: str, structure: Structure,
     (:func:`_names`: each word of its type once, the head word twice, a tie to the line that
     names it earliest, so the structure's own entry, "2. Blast berm: ...", beats a site
     paragraph that mentions it in passing); a line without any word of the type is never
-    used, and with ``others`` (the brief's other structures) neither is a line that names one
-    of them by a strictly higher score ("Borrow strip: 100 m by 6 m excavation ... that
-    supplies the berm fill" is the strip's entry, not an ask to excavate the berm; "the
-    surveyor inspects the road before the foundation is signed off" names both and counts
-    for both). The quote is that line's clause
-    around the word, at most :data:`_QUOTE_MAX` characters. None when the brief is unknown or
-    no line qualifies: the hint then says generically that the brief asks for the operation.
+    used. With ``others`` (the brief's other structures) a line shaped like an entry belongs to
+    the structure its name before the colon names best, or, when that name is none of the
+    types, to the one whose recorded figures the line states
+    (:func:`moonwright.pipeline.tags.entry_owners`): it is quoted for that structure whatever
+    else its body names, and never for another (phase 3j, seen live: the borrow strip's hint
+    quoted the berm's entry, "2. Plume berm: ... (about 280 cubic metres of fill), built from
+    the pit spoil plus the borrow strip", where the strip's two type words outscored the berm's
+    one, and the berm's own entry lost its quote the same way). An entry no structure can be
+    given, and any other line, is skipped when it names one of them by a strictly higher score
+    ("the surveyor inspects the road before the foundation is signed off" names both and
+    counts for both). The quote is that line's clause around the word, at most
+    :data:`_QUOTE_MAX` characters. None when the brief is unknown or no line qualifies: the
+    hint then says generically that the brief asks for the operation.
     """
     if not brief:
         return None
@@ -1525,35 +1565,74 @@ def brief_evidence(brief: str | None, phase: str, structure: Structure,
         return any(w.startswith(stems) and w not in _ROBOT_WORDS for w in words)
 
     rivals = [s for s in others if s.id != structure.id]
-    best: tuple[tuple[int, int], str] | None = None
+    best: tuple[tuple[int, int], str, str] | None = None
     for line in brief_lines(brief):   # a hard-wrapped entry reads whole
         low = line.lower()
         words = set(_WORDS.findall(low))
         key = _names(low, words, structure)
-        if key is None or not asks(words):
+        # the names of the other structures are no ask: "plus the borrow strip" in the berm's
+        # entry does not ask to strip the berm
+        bare = _without_names(line, rivals)
+        if key is None or not asks(_WORDS.findall(bare.lower())):
             continue
-        if any((rival := _names(low, words, s)) is not None and rival[0] > key[0] for s in rivals):
+        owners = entry_owners(line, [structure, *rivals]) if rivals else []
+        if owners and not any(s is structure for s in owners):
             continue   # another structure's entry: its verbs are not this structure's ask
+        if not owners and any((rival := _names(low, words, s)) is not None and rival[0] > key[0]
+                              for s in rivals):
+            continue   # a line about another structure that mentions this one in passing
         if best is None or key > best[0]:
-            best = (key, line)
+            best = (key, line, bare)
     if best is None:
         return None
-    for clause in _CLAUSE_SPLIT.split(best[1]):
-        if asks(_WORDS.findall(clause.lower())):
-            quote = re.sub(r"^[\s\-*#>]+|[\s*]+$", "", " ".join(clause.split()))
+    _, line, bare = best
+    # the clauses of the line, cut where the line's own boundaries are; the masked copy has
+    # the same length, so the same spans hold its words
+    cuts = [0, *(i for m in _CLAUSE_SPLIT.finditer(line) for i in (m.start(), m.end())),
+            len(line)]
+    for start, end in zip(cuts[::2], cuts[1::2], strict=True):
+        if asks(_WORDS.findall(bare[start:end].lower())):
+            quote = re.sub(r"^[\s\-*#>]+|[\s*]+$", "", " ".join(line[start:end].split()))
             if len(quote) > _QUOTE_MAX:
                 quote = quote[:_QUOTE_MAX - 3].rstrip() + "..."
             return quote
     return None
 
 
+def _without_names(line: str, structures: Sequence[Structure]) -> str:
+    """A brief line with the type of each of ``structures`` blanked out wherever it stands
+    whole, in any case ("Borrow strip" for ``borrow_strip``), keeping its length, so a span of
+    the line and the same span of its masked copy hold the same clause. A type of one word is
+    left: alone it is as often the brief's verb ("excavate", "trench") as a name."""
+    for s in structures:
+        words = _WORDS.findall(s.type.lower())
+        if len(words) > 1:
+            phrase = r"\b" + r"[\s_-]+".join(map(re.escape, words)) + r"\b"
+            line = re.sub(phrase, lambda m: " " * len(m.group(0)), line, flags=re.IGNORECASE)
+    return line
+
+
+def _why(brief: str | None, op: str, structure: Structure, others: Sequence[Structure]) -> str:
+    """'the brief asks for "with a sintered crest to resist plume erosion"' where
+    :func:`brief_evidence` finds the ask, else 'an operation the brief asks for'."""
+    quote = brief_evidence(brief, op, structure, others)
+    return f'the brief asks for "{quote}"' if quote else "an operation the brief asks for"
+
+
 def _coverage_phrase(label: str, structure: Structure, missing: list[str], asked: list[str],
-                     brief: str | None, others: Sequence[Structure] = ()) -> str:
+                     brief: str | None, others: Sequence[Structure] = (),
+                     source: bool = False) -> str | None:
     """'S2 (blast_berm) has no compact task and lists sinter (the brief asks for "with a
     sintered crest to resist plume erosion") but no task sinters it; add a printer task tagged
     S2': the kind's missing phases first, then every listed operation that went unserved,
     quoting the brief where :func:`brief_evidence` finds the ask (``others`` are the brief's
-    other structures, whose own entries are never quoted for this one)."""
+    other structures, whose own entries are never quoted for this one). A ``source``
+    structure (dug for its material, :func:`source_hauls`) that nothing digs reads 'haul (...)
+    but no hauler task is tagged S3 or waits for a dig of it', and when its excavation is
+    missing too the fix is the dig and a haul after it ('add an excavator task tagged S3 and
+    make the haul of its material wait for the dig, tagged with the structure it fills');
+    None when nothing is left to say (a source structure's haul with digs has
+    :func:`_source_phrase` of its own)."""
     clauses: list[str] = []
     rest = [m for m in missing if m not in asked]
     if rest:
@@ -1561,33 +1640,106 @@ def _coverage_phrase(label: str, structure: Structure, missing: list[str], asked
     if asked:
         wants: list[str] = []
         for op in asked:
-            quote = brief_evidence(brief, op, structure, others)
-            why = f'the brief asks for "{quote}"' if quote else "an operation the brief asks for"
-            wants.append(f"{op} ({why}) but no task {_PHASE_VERB[op]} it")
-        types = list(dict.fromkeys(_CANONICAL_TYPE[op] for op in asked))
+            done = (f"no hauler task is tagged {structure.id} or waits for a dig of it"
+                    if source and op == "haul" else f"no task {_PHASE_VERB[op]} it")
+            wants.append(f"{op} ({_why(brief, op, structure, others)}) but {done}")
+        after_dig = source and {"excavate", "haul"} <= set(asked)
+        types = list(dict.fromkeys(_CANONICAL_TYPE[op] for op in asked
+                                   if not (after_dig and op == "haul")))
         if len(types) == 1:
             fix = f"{'an' if types[0][0] in 'aeiou' else 'a'} {types[0]} task"
         else:
             fix = f"{_join_and(types)} tasks"
-        clauses.append(f"lists {_join_and(wants)}; add {fix} tagged {structure.id}")
-    return f"{label} " + " and ".join(clauses)
+        fix = f"add {fix} tagged {structure.id}"
+        if after_dig:
+            fix += (" and make the haul of its material wait for the dig, tagged with the "
+                    "structure it fills")
+        clauses.append(f"lists {_join_and(wants)}; {fix}")
+    return f"{label} " + " and ".join(clauses) if clauses else None
+
+
+def _source_phrase(label: str, structure: Structure, digs: Sequence[str], brief: str | None,
+                   others: Sequence[Structure]) -> str:
+    """'S3 (borrow_strip) lists haul (an operation the brief asks for) but no hauler task is
+    tagged S3 or waits for its digs (T6, T7)': the listed haul of a structure dug for its
+    material (:func:`source_hauls`) that no haul carries off."""
+    return (f"{label} lists haul ({_why(brief, 'haul', structure, others)}) but no hauler task "
+            f"is tagged {structure.id} or waits for its digs ({_ids_text(digs)})")
+
+
+def _source(structure: Structure) -> bool:
+    """Whether the ``haul`` a structure lists is its material carried off, on positive
+    evidence of a dug body. Never a placed body or a pile (:func:`_placed_body`,
+    :func:`~moonwright.pipeline.rates.stockpile_like`) nor a type that names material brought
+    onto it (:data:`_FILLED_TYPE`: "shielding_mound", "earth_bridge"): their haul is the fill
+    brought onto them. Else a body its dimensions dig
+    (:func:`~moonwright.pipeline.rates.dims_volume` in phase ``excavation``: the borrow strip
+    "40 m by 6 m, 0.5 m deep", a drainage trench), and without a body no placed layer
+    (``thickness_m``, ``height_m``: a raised pad) and a type that names a dig
+    (:data:`_DUG_TYPE`: "borrow_pit"). Seen in review: counted as dug, the shielding mound
+    (``diameter_m``, ``height_m``, ``thickness_m``: no body; Lightning lists ``excavate`` on
+    it in 4 of the 6 structurings of runs 2 and 3, and 6 saved final graphs dig 2 to 52 m3
+    tagged with it) took a haul of its 2.5 m3 of foundation spoil to the borrow pit for its
+    120 m3 of fill, and its hint asked for exactly that."""
+    if structure_kind(structure.type) == "berm" or stockpile_like(structure):
+        return False
+    words = _type_words(structure)
+    if _FILLED_TYPE.search(words):
+        return False
+    shape = dims_volume(structure)
+    if shape is not None:          # a placed prism is :func:`_placed_body`
+        return shape.phase == "excavation"
+    d = structure.dims()
+    if d.get("thickness_m", 0.0) > 0 or d.get("height_m", 0.0) > 0:
+        return False
+    return _DUG_TYPE.search(words) is not None
+
+
+def source_hauls(structure: Structure, graph: TaskGraph,
+                 structures: Sequence[Structure] | None = None,
+                 before: Mapping[str, set[str]] | None = None) -> list[Task]:
+    """The hauler tasks that carry a dug structure's material off, in graph order: those that
+    wait, through any chain of ``after`` edges (:func:`~moonwright.pipeline.rates.ancestors`,
+    or ``before`` when the caller has it), for a dig serving it
+    (:func:`~moonwright.pipeline.rates.is_dig` over
+    :func:`~moonwright.pipeline.tags.serving_tasks`, tags resolved against ``structures``).
+    They count for the ``haul`` its operations list (module docstring, "Structure coverage"):
+    the coverage contract tags a haul with the structure that receives it, so a borrow strip
+    whose two digs feed the berm's hauls is hauled whatever those hauls are tagged. [] for a
+    structure not dug for its material (:func:`_source`: a placed body, a pile, a mound or a
+    fill crossing, whose haul is the fill brought onto it, never its own key trench's or
+    foundation's spoil carried off) and for a structure nothing digs."""
+    if not _source(structure):
+        return []
+    digs = {t.id for t in serving_tasks(structure, graph, structures) if is_dig(t)}
+    if not digs:
+        return []
+    before = ancestors(graph) if before is None else before
+    return [t for t in graph.tasks
+            if t.robot_type == "hauler" and before.get(t.id, set()) & digs]
 
 
 def _check_coverage(req: Requirements, graph: TaskGraph,
                     previous: TaskGraph | None) -> _Group | None:
     items: dict[str, str] = {}
     phrases: dict[str, str] = {}
+    sourced: dict[str, str] = {}   # a dug structure's haul that no haul carries off
     listed = False
+    before_all = ancestors(graph)
     for s in req.structures:
         tasks = structure_tasks(s, graph, req.structures)
         served = {t.id for t in tasks}
         hauls = [t for t in hauls_into(s, graph) if t.id not in served]
+        placed = served | {t.id for t in hauls}
+        hauls += [t for t in source_hauls(s, graph, req.structures, before_all)
+                  if t.id not in placed]
         missing = missing_phases(req, s, tasks, hauls)
         if not missing:
             continue
         label = f"{s.id} ({s.type})"
         before = ([t.id for t in structure_tasks(s, previous, req.structures)]
                   if previous is not None else [])
+        phrase: str | None
         if not tasks and before:
             detail = (f"{label} had {_join_and(before)} before the repair and has no task now")
             phrase = f"{label} lost every task it had ({', '.join(before)})"
@@ -1597,25 +1749,38 @@ def _check_coverage(req: Requirements, graph: TaskGraph,
             noun = "task" if len(missing) == 1 else "tasks"
             detail = f"{label} lacks {_join_and(missing)} {noun}"
             asked = missing_operations(req, s, tasks, hauls)
+            source = _source(s)
+            digs = ([t.id for t in serving_tasks(s, graph, req.structures) if is_dig(t)]
+                    if source and "haul" in asked else [])
             if asked:
                 listed = True
-                detail += f" (its operations list {_join_and(asked)})"
-            phrase = _coverage_phrase(label, s, missing, asked, req.source_brief, req.structures)
+                detail += f" (its operations list {_join_and(asked)}"
+                detail += f"; no haul waits for its digs {', '.join(digs)})" if digs else ")"
+            if digs:
+                sourced[f"scope:{s.id}"] = _source_phrase(label, s, digs, req.source_brief,
+                                                          req.structures)
+                missing = [m for m in missing if m != "haul"]
+                asked = [op for op in asked if op != "haul"]
+            phrase = _coverage_phrase(label, s, missing, asked, req.source_brief,
+                                      req.structures, source)
         items[f"scope:{s.id}"] = detail
-        phrases[f"scope:{s.id}"] = phrase
+        if phrase is not None:
+            phrases[f"scope:{s.id}"] = phrase
     if not items:
         return None
     ids = sorted(items)
     rules = f"every structure keeps its phases ({_PHASE_RULES_TEXT})"
     if listed:
         rules += f" and {_OPERATIONS_RULE_TEXT}"
-    return _Group(
-        ids=ids,
-        details=[items[i] for i in ids],
-        hint=f"Structure coverage is incomplete: {_join_and([phrases[i] for i in ids])}; "
-        f"{rules}, so add the missing work back as tasks tagged with the structure id, with "
-        "quantity and unit.",
-    )
+    parts: list[str] = []
+    if phrases:
+        parts.append(f"{_join_and([phrases[i] for i in ids if i in phrases])}; {rules}, so add "
+                     "the missing work back as tasks tagged with the structure id, with "
+                     "quantity and unit.")
+    if sourced:
+        parts.append(f"{_join_and([sourced[i] for i in ids if i in sourced])}; {_SOURCE_RULE}")
+    return _Group(ids=ids, details=[items[i] for i in ids],
+                  hint="Structure coverage is incomplete: " + " ".join(parts))
 
 
 # ----------------------------------------------------------------------------- helpers

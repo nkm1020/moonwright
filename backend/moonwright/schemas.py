@@ -225,8 +225,9 @@ on a structure. Inspection and staking are ``survey``; stripping and levelling a
 # structure. The validator requires a task for each one the fleet can staff, on top of the
 # structure-type heuristic, so a plan that drops "a sintered crest" is caught as
 # ``scope:<structure>`` and repaired instead of delivered without it. An operation the fleet
-# cannot staff is a site warning (``moonwright.pipeline.structure.site_warnings``), never a
-# conflict. Repeats are dropped, first mention's place kept. The class docstring below is
+# cannot staff is never a conflict: the structure stage drops it with a note (phase 3j,
+# ``moonwright.pipeline.structure.correct_operations``). Repeats are dropped, first
+# mention's place kept. The class docstring below is
 # short on purpose: pydantic copies it into the JSON schema the model decodes against, and
 # the structure model (Lightning) answers more cleanly without prose in the grammar.
 class Structure(_Model):

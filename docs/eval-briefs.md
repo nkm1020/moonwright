@@ -142,6 +142,38 @@ the script's assumptions in mind:
   canonical graph passes; rescored, 3 of 56 verified Ultra and 3 of 51 Super plans of run 2 are
   double counts (`habitat_berm_tight_horizon`'s 560 m3 box for its 280 m3 berm, one
   `large_fleet_pad_berm_road` plan's 1,125 m3 for 562.5 m3).
+* **A smaller size is read wherever the brief states it (phase 3j).** `low_battery_pad` allows
+  "any diameter between 12 m and 20 m that fits" in a constraint, not in the pad's entry, and
+  Lightning recorded no `min_diameter_m` in 6 of 6 structurings of runs 2 and 3: the plans that
+  dug a 16.8 m bowl (111 m3, inside the range) were judged against 20 m, 70 %, and none of run
+  3's was in scope, while the validator rejected 16 re-scopes the brief allows as `volume:S1` in
+  8 of the 12 runs (the 12 m bowl read 36 % of the 20 m one). The structure stage now reads a
+  range ("between A m and B m", "A to B m", "A-B m") or a smallest size ("may be reduced to A
+  m", "down to A m", "at least A m", "no smaller than A m") bound to the nearest dimension
+  word, ties it to the structure its subject names ("the apron is at least 5 m wide" sizes no
+  pad), the nearest structure its sentence names, the entry it stands in, or (when its
+  sentence names none) the only structure its range tops out at, and writes
+  `min_<dimension>_m` only below the recorded size, with an amber note; it also drops a length
+  the structure's own entry gives only as a distance ("30 m north of the pad", which run 3
+  recorded as the stockpile's 30 m diameter and judged as 707 m2 of berm compaction). It reads
+  nothing in the Site, Fleet and Deadline paragraphs, and a clause about a crest, a key trench,
+  the ground, a compaction depth or a haul length sizes no structure that is not one: a judge's
+  brief that says "loose regolith at least 40 cm deep" or "with a crest at least 2 m wide" keeps
+  the full-size floor. The volume and area checks read both from the brief, so the registry's
+  `min_diameter_m: 12` is what the structure stage writes for all 6 recorded structurings (not
+  yet measured live) and what the eval judges. Rescored, the five verified `low_battery_pad`
+  plans (one in run 2, four in run 3) are in scope; no other brief states either, and every
+  other brief's recorded structures are unchanged, read alone or beside the structures they
+  were recorded with.
+* **The structure stage drops an operation the fleet cannot perform (phase 3j).** Lightning
+  lists `sinter` where no printer exists (`shielding_mound`, `solar_array_pad`,
+  `four_mast_pads`, `tight_battery`, the habitat berm) and a haul where no hauler does
+  (`instrument_pad`); 9 of the 31 plans that started from such requirements hit `capability:`
+  verdicts and 4 final graphs sinter or haul with a stand-in robot. The operation is now dropped
+  with a note, so the planner never sees it; a dug structure's listed `haul` (a borrow strip, a
+  body its dimensions dig) is met by the hauls that wait for its digs, tagged with the berm
+  they fill, while a mound, an earth bridge or a berm still needs its fill hauled onto it; and
+  a coverage hint never quotes an entry its name or its figures give another structure.
 * **Bounds ignore transit.** CP-SAT adds a whole-hour transit allowance per task and
   0.5 Wh per grid cell, so a verified makespan of the canonical graphs sits a few hours above
   `LB`; the `lazy` / `split` makespans quoted here include it.
@@ -313,7 +345,12 @@ outcomes); `--no-solve` skips the graphs; `--time-limit` bounds each CP-SAT solv
   strips its fill comes from); `backend/tests/test_double_count.py` that none of them is a
   double count and `backend/tests/test_footprints.py` that only the four rectangle briefs'
   recorded diameters are corrected (every structure Lightning recorded in runs 2 and 3 is in
-  `backend/tests/data/recorded_structures.json`). A brief
+  `backend/tests/data/recorded_structures.json`); `backend/tests/test_sizes.py` that only
+  `low_battery_pad`'s recorded structures gain a minimum or lose a distance, each read alone
+  and beside the structures it was recorded with (every distinct structuring is in
+  `backend/tests/data/recorded_structurings.json`), and
+  `backend/tests/test_unstaffed_operations.py` that only the operations a brief's own fleet
+  cannot perform are dropped. A brief
   whose numbers drift out of its kind fails the test; a new brief must be registered in
   `BRIEF_STRUCTURES`, classified, and given its letter in `backend/examples/eval/kinds.json`,
   which `moonwright eval --briefs examples/eval` picks up for its per-kind table (the test

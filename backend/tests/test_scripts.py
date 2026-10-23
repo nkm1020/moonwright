@@ -417,8 +417,11 @@ class TestRescoreEval:
     10 m segment compacted once (out of scope under the recorded "lifts: 4", in scope under
     the brief), the live habitat plan whose berm hauls wait for no dig and move the 560 m3 box of
     the 280 m3 berm (a double count since phase 3i) and whose "12 m by 12 m" pit Lightning recorded
-    as a 12 m diameter (dug as the 113 m3 bowl: out of scope against the brief's 144 m3), a run
-    that kept no plan, a row whose plan file is gone and one whose plan file is cut short."""
+    as a 12 m diameter (dug as the 113 m3 bowl: out of scope against the brief's 144 m3), the live
+    low_battery_pad plan that dug a 16.8 m bowl the brief allows (out of scope against the 20 m
+    one Lightning recorded without its 12 m minimum, in scope since phase 3j, its stockpile's 30 m
+    distance no longer judged as a diameter), a run that kept no plan, a row whose plan file is
+    gone and one whose plan file is cut short."""
 
     COLUMNS = ("brief", "condition", "repeat", "success", "in_scope", "min_volume_share",
                "min_area_share", "plan_path")
@@ -450,11 +453,22 @@ class TestRescoreEval:
         return PlanResult.model_validate({"requirements": data["requirements"],
                                           "task_graph": data["task_graph"], "success": True})
 
+    @staticmethod
+    def battery_plan() -> PlanResult:
+        data = json.loads((Path(__file__).parent / "data" / "low_battery_pad_live.json")
+                          .read_text())
+        plan = data["plans"]["run3 ultra #1"]
+        req = {**data["requirements"][plan["job"]],
+               "source_brief": (EXAMPLES_DIR.parent / "eval" / "low_battery_pad.md").read_text()}
+        return PlanResult.model_validate({"requirements": req, "task_graph": plan["task_graph"],
+                                          "success": True})
+
     def eval_dir(self, tmp_path: Path) -> Path:
         plans = tmp_path / "plans"
         plans.mkdir(parents=True)
         (plans / "ramp.plan.json").write_text(self.ramp_plan().model_dump_json())
         (plans / "habitat.plan.json").write_text(self.habitat_plan().model_dump_json())
+        (plans / "battery.plan.json").write_text(self.battery_plan().model_dump_json())
         (plans / "cut.plan.json").write_text(self.habitat_plan().model_dump_json()[:500])
         rows = [
             ["crater_ramp", "ultra/loop_on", "1", "True", "False", "1.0", "0.25",
@@ -466,6 +480,8 @@ class TestRescoreEval:
              "plans/gone.plan.json"],
             ["habitat_berm_tight_horizon", "super/loop_on", "2", "True", "False", "1.0", "0.5",
              "plans/cut.plan.json"],
+            ["low_battery_pad", "ultra/loop_on", "1", "True", "False", "0.707", "0.25",
+             "plans/battery.plan.json"],
         ]
         lines = [",".join(self.COLUMNS)] + [",".join(r) for r in rows]
         (tmp_path / "eval.csv").write_text("\n".join(lines) + "\n")
@@ -479,11 +495,17 @@ class TestRescoreEval:
         out = tmp_path / "elsewhere" / "rescored.csv"
         assert module.main([str(source), "--out", str(out)]) == 0
         printed = capsys.readouterr().out
-        assert ("| `ultra/loop_on` | 2 | 2 (100%) | 1 (50%) -> 1 (50%) | 1 (50%) | 1 of 2 | "
-                "1 of 2 | 1 | 0 of 2 | 0 |") in printed
+        assert ("| `ultra/loop_on` | 3 | 3 (100%) | 1 (33%) -> 2 (67%) | 2 (67%) | 1 of 3 | "
+                "1 of 3 | 1 | 1 | 0 of 3 | 0 |") in printed
         assert ("| `super/loop_on` | 3 | 2 (67%) | 1 (33%) -> 1 (33%) | 1 (33%) | 0 of 2 | "
-                "0 of 2 | 0 | 0 of 2 | 3 |") in printed
-        assert "in_scope changed in 2 row(s):" in printed
+                "0 of 2 | 0 | 0 | 0 of 2 | 3 |") in printed
+        assert "in_scope changed in 3 row(s):" in printed
+        assert ("low_battery_pad ultra/loop_on #1: False -> True (min_area_share 0.25 -> "
+                "2.778)") in printed
+        assert "size judgment changed in 1 plan(s):" in printed
+        assert ("low_battery_pad ultra/loop_on #1: S1 volume 0.707 -> 1.963, area 1 -> 2.778 "
+                "(min_diameter_m 12); S2 area 0.25 -> - (diameter_m 30 dropped) (in scope False "
+                "-> True)") in printed
         assert "crater_ramp ultra/loop_on #1: False -> True (min_area_share 0.25 -> 1.0)" in printed
         assert ("habitat_berm_tight_horizon ultra/loop_on #1: True -> False (volume:S1: its "
                 "excavation tasks cover 113 of 144 m3 (78 %), under the 95 % a plan in scope "
@@ -500,8 +522,8 @@ class TestRescoreEval:
         assert list(rows[0]) == [*self.COLUMNS, "in_scope_before", "min_volume_share_before",
                                  "min_area_share_before", "supply_conflicts", "supply_hauls",
                                  "supply_advisories", "scope_gaps", "double_counts",
-                                 "double_structures", "footprint_changes"]
-        ramp, habitat, unplanned, gone, cut = rows
+                                 "double_structures", "footprint_changes", "size_changes"]
+        ramp, habitat, unplanned, gone, cut, battery = rows
         assert (ramp["in_scope_before"], ramp["in_scope"]) == ("False", "True")
         assert (ramp["min_area_share_before"], ramp["min_area_share"]) == ("0.25", "1.0")
         assert (ramp["double_counts"], ramp["footprint_changes"]) == ("0", "")
@@ -511,6 +533,13 @@ class TestRescoreEval:
         assert habitat["footprint_changes"] == "S1 volume 0.999 -> 0.785, area 0.999 -> 0.785"
         assert (habitat["in_scope"], habitat["min_volume_share"]) == ("False", "0.785")
         assert habitat["scope_gaps"].startswith("volume:S1: its excavation tasks cover 113 of 144 m3")
+        assert (habitat["size_changes"], ramp["size_changes"]) == ("", "")
+        assert (battery["in_scope_before"], battery["in_scope"]) == ("False", "True")
+        assert (battery["min_volume_share_before"], battery["min_volume_share"]) == (
+            "0.707", "1.963")
+        assert battery["size_changes"] == ("S1 volume 0.707 -> 1.963, area 1 -> 2.778 "
+                                           "(min_diameter_m 12) | S2 area 0.25 -> - (diameter_m "
+                                           "30 dropped)")
         # rows without a readable plan keep their values
         assert (unplanned["in_scope"], unplanned["supply_conflicts"]) == ("False", "0")
         assert (gone["in_scope"], gone["min_area_share"]) == ("True", "1.0")

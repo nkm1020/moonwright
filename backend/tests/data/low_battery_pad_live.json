@@ -1,0 +1,1123 @@
+{
+ "_note": "Trimmed from the saved structurings and plans of low_battery_pad in live runs 2 (docs/eval/2026-10-23-live-eval-run2/plans) and 3 (backend/out/eval_run3/plans): requirements holds each brief x repeat job's requirements as Nemotron 3.5 Lightning structured them (none records min_diameter_m though the brief allows 'any diameter between 12 m and 20 m that fits'; run 3 #1 records the stockpile '30 m north of the pad' as a 30 m diameter typed spoil_berm, runs 2 #2 and #3 as a 30 m length), plans the verified runs: run 2 ultra #1 and the four of run 3 (the job they planned from, the final task graph, in_scope and min_volume_share as the eval wrote them: each dug a bowl of about 16.8 m, 111 m3, and was judged against 20 m). source_brief omitted: it is examples/eval/low_battery_pad.md byte for byte. Task fields the rate model owns kept, basis and model estimates dropped.",
+ "requirements": {
+  "run2 #1": {
+   "site": {
+    "name": "LS-1",
+    "grid": [
+     40,
+     40
+    ],
+    "zones": [
+     {
+      "id": "Z1",
+      "center": [
+       20,
+       38
+      ],
+      "radius": 3
+     },
+     {
+      "id": "Z2",
+      "center": [
+       20,
+       2
+      ],
+      "radius": 2
+     }
+    ],
+    "depot": [
+     20,
+     2
+    ]
+   },
+   "structures": [
+    {
+     "id": "S1",
+     "type": "landing_pad",
+     "zone": "Z1",
+     "operations": [
+      "excavate",
+      "compact"
+     ],
+     "diameter_m": 20,
+     "depth_m": 0.5
+    },
+    {
+     "id": "S2",
+     "type": "stockpile",
+     "zone": "Z2",
+     "operations": [
+      "haul",
+      "compact"
+     ],
+     "diameter_m": 10,
+     "height_m": 3
+    }
+   ],
+   "robots": [
+    {
+     "id": "EX1",
+     "type": "excavator",
+     "battery_wh": 1800.0,
+     "speed_cells_per_h": 12.0
+    },
+    {
+     "id": "HL1",
+     "type": "hauler",
+     "battery_wh": 2000.0,
+     "speed_cells_per_h": 12.0
+    },
+    {
+     "id": "CP1",
+     "type": "compactor",
+     "battery_wh": 2000.0,
+     "speed_cells_per_h": 12.0
+    },
+    {
+     "id": "SV1",
+     "type": "surveyor",
+     "battery_wh": 1000.0,
+     "speed_cells_per_h": 12.0
+    }
+   ],
+   "horizon_h": 168,
+   "constraints": [
+    "Plan only what the remaining batteries can actually finish; a smaller first phase that reaches firm regolith over the central 12 m (or any diameter between 12 m and 20 m that fits) is acceptable if the full bowl does not fit, and the stockpile and compaction shrink with it.",
+    "Only one robot may work inside a zone at a time.",
+    "The surveyor checks the bowl depth before compaction."
+   ]
+  },
+  "run2 #2": {
+   "site": {
+    "name": "LS-1",
+    "grid": [
+     40,
+     40
+    ],
+    "zones": [
+     {
+      "id": "Z1",
+      "center": [
+       20,
+       38
+      ],
+      "radius": 4
+     },
+     {
+      "id": "Z2",
+      "center": [
+       20,
+       2
+      ],
+      "radius": 2
+     }
+    ],
+    "depot": [
+     20,
+     2
+    ]
+   },
+   "structures": [
+    {
+     "id": "S1",
+     "type": "landing_pad",
+     "zone": "Z1",
+     "operations": [
+      "excavate",
+      "compact"
+     ],
+     "diameter_m": 20,
+     "depth_m": 0.5
+    },
+    {
+     "id": "S2",
+     "type": "stockpile",
+     "zone": "Z2",
+     "operations": [
+      "haul",
+      "compact"
+     ],
+     "length_m": 30
+    }
+   ],
+   "robots": [
+    {
+     "id": "EX1",
+     "type": "excavator",
+     "battery_wh": 1800.0,
+     "speed_cells_per_h": 12.0
+    },
+    {
+     "id": "HL1",
+     "type": "hauler",
+     "battery_wh": 2000.0,
+     "speed_cells_per_h": 12.0
+    },
+    {
+     "id": "CP1",
+     "type": "compactor",
+     "battery_wh": 2000.0,
+     "speed_cells_per_h": 12.0
+    },
+    {
+     "id": "SV1",
+     "type": "surveyor",
+     "battery_wh": 1000.0,
+     "speed_cells_per_h": 12.0
+    }
+   ],
+   "horizon_h": 168,
+   "constraints": [
+    "Plan only what remaining batteries can finish; smaller first phase to firm regolith over central 12 m acceptable if full bowl exceeds budget",
+    "Only one robot may work inside a zone at a time",
+    "Surveyor checks bowl depth before compaction"
+   ]
+  },
+  "run2 #3": {
+   "site": {
+    "name": "LS-1",
+    "grid": [
+     40,
+     40
+    ],
+    "zones": [
+     {
+      "id": "Z1",
+      "center": [
+       20,
+       38
+      ],
+      "radius": 3
+     },
+     {
+      "id": "Z2",
+      "center": [
+       20,
+       2
+      ],
+      "radius": 2
+     }
+    ],
+    "depot": [
+     20,
+     2
+    ]
+   },
+   "structures": [
+    {
+     "id": "S1",
+     "type": "landing_pad",
+     "zone": "Z1",
+     "operations": [
+      "excavate",
+      "compact"
+     ],
+     "diameter_m": 20,
+     "depth_m": 0.5
+    },
+    {
+     "id": "S2",
+     "type": "stockpile",
+     "zone": "Z2",
+     "operations": [
+      "haul",
+      "compact"
+     ],
+     "length_m": 30
+    }
+   ],
+   "robots": [
+    {
+     "id": "EX1",
+     "type": "excavator",
+     "battery_wh": 1800.0,
+     "speed_cells_per_h": 12.0
+    },
+    {
+     "id": "HL1",
+     "type": "hauler",
+     "battery_wh": 2000.0,
+     "speed_cells_per_h": 12.0
+    },
+    {
+     "id": "CP1",
+     "type": "compactor",
+     "battery_wh": 2000.0,
+     "speed_cells_per_h": 12.0
+    },
+    {
+     "id": "SV1",
+     "type": "surveyor",
+     "battery_wh": 1000.0,
+     "speed_cells_per_h": 12.0
+    }
+   ],
+   "horizon_h": 168,
+   "constraints": [
+    "Plan only what remaining batteries can finish; smaller first phase to firm regolith over central 12 m acceptable if full bowl exceeds budget",
+    "Only one robot may work inside a zone at a time",
+    "Surveyor checks bowl depth before compaction"
+   ]
+  },
+  "run3 #1": {
+   "site": {
+    "name": "LS-1",
+    "grid": [
+     40,
+     40
+    ],
+    "zones": [
+     {
+      "id": "Z1",
+      "center": [
+       20,
+       38
+      ],
+      "radius": 3
+     },
+     {
+      "id": "Z2",
+      "center": [
+       20,
+       2
+      ],
+      "radius": 2
+     }
+    ],
+    "depot": [
+     20,
+     2
+    ]
+   },
+   "structures": [
+    {
+     "id": "S1",
+     "type": "landing_pad_bowl",
+     "zone": "Z1",
+     "operations": [
+      "excavate",
+      "compact"
+     ],
+     "diameter_m": 20,
+     "depth_m": 0.5
+    },
+    {
+     "id": "S2",
+     "type": "spoil_berm",
+     "zone": "Z2",
+     "operations": [
+      "haul",
+      "compact"
+     ],
+     "diameter_m": 30
+    }
+   ],
+   "robots": [
+    {
+     "id": "EX1",
+     "type": "excavator",
+     "battery_wh": 1800.0,
+     "speed_cells_per_h": 12.0
+    },
+    {
+     "id": "HL1",
+     "type": "hauler",
+     "battery_wh": 2000.0,
+     "speed_cells_per_h": 12.0
+    },
+    {
+     "id": "CP1",
+     "type": "compactor",
+     "battery_wh": 2000.0,
+     "speed_cells_per_h": 12.0
+    },
+    {
+     "id": "SV1",
+     "type": "surveyor",
+     "battery_wh": 1000.0,
+     "speed_cells_per_h": 12.0
+    }
+   ],
+   "horizon_h": 168,
+   "constraints": [
+    "Only one robot may work inside a zone at a time",
+    "Surveyor checks bowl depth before compaction",
+    "Plan only what remaining batteries can actually finish; smaller first phase acceptable if full bowl does not fit"
+   ]
+  },
+  "run3 #2": {
+   "site": {
+    "name": "LS-1",
+    "grid": [
+     40,
+     40
+    ],
+    "zones": [
+     {
+      "id": "Z1",
+      "center": [
+       20,
+       38
+      ],
+      "radius": 3
+     },
+     {
+      "id": "Z2",
+      "center": [
+       20,
+       2
+      ],
+      "radius": 2
+     }
+    ],
+    "depot": [
+     20,
+     2
+    ]
+   },
+   "structures": [
+    {
+     "id": "S1",
+     "type": "landing_pad_bowl",
+     "zone": "Z1",
+     "operations": [
+      "excavate",
+      "compact"
+     ],
+     "diameter_m": 20,
+     "depth_m": 0.5
+    },
+    {
+     "id": "S2",
+     "type": "stockpile",
+     "zone": "Z2",
+     "operations": [
+      "haul",
+      "compact"
+     ],
+     "note": "Spoil stockpile 30 m north of pad, shaped for later berm fill"
+    }
+   ],
+   "robots": [
+    {
+     "id": "EX1",
+     "type": "excavator",
+     "battery_wh": 1800.0,
+     "speed_cells_per_h": 12.0
+    },
+    {
+     "id": "HL1",
+     "type": "hauler",
+     "battery_wh": 2000.0,
+     "speed_cells_per_h": 12.0
+    },
+    {
+     "id": "CP1",
+     "type": "compactor",
+     "battery_wh": 2000.0,
+     "speed_cells_per_h": 12.0
+    },
+    {
+     "id": "SV1",
+     "type": "surveyor",
+     "battery_wh": 1000.0,
+     "speed_cells_per_h": 12.0
+    }
+   ],
+   "horizon_h": 168,
+   "constraints": [
+    "Only one robot may work inside a zone at a time",
+    "Surveyor checks bowl depth before compaction",
+    "Plan only what remaining batteries can actually finish; smaller first phase reaching firm regolith over central 12 m diameter acceptable if full bowl does not fit"
+   ]
+  },
+  "run3 #3": {
+   "site": {
+    "name": "LS-1",
+    "grid": [
+     40,
+     40
+    ],
+    "zones": [
+     {
+      "id": "Z1",
+      "center": [
+       20,
+       38
+      ],
+      "radius": 3
+     },
+     {
+      "id": "Z2",
+      "center": [
+       20,
+       2
+      ],
+      "radius": 2
+     }
+    ],
+    "depot": [
+     20,
+     2
+    ]
+   },
+   "structures": [
+    {
+     "id": "S1",
+     "type": "landing_pad_bowl",
+     "zone": "Z1",
+     "operations": [
+      "excavate",
+      "compact"
+     ],
+     "diameter_m": 20,
+     "depth_m": 0.5
+    },
+    {
+     "id": "S2",
+     "type": "spoil_stockpile",
+     "zone": "Z2",
+     "operations": [
+      "haul",
+      "compact"
+     ],
+     "diameter_m": 5,
+     "height_m": 3
+    }
+   ],
+   "robots": [
+    {
+     "id": "EX1",
+     "type": "excavator",
+     "battery_wh": 1800.0,
+     "speed_cells_per_h": 12.0
+    },
+    {
+     "id": "HL1",
+     "type": "hauler",
+     "battery_wh": 2000.0,
+     "speed_cells_per_h": 12.0
+    },
+    {
+     "id": "CP1",
+     "type": "compactor",
+     "battery_wh": 2000.0,
+     "speed_cells_per_h": 12.0
+    },
+    {
+     "id": "SV1",
+     "type": "surveyor",
+     "battery_wh": 1000.0,
+     "speed_cells_per_h": 12.0
+    }
+   ],
+   "horizon_h": 168,
+   "constraints": [
+    "Only one robot may work inside a zone at a time.",
+    "Surveyor checks bowl depth before compaction.",
+    "Plan only what remaining batteries can finish; smaller first phase acceptable if full bowl does not fit."
+   ]
+  }
+ },
+ "plans": {
+  "run2 ultra #1": {
+   "job": "run2 #1",
+   "task_graph": {
+    "tasks": [
+     {
+      "id": "T1",
+      "name": "survey landing pad S1",
+      "robot_type": "surveyor",
+      "duration_h": 2,
+      "energy_wh": 110.8,
+      "zone": "Z1",
+      "after": [],
+      "structure": "S1",
+      "quantity": 221.7,
+      "unit": "m2"
+     },
+     {
+      "id": "T2",
+      "name": "excavate landing pad S1",
+      "robot_type": "excavator",
+      "duration_h": 16,
+      "energy_wh": 1772.8,
+      "zone": "Z1",
+      "after": [
+       "T1"
+      ],
+      "structure": "S1",
+      "quantity": 110.8,
+      "unit": "m3"
+     },
+     {
+      "id": "T3",
+      "name": "inspect landing pad S1 bowl depth",
+      "robot_type": "surveyor",
+      "duration_h": 2,
+      "energy_wh": 110.8,
+      "zone": "Z1",
+      "after": [
+       "T2"
+      ],
+      "structure": "S1",
+      "quantity": 221.7,
+      "unit": "m2"
+     },
+     {
+      "id": "T4",
+      "name": "compact landing pad S1",
+      "robot_type": "compactor",
+      "duration_h": 9,
+      "energy_wh": 886.8,
+      "zone": "Z1",
+      "after": [
+       "T3"
+      ],
+      "structure": "S1",
+      "quantity": 221.7,
+      "unit": "m2"
+     },
+     {
+      "id": "T5",
+      "name": "survey stockpile S2",
+      "robot_type": "surveyor",
+      "duration_h": 1,
+      "energy_wh": 39.3,
+      "zone": "Z2",
+      "after": [
+       "T1"
+      ],
+      "structure": "S2",
+      "quantity": 78.54,
+      "unit": "m2"
+     },
+     {
+      "id": "T6",
+      "name": "haul excavated material to stockpile S2",
+      "robot_type": "hauler",
+      "duration_h": 10,
+      "energy_wh": 775.6,
+      "zone": "Z2",
+      "after": [
+       "T2",
+       "T5"
+      ],
+      "structure": "S2",
+      "quantity": 110.8,
+      "unit": "m3"
+     },
+     {
+      "id": "T7",
+      "name": "compact stockpile S2",
+      "robot_type": "compactor",
+      "duration_h": 4,
+      "energy_wh": 314.2,
+      "zone": "Z2",
+      "after": [
+       "T6"
+      ],
+      "structure": "S2",
+      "quantity": 78.54,
+      "unit": "m2"
+     }
+    ]
+   },
+   "in_scope": false,
+   "min_volume_share": 0.705
+  },
+  "run3 ultra #1": {
+   "job": "run3 #1",
+   "task_graph": {
+    "tasks": [
+     {
+      "id": "T1",
+      "name": "survey landing pad bowl",
+      "robot_type": "surveyor",
+      "duration_h": 3,
+      "energy_wh": 157.1,
+      "zone": "Z1",
+      "after": [],
+      "structure": "S1",
+      "quantity": 314.16,
+      "unit": "m2"
+     },
+     {
+      "id": "T2",
+      "name": "excavate landing pad bowl",
+      "robot_type": "excavator",
+      "duration_h": 16,
+      "energy_wh": 1776.0,
+      "zone": "Z1",
+      "after": [
+       "T1"
+      ],
+      "structure": "S1",
+      "quantity": 111.0,
+      "unit": "m3"
+     },
+     {
+      "id": "T3",
+      "name": "inspect bowl depth",
+      "robot_type": "surveyor",
+      "duration_h": 1,
+      "energy_wh": 75.0,
+      "zone": "Z1",
+      "after": [
+       "T2"
+      ],
+      "structure": "S1",
+      "quantity": null,
+      "unit": null
+     },
+     {
+      "id": "T4",
+      "name": "compact landing pad bowl",
+      "robot_type": "compactor",
+      "duration_h": 13,
+      "energy_wh": 1256.6,
+      "zone": "Z1",
+      "after": [
+       "T3"
+      ],
+      "structure": "S1",
+      "quantity": 314.16,
+      "unit": "m2"
+     },
+     {
+      "id": "T5",
+      "name": "survey spoil berm",
+      "robot_type": "surveyor",
+      "duration_h": 5,
+      "energy_wh": 353.4,
+      "zone": "Z2",
+      "after": [
+       "T3"
+      ],
+      "structure": "S2",
+      "quantity": 706.86,
+      "unit": "m2"
+     },
+     {
+      "id": "T6",
+      "name": "haul spoil to berm",
+      "robot_type": "hauler",
+      "duration_h": 10,
+      "energy_wh": 777.0,
+      "zone": "Z2",
+      "after": [
+       "T2",
+       "T5"
+      ],
+      "structure": "S2",
+      "quantity": 111.0,
+      "unit": "m3"
+     },
+     {
+      "id": "T7",
+      "name": "compact spoil berm",
+      "robot_type": "compactor",
+      "duration_h": 7,
+      "energy_wh": 707.4,
+      "zone": "Z2",
+      "after": [
+       "T6"
+      ],
+      "structure": "S2",
+      "quantity": 176.84,
+      "unit": "m2"
+     },
+     {
+      "id": "T8",
+      "name": "inspect landing pad bowl",
+      "robot_type": "surveyor",
+      "duration_h": 1,
+      "energy_wh": 75.0,
+      "zone": "Z1",
+      "after": [
+       "T4",
+       "T5"
+      ],
+      "structure": "S1",
+      "quantity": null,
+      "unit": null
+     },
+     {
+      "id": "T9",
+      "name": "inspect spoil berm",
+      "robot_type": "surveyor",
+      "duration_h": 1,
+      "energy_wh": 75.0,
+      "zone": "Z2",
+      "after": [
+       "T7",
+       "T8"
+      ],
+      "structure": "S2",
+      "quantity": null,
+      "unit": null
+     }
+    ]
+   },
+   "in_scope": false,
+   "min_volume_share": 0.707
+  },
+  "run3 super #1": {
+   "job": "run3 #1",
+   "task_graph": {
+    "tasks": [
+     {
+      "id": "T1",
+      "name": "survey landing pad area",
+      "robot_type": "surveyor",
+      "duration_h": 3,
+      "energy_wh": 157.0,
+      "zone": "Z1",
+      "after": [],
+      "structure": "S1",
+      "quantity": 314.0,
+      "unit": "m2"
+     },
+     {
+      "id": "T2",
+      "name": "survey berm area",
+      "robot_type": "surveyor",
+      "duration_h": 5,
+      "energy_wh": 353.5,
+      "zone": "Z2",
+      "after": [],
+      "structure": "S2",
+      "quantity": 707.0,
+      "unit": "m2"
+     },
+     {
+      "id": "T3",
+      "name": "survey depth check",
+      "robot_type": "surveyor",
+      "duration_h": 1,
+      "energy_wh": 75.0,
+      "zone": "Z1",
+      "after": [
+       "T4"
+      ],
+      "structure": "S1",
+      "quantity": null,
+      "unit": null
+     },
+     {
+      "id": "T4",
+      "name": "excavate landing pad bowl",
+      "robot_type": "excavator",
+      "duration_h": 16,
+      "energy_wh": 1776.0,
+      "zone": "Z1",
+      "after": [
+       "T1"
+      ],
+      "structure": "S1",
+      "quantity": 111.0,
+      "unit": "m3"
+     },
+     {
+      "id": "T5",
+      "name": "haul spoil to berm",
+      "robot_type": "hauler",
+      "duration_h": 10,
+      "energy_wh": 777.0,
+      "zone": "Z2",
+      "after": [
+       "T4"
+      ],
+      "structure": "S2",
+      "quantity": 111.0,
+      "unit": "m3"
+     },
+     {
+      "id": "T6",
+      "name": "compact landing pad area",
+      "robot_type": "compactor",
+      "duration_h": 13,
+      "energy_wh": 1256.0,
+      "zone": "Z1",
+      "after": [
+       "T3"
+      ],
+      "structure": "S1",
+      "quantity": 314.0,
+      "unit": "m2"
+     },
+     {
+      "id": "T7",
+      "name": "compact berm area",
+      "robot_type": "compactor",
+      "duration_h": 7,
+      "energy_wh": 708.0,
+      "zone": "Z2",
+      "after": [
+       "T5",
+       "T2"
+      ],
+      "structure": "S2",
+      "quantity": 177.0,
+      "unit": "m2"
+     },
+     {
+      "id": "T8",
+      "name": "inspect landing pad",
+      "robot_type": "surveyor",
+      "duration_h": 1,
+      "energy_wh": 75.0,
+      "zone": "Z1",
+      "after": [
+       "T6"
+      ],
+      "structure": "S1",
+      "quantity": null,
+      "unit": null
+     },
+     {
+      "id": "T9",
+      "name": "inspect berm",
+      "robot_type": "surveyor",
+      "duration_h": 1,
+      "energy_wh": 75.0,
+      "zone": "Z2",
+      "after": [
+       "T7"
+      ],
+      "structure": "S2",
+      "quantity": null,
+      "unit": null
+     }
+    ]
+   },
+   "in_scope": false,
+   "min_volume_share": 0.707
+  },
+  "run3 ultra #3": {
+   "job": "run3 #3",
+   "task_graph": {
+    "tasks": [
+     {
+      "id": "T1",
+      "name": "survey landing pad bowl",
+      "robot_type": "surveyor",
+      "duration_h": 3,
+      "energy_wh": 157.1,
+      "zone": "Z1",
+      "after": [],
+      "structure": "S1",
+      "quantity": 314.159,
+      "unit": "m2"
+     },
+     {
+      "id": "T2",
+      "name": "excavate landing pad bowl",
+      "robot_type": "excavator",
+      "duration_h": 16,
+      "energy_wh": 1776.0,
+      "zone": "Z1",
+      "after": [
+       "T1"
+      ],
+      "structure": "S1",
+      "quantity": 111.0,
+      "unit": "m3"
+     },
+     {
+      "id": "T3",
+      "name": "inspect bowl depth",
+      "robot_type": "surveyor",
+      "duration_h": 1,
+      "energy_wh": 75.0,
+      "zone": "Z1",
+      "after": [
+       "T2"
+      ],
+      "structure": "S1",
+      "quantity": null,
+      "unit": null
+     },
+     {
+      "id": "T4",
+      "name": "compact landing pad bowl",
+      "robot_type": "compactor",
+      "duration_h": 13,
+      "energy_wh": 1256.6,
+      "zone": "Z1",
+      "after": [
+       "T3"
+      ],
+      "structure": "S1",
+      "quantity": 314.159,
+      "unit": "m2"
+     },
+     {
+      "id": "T5",
+      "name": "inspect landing pad bowl",
+      "robot_type": "surveyor",
+      "duration_h": 1,
+      "energy_wh": 75.0,
+      "zone": "Z1",
+      "after": [
+       "T4"
+      ],
+      "structure": "S1",
+      "quantity": null,
+      "unit": null
+     },
+     {
+      "id": "T6",
+      "name": "haul spoil to stockpile",
+      "robot_type": "hauler",
+      "duration_h": 5,
+      "energy_wh": 412.3,
+      "zone": "Z2",
+      "after": [
+       "T2"
+      ],
+      "structure": "S2",
+      "quantity": 58.9049,
+      "unit": "m3"
+     },
+     {
+      "id": "T7",
+      "name": "compact spoil stockpile",
+      "robot_type": "compactor",
+      "duration_h": 1,
+      "energy_wh": 78.5,
+      "zone": "Z2",
+      "after": [
+       "T6"
+      ],
+      "structure": "S2",
+      "quantity": 19.6349,
+      "unit": "m2"
+     },
+     {
+      "id": "T8",
+      "name": "inspect spoil stockpile",
+      "robot_type": "surveyor",
+      "duration_h": 1,
+      "energy_wh": 75.0,
+      "zone": "Z2",
+      "after": [
+       "T7"
+      ],
+      "structure": "S2",
+      "quantity": null,
+      "unit": null
+     }
+    ]
+   },
+   "in_scope": false,
+   "min_volume_share": 0.707
+  },
+  "run3 super #3": {
+   "job": "run3 #3",
+   "task_graph": {
+    "tasks": [
+     {
+      "id": "T1",
+      "name": "excavate landing pad bowl",
+      "robot_type": "excavator",
+      "duration_h": 16,
+      "energy_wh": 1776.0,
+      "zone": "Z1",
+      "after": [],
+      "structure": "S1",
+      "quantity": 111.0,
+      "unit": "m3"
+     },
+     {
+      "id": "T2",
+      "name": "haul spoil to stockpile",
+      "robot_type": "hauler",
+      "duration_h": 5,
+      "energy_wh": 413.0,
+      "zone": "Z2",
+      "after": [
+       "T1"
+      ],
+      "structure": "S2",
+      "quantity": 59.0,
+      "unit": "m3"
+     },
+     {
+      "id": "T3",
+      "name": "survey bowl depth",
+      "robot_type": "surveyor",
+      "duration_h": 1,
+      "energy_wh": 75.0,
+      "zone": "Z1",
+      "after": [
+       "T1"
+      ],
+      "structure": "S1",
+      "quantity": null,
+      "unit": null
+     },
+     {
+      "id": "T4",
+      "name": "compact landing pad bowl area",
+      "robot_type": "compactor",
+      "duration_h": 13,
+      "energy_wh": 1256.0,
+      "zone": "Z1",
+      "after": [
+       "T3"
+      ],
+      "structure": "S1",
+      "quantity": 314.0,
+      "unit": "m2"
+     },
+     {
+      "id": "T5",
+      "name": "compact spoil stockpile area",
+      "robot_type": "compactor",
+      "duration_h": 1,
+      "energy_wh": 78.4,
+      "zone": "Z2",
+      "after": [
+       "T2"
+      ],
+      "structure": "S2",
+      "quantity": 19.6,
+      "unit": "m2"
+     },
+     {
+      "id": "T6",
+      "name": "inspect landing pad bowl",
+      "robot_type": "surveyor",
+      "duration_h": 1,
+      "energy_wh": 75.0,
+      "zone": "Z1",
+      "after": [
+       "T4"
+      ],
+      "structure": "S1",
+      "quantity": null,
+      "unit": null
+     },
+     {
+      "id": "T7",
+      "name": "inspect spoil stockpile",
+      "robot_type": "surveyor",
+      "duration_h": 1,
+      "energy_wh": 75.0,
+      "zone": "Z2",
+      "after": [
+       "T5"
+      ],
+      "structure": "S2",
+      "quantity": null,
+      "unit": null
+     }
+    ]
+   },
+   "in_scope": false,
+   "min_volume_share": 0.707
+  }
+ }
+}

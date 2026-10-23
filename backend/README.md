@@ -507,6 +507,154 @@ Ultra sizes a berm as its box, twice the triangular section the volume check mea
   plans, already rejected by supply) is no double count, its base width being no number the
   brief states, and depleted_excavators ultra #2 (159 %) keeps its advisory.
 
+## Pipeline notes (phase 3j)
+
+Today's live habitat berm demo sent its repairs in circles over three of Lightning's structuring
+slips, and the kind-E brief was judged against a size it does not require. Each is now corrected
+at the structure stage, written into the requirements with a note, and read the same way at
+judge time.
+
+* **An operation the fleet cannot perform is dropped** (`structure.correct_operations`,
+  `operation_warnings`). In tries 2 and 3 of the demo Lightning listed `sinter` on the berm,
+  which the brief never asks for and no robot of the printer-less fleet can do; the structure
+  step warned that "no sinter task will be required of it", but the requirements kept the
+  operation, so Ultra planned a printer task and the validator answered `capability:T14` twice
+  (try 1's final graph sinters with a compactor). Across runs 2 and 3 and the demo, 31 plans
+  started from requirements listing such an operation (sinter on shielding_mound,
+  solar_array_pad, four_mast_pads, tight_battery and the habitat berm; a spoil berm's haul on
+  instrument_pad, whose fleet has no hauler): 9 hit `capability:` verdicts (11 rounds) and 4
+  final graphs carry a stand-in task ("sinter/print surface" by a compactor, "haul SPOIL1" by
+  an excavator). Every operation whose robot type the fleet lacks (sinter -> printer, compact
+  -> compactor, excavate and grade -> excavator, haul -> hauler, survey -> surveyor) is now
+  dropped, with a note that keeps what the warning said: `structure S2: operations sinter
+  dropped: the fleet has no printer, so no sinter task will be required of it (add a printer
+  and the operation again to plan it)`. `site_warnings` no longer carries the old line; the
+  validator still never requires an unstaffed operation listed by hand, and the requirements
+  card agrees with it: an operation chip reads "not required" when the card's own fleet has no
+  robot for it, and a dropped one stays visible, dashed, as "dropped".
+* **A source structure's haul is the haul its digs feed** (`validate.source_hauls`). The
+  coverage contract tags a haul with the structure that receives it, so the borrow strip whose
+  digs fed the berm read `S2 (borrow_strip) lists haul ... but no task hauls to it; add a
+  hauler task tagged S2`, and the demo repairs invented a haul for the strip (try 1: another
+  120 m3 of strip fill into the berm zone, tagged with the strip; try 3 lost the strip's haul
+  by re-tagging its hauls to the berm, as the rules say). The `haul` a structure dug for its
+  material lists is now also met by a hauler task that waits, through any chain of `after`
+  edges, for a dig serving it (`rates.ancestors`, `rates.is_dig`, `tags.serving_tasks`). Dug
+  takes positive evidence (`validate._source`): a body its dimensions dig (a bowl, a box, a
+  trench), or with no body a type that names a dig (`borrow_pit`); never a placed body, a pile,
+  a type that names fill (mound, bridge, embankment, crossing) or a placed layer
+  (`thickness_m`, `height_m`), whose haul is still the fill brought onto it. The first cut
+  counted every structure that was neither a body nor a pile, and the review found the false
+  pass that left: the shielding mound (no volume shape; Lightning lists `excavate` on it in 4
+  of 6 structurings, and 6 saved final graphs dig 2 to 52 m3 tagged with it) validated with its
+  fill haul swapped for a haul of its 2.5 m3 foundation spoil to the borrow pit, and its hint
+  asked for that edge. Of the structures Lightning recorded with a listed haul, the crater
+  ramps, the dug borrow strips and habitat_foundation's drainage trench count as dug; the mound, the
+  earth bridge, the solar pad's fill layer, the berms, the lanes and the apron do not. Try 1's
+  third round now validates, try 3's verdict is `supply:T15` alone (a 46.9 m3 haul from the
+  depot); no other verdict of the 273 saved plans of runs 2 and 3 and the demo moves on it.
+  Where the haul still lacks, the hint says what is true and asks for the edge: `S3
+  (borrow_strip) lists haul (an operation the brief asks for) but no hauler task is tagged S3
+  or waits for its digs (T6, T7); a structure dug for its material is hauled by the hauls that
+  wait for its digs, so make the haul of that material wait for them, tagged with the structure
+  it fills, rather than adding a haul tagged with the dug structure.` (detail `... (its
+  operations list haul; no haul waits for its digs T6, T7)`; with nothing dug, `add an
+  excavator task tagged S3 and make the haul of its material wait for the dig`).
+* **A hint quotes the structure's own entry, never another's** (`tags.entry_owners`,
+  `validate.brief_evidence`). Both strip hints quoted "about 280 cubic metres of fill", the
+  berm's entry: in "2. Plume berm: ... built from the pit spoil plus the borrow strip" the
+  strip's two type words outscored the berm's one. A line shaped like an entry now belongs to
+  the structure the name before its colon names best (or, when that name is none of the
+  types, the one whose recorded size the line states: Lightning typed crater_ramp's "3. Floor
+  landing: a compacted 8 m by 8 m pad" `pad`; failing that, the one whose recorded length and
+  height it states: run 3 typed propellant_pit_and_berm's "2. Protective berm: a 30 m arc ...,
+  2.5 m high" `borrow_strip` with a 4 m width the brief never states, and the review saw the
+  pit's haul quote it): quoted for it whatever its body names, never for another; another
+  structure's multi-word name in a line is no ask ("plus the borrow strip" does not ask to
+  strip the berm). Over the 132 saved structurings of runs 2 and 3 the quote changes for 81
+  structure-operation pairs in 39 structurings (24 brief-repeat pairs across the two runs): 58
+  that quoted another structure's entry, or its name ("built from a borrow strip" as the
+  berm's grade), now quote none (the shielding mound's lifts no longer stand for the borrow
+  pit's compaction, the haul lane's strip for the pit's grade), and 23 now quote the
+  structure's own entry (the habitat berm's haul its fill, depleted_excavators' dust berm,
+  typed `borrow_strip`, its own compaction). No quote of the 132 comes from an entry its name
+  or its figures give another structure.
+* **A minimum the brief states anywhere is read** (`rates.stated_minimums`, `with_brief_sizes`,
+  `structure.correct_sizes`). low_battery_pad (kind E) allows "any diameter between 12 m and
+  20 m that fits" in a constraint; Lightning recorded no `min_diameter_m` in 6 of 6
+  structurings of runs 2 and 3, and the eval judged the plans that dug a 16.8 m bowl (111 m3,
+  inside the allowed range) against 20 m: 70 %, 0 of 6 in scope in run 3. Worse, the validator
+  rejected the re-scopes the brief allows: 16 `volume:S1` verdicts in 8 of the 12 runs, the 12 m
+  bowl's 56.5 m3 read as 36 % of the 20 m one and a 16 m bowl's 100.5 m3 as 63 %, until the
+  repairs ran out (run 2 super #1 ended on it). The reader takes a range ("between A m and B
+  m", "A to B m", "A-B m"; "from A to B" only after a verb that shrinks) or a smallest size
+  ("may be reduced to A m", "down to A m", "at least A m", "no smaller than A m") bound to the
+  nearest dimension word (diameter, length, width, depth, deep, long, wide; "excavated down to
+  0.5 m" is a depth reached, "keep at least 30 m from the pad" binds nothing, "2 m high" binds
+  a dimension it does not read). A subject its own segment (cut at commas, brackets and
+  conjunctions) gives it decides first: the structure that word names by its type or by the
+  name its entry gives it ("the bowl" is the pad Lightning typed `landing_pad` under "Landing
+  pad bowl"), none when it names none ("the apron is at least 5 m wide"). Else the nearest
+  structure its sentence names takes it: its own segment's, else an earlier one's, the entry's
+  name when the search reaches it; two structures named by different words leave it to none.
+  With no name in its sentence the entry it stands in takes it, else a range goes to the only
+  structure recorded at its top and a smallest size, on a line naming no structure at all, to
+  the one structure that records that dimension. It writes `min_<dimension>_m` only below the
+  recorded size and where none is recorded: `structure S1: min_diameter_m none -> 12: the
+  brief allows "any diameter between 12 m and 20 m that fits"` (amber). The range sits in a
+  parenthetical, and nothing before it in its sentence names a structure (the bowl and the
+  stockpile come after it), so its 20 m top picks the pad; run 2 #1 recorded the stockpile 10
+  m across. The review probed the first cut with sentences a judge could
+  type and each wrote a minimum the brief never allows: "keeps its full 20 m diameter but its
+  depth may be reduced to 0.3 m" read as a 0.3 m diameter (the bowl's floor fell to nothing and
+  a 5 m3 dig validated), "loose regolith at least 40 cm deep" in the Site paragraph, "subgrade
+  compacted to a depth of at least 0.3 m", "with a crest at least 2 m wide", "on a key trench at
+  least 1 m wide", "extend the existing road from 40 m to 60 m long", "the haul length to the
+  berm is at least 40 m", "the stockpile next to the pad may shrink to 10 m in diameter" (the
+  pad's), and the pad's own entry "with a spoil berm along its north edge at least 2 m wide".
+  Probing the fix found three more of the kind: "the apron is at least 5 m wide" beside a
+  square pad (the pad's), "at least 0.5 m of compacted fill" (a 0.5 m diameter) and "dig the
+  pad down to 0.4 m". None is read now: the nearest word binds, the Site, Fleet and Deadline
+  paragraphs are not read, a quantity of something is no size, a clause about a part, the
+  ground, a treatment or the way between structures sizes only a structure whose type has
+  that word (a `cable_trench` for "the trench may be reduced to 100 m long"), and the subject
+  comes from the statement's own segment and sentence (`tests/test_sizes.py`).
+* **A size the brief gives only as a distance is dropped** (`rates.distance_figures`). Run 3
+  #1 recorded low_battery_pad's "pad spoil placed in a compact pile 30 m north of the pad" as a
+  30 m diameter typed `spoil_berm` (a berm is never stockpile-like, so its compaction was
+  judged over 707 m2: 25 %), runs 2 #2 and #3 as a 30 m length. A recorded length that the
+  structure's own entry (the line `tags.entry_owners` gives it) states only inside "N m
+  north/south/east/west of", "N m from", "N m away" or "N m beyond" is dropped: `structure S2:
+  diameter_m 30 dropped: the brief's entry for S2 states 30 m only as a distance ("30 m north
+  of the pad")` (amber; it stands for the "has no dimensions" note, since the brief gives the
+  stockpile no size to add). A span or an extent is a size: "120 m from the depot to the pad"
+  (a road's length; the review saw it dropped and the road's 600 m2 no longer judged), "runs 60
+  m from the array", "a ring extending 5 m beyond the pad edge"; and a constraint is no entry
+  ("Keep the blast berm 30 m from the landing pad edge" outnamed a berm's own "30 m long"
+  entry). The other 21 briefs' recorded structures are untouched by both readers, each read
+  alone (`tests/data/recorded_structures.json`) and beside the structures it was recorded with
+  (`tests/data/recorded_structurings.json`, the 102 distinct structurings of runs 2 and 3).
+* **Judge time** (`dims_volumes`, `_work_area`, `volume_coverages`, `area_coverages`, their
+  shares: `brief_sizes=True`). The volume conflict, `scope_gaps`, the eval row and
+  `rescore_eval.py` read both sizes from the brief whenever it is known, so a saved plan is
+  judged against the 12 m floor; `brief_sizes=False` judges the sizes as recorded and the
+  rescore lists the plans whose judgment moves (`size_changes`). Rescored with the current
+  code (the 3i rescore's numbers in brackets):
+
+  | run, condition | verified | verified in scope, before -> after | of those, no supply or double-count conflict | size judgment changed |
+  | --- | --- | --- | --- | --- |
+  | run 2 `ultra/loop_on` | 56 of 66 | 49 -> 46 (45) | 33 (32) | 3 |
+  | run 2 `super/loop_on` | 51 of 66 | 38 -> 38 (38) | 26 (26) | 3 |
+  | run 3 `ultra/loop_on` | 59 of 66 | 50 -> 51 (49) | 49 (47) | 3 |
+  | run 3 `super/loop_on` | 56 of 66 | 44 -> 42 (40) | 41 (39) | 3 |
+
+  The five verified low_battery_pad plans (run 2 ultra #1; run 3 ultra and super #1 and #3)
+  move into scope: their 16.8 m bowls read 196 % of the 12 m floor, and run 3 #1's 30 m
+  "stockpile" is no longer judged (its two plans need both readers: their `spoil_berm`
+  compaction read 25 % of 707 m2). No row of another brief changes, and the fixes the review
+  asked for move no rescored row: every saved structuring reads as it did. Of the 273 saved
+  plans' final graphs, run 2 super #1's `volume:S1` (its 12 m bowl) is now clean.
+
 ## Evaluation flags
 
     uv run moonwright eval --briefs examples/eval --repeat 3 --loop both --models ultra,super --thinking auto \

@@ -23,18 +23,25 @@ the requirements the run planned from (their ``source_brief`` included):
 * ``footprint_changes`` (phase 3i): every structure whose judged volume or area share moves
   when a recorded diameter is read as the rectangle its entry in the brief states
   (:func:`moonwright.pipeline.rates.footprint`; ``brief_footprint=False`` judges the
-  footprint as recorded), as recorded -> as judged (``F1 volume 1 -> 0.785``).
+  footprint as recorded), as recorded -> as judged (``F1 volume 1 -> 0.785``);
+* ``size_changes`` (phase 3j): every structure whose judged volume or area share moves when
+  the sizes the brief states are read (:func:`moonwright.pipeline.rates.with_brief_sizes`: a
+  smaller size it allows anywhere, a figure its entry gives only as a distance;
+  ``brief_sizes=False`` judges the sizes as recorded), as recorded -> as judged, with what
+  was read (``S1 volume 0.707 -> 1.963 (min_diameter_m 12)``, ``S2 area 0.25 -> -
+  (diameter_m 30 dropped)``).
 
 It prints one row per condition (runs, verified, verified in scope before -> after, of those
 the ones neither the supply check nor the double-count check rejects, verified plans the
 supply check would now reject, verified plans the double-count check would now reject, plans
-whose footprint judgment changed, verified plans with a supply advisory), the rows whose
-``in_scope`` changed, the verified plans the supply and the double-count checks reject and
-the plans whose footprint judgment changed, and writes ``eval.rescored.csv`` next to the
-input (``--out`` elsewhere): the input's columns with the three scope columns recomputed in
-place, then ``in_scope_before``, ``min_volume_share_before``, ``min_area_share_before``,
-``supply_conflicts``, ``supply_hauls``, ``supply_advisories``, ``scope_gaps`` (the gap lines
-joined by `` | ``), ``double_counts``, ``double_structures`` and ``footprint_changes``. A row
+whose footprint judgment changed, plans whose size judgment changed, verified plans with a
+supply advisory), the rows whose ``in_scope`` changed, the verified plans the supply and the
+double-count checks reject and the plans whose footprint or size judgment changed, and
+writes ``eval.rescored.csv`` next to the input (``--out`` elsewhere): the input's columns
+with the three scope columns recomputed in place, then ``in_scope_before``,
+``min_volume_share_before``, ``min_area_share_before``, ``supply_conflicts``,
+``supply_hauls``, ``supply_advisories``, ``scope_gaps`` (the gap lines joined by `` | ``),
+``double_counts``, ``double_structures``, ``footprint_changes`` and ``size_changes``. A row
 without a readable plan (none named, the file gone, or a file that is not a PlanResult) keeps
 its values and is reported as ``no plan``.
 
@@ -58,10 +65,13 @@ from pydantic import ValidationError
 
 from moonwright.pipeline.rates import (
     area_shares,
+    distance_figures,
     footprint,
     scope_gaps,
+    stated_minimums,
     volume_double_counts,
     volume_shares,
+    with_judged_footprint,
 )
 from moonwright.pipeline.validate import supply_advisories, validate_graph
 from moonwright.schemas import PlanResult, Requirements, TaskGraph
@@ -70,14 +80,14 @@ from moonwright.text import pct, qty
 RESCORED = ("in_scope", "min_volume_share", "min_area_share")
 ADDED = ("in_scope_before", "min_volume_share_before", "min_area_share_before",
          "supply_conflicts", "supply_hauls", "supply_advisories", "scope_gaps",
-         "double_counts", "double_structures", "footprint_changes")
+         "double_counts", "double_structures", "footprint_changes", "size_changes")
 
 
 @dataclass
 class Rescored:
     """One row: the input values (``row``), the recomputed ones, the supply verdicts, the
-    double counts (``S2 560 of 280 m3 (200 %)``) and the footprint changes; ``plan`` is False
-    when the row names no readable plan (its values are kept)."""
+    double counts (``S2 560 of 280 m3 (200 %)``), the footprint and the size changes; ``plan``
+    is False when the row names no readable plan (its values are kept)."""
 
     row: dict[str, str]
     plan: bool
@@ -91,6 +101,7 @@ class Rescored:
     gaps: list[str] = field(default_factory=list)
     doubles: list[str] = field(default_factory=list)
     footprints: list[str] = field(default_factory=list)
+    sizes: list[str] = field(default_factory=list)
 
     def out(self) -> dict[str, Any]:
         """The CSV row: the input columns, the three scope columns recomputed, the added ones."""
@@ -108,6 +119,7 @@ class Rescored:
         row["double_counts"] = len(self.doubles)
         row["double_structures"] = " | ".join(self.doubles)
         row["footprint_changes"] = " | ".join(self.footprints)
+        row["size_changes"] = " | ".join(self.sizes)
         return row
 
 
@@ -138,6 +150,32 @@ def _footprint_changes(req: Requirements, graph: TaskGraph) -> list[str]:
                  for what, was, now in pairs if not _same(was.get(s.id), now.get(s.id))]
         if moved:
             out.append(f"{s.id} {', '.join(moved)}")
+    return out
+
+
+def _size_changes(req: Requirements, graph: TaskGraph) -> list[str]:
+    """'S1 volume 0.707 -> 1.963, area 1 -> 2.778 (min_diameter_m 12)' per structure whose
+    judged volume or area share moves when the sizes the brief states are read (as recorded ->
+    as judged, '-' where nothing is judged), with what was read, in requirements order; []
+    when no structure's record changes."""
+    read: dict[str, list[str]] = {}
+    for s in req.structures:
+        judged = with_judged_footprint(s, req)
+        d = judged.dims()
+        what = [f"{key} {qty(d[key])} dropped" for key in distance_figures(judged, req)]
+        what += [f"{key} {qty(st.least)}" for key, st in stated_minimums(judged, req).items()]
+        if what:
+            read[s.id] = what
+    if not read:
+        return []
+    pairs = (("volume", volume_shares(req, graph, brief_sizes=False), volume_shares(req, graph)),
+             ("area", area_shares(req, graph, brief_sizes=False), area_shares(req, graph)))
+    out: list[str] = []
+    for s in req.structures:
+        moved = [f"{what} {_judged(was.get(s.id))} -> {_judged(now.get(s.id))}"
+                 for what, was, now in pairs if not _same(was.get(s.id), now.get(s.id))]
+        if moved and s.id in read:
+            out.append(f"{s.id} {', '.join(moved)} ({', '.join(read[s.id])})")
     return out
 
 
@@ -190,7 +228,7 @@ def rescore_row(row: dict[str, str], base: Path) -> Rescored:
         doubles=[f"{c.structure.id}{' key trench' if c.shape.kind == 'trench' else ''} "
                  f"{qty(c.excess_m3)} of {qty(c.largest_m3 or c.shape.m3)} m3 "
                  f"({pct(c.share_largest)})" for c in volume_double_counts(req, graph)],
-        footprints=_footprint_changes(req, graph))
+        footprints=_footprint_changes(req, graph), sizes=_size_changes(req, graph))
 
 
 def rescore(csv_path: Path) -> tuple[list[str], list[Rescored]]:
@@ -208,12 +246,12 @@ def _count(n: int, total: int) -> str:
 
 def summary(rows: Sequence[Rescored]) -> list[str]:
     """The per-condition table (markdown), then the in-scope flips, the supply and the
-    double-count rejects and the footprint changes."""
+    double-count rejects and the footprint and size changes."""
     lines = [("| condition | runs | verified | verified in scope, before -> after | "
               "in scope after, no supply or double-count conflict | verified, rejected by "
               "supply | verified, rejected by double count | footprint judgment changed | "
-              "verified, supply advisory | no plan |"),
-             "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
+              "size judgment changed | verified, supply advisory | no plan |"),
+             "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
     conditions = list(dict.fromkeys(r.row.get("condition", "") for r in rows))
     for cond in conditions:
         group = [r for r in rows if r.row.get("condition", "") == cond]
@@ -228,7 +266,8 @@ def summary(rows: Sequence[Rescored]) -> list[str]:
         lines.append(f"| `{cond}` | {n} | {_count(len(ok), n)} | {_count(before, n)} -> "
                      f"{_count(after, n)} | {_count(clean, n)} | {rejected} of {len(ok)} | "
                      f"{doubled} of {len(ok)} | {sum(bool(r.footprints) for r in group)} | "
-                     f"{advised} of {len(ok)} | {sum(not r.plan for r in group)} |")
+                     f"{sum(bool(r.sizes) for r in group)} | {advised} of {len(ok)} | "
+                     f"{sum(not r.plan for r in group)} |")
     flips = [r for r in rows if r.plan and r.in_scope_before is not None
              and r.in_scope != r.in_scope_before]
     lines.append("")
@@ -247,13 +286,15 @@ def summary(rows: Sequence[Rescored]) -> list[str]:
     lines.append(f"verified plans the double-count check rejects: {len(doubled_rows)}")
     for r in doubled_rows:
         lines.append(f"  {_name(r)}: {'; '.join(r.doubles)}")
-    moved = [r for r in rows if r.footprints]
-    lines.append("")
-    lines.append(f"footprint judgment changed in {len(moved)} plan(s):")
-    for r in moved:
-        scope = (f" (in scope {r.in_scope_before} -> {r.in_scope})"
-                 if r.in_scope_before is not None and r.in_scope != r.in_scope_before else "")
-        lines.append(f"  {_name(r)}: {'; '.join(r.footprints)}{scope}")
+    for label, attr in (("footprint", "footprints"), ("size", "sizes")):
+        moved = [r for r in rows if getattr(r, attr)]
+        lines.append("")
+        lines.append(f"{label} judgment changed in {len(moved)} plan(s):")
+        for r in moved:
+            scope = (f" (in scope {r.in_scope_before} -> {r.in_scope})"
+                     if r.in_scope_before is not None and r.in_scope != r.in_scope_before
+                     else "")
+            lines.append(f"  {_name(r)}: {'; '.join(getattr(r, attr))}{scope}")
     return lines
 
 
