@@ -789,6 +789,14 @@ function rowDigits(r: BudgetTableRow): number {
   return 2;
 }
 
+/** "102%" of budget, whole; a demand just over its budget keeps the decimals that show it over
+ *  ("4,009 Wh 100.2% of budget", never "100%" next to a red figure). */
+function budgetShare(demanded: number, budget: number): string {
+  const share = demanded / budget;
+  for (let d = 0; d <= 2; d += 1) if (share <= 1 || Number((share * 100).toFixed(d)) > 100) return fmtPercent(share, d);
+  return "over 100%";
+}
+
 /** The numbers behind a failure: subject / budget / demanded. */
 function BudgetTable({ rows }: { rows: BudgetTableRow[] }) {
   const kinds = new Set(rows.map((r) => r.kind));
@@ -823,7 +831,7 @@ function BudgetTable({ rows }: { rows: BudgetTableRow[] }) {
                     <span className={cx("font-medium", binding ? "text-fail" : "text-fg")}>
                       {fmtNum(r.demanded, digits)} {r.unit}
                     </span>
-                    {r.budget > 0 && <span className="ml-1.5 text-dim">{fmtPercent(r.demanded / r.budget)} of budget</span>}
+                    {r.budget > 0 && <span className="ml-1.5 text-dim">{budgetShare(r.demanded, r.budget)} of budget</span>}
                   </span>
                   {binding && r.why && <div className="font-sans text-[11px] text-fail/85">{r.why}</div>}
                 </td>

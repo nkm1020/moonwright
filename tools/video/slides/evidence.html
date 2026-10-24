@@ -40,6 +40,7 @@
   .tiles { margin-top: 16px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 24px; }
   .tile { padding-top: 16px; border-top: 1px solid var(--line); }
   .fig { font: 500 50px/1 var(--mono); letter-spacing: -0.02em; color: var(--fg); }
+  .fig .unit { margin-left: 8px; font-size: 24px; letter-spacing: 0; color: var(--muted); }
   .fig.tbd { color: var(--dim); text-decoration: underline dashed rgb(123 136 150 / 0.6); text-underline-offset: 8px; text-decoration-thickness: 1.5px; }
   .tile p { margin: 12px 0 0; font-size: 16px; line-height: 1.35; color: var(--muted); }
   .foot { margin: 26px 0 0; max-width: 1060px; font-size: 13.5px; line-height: 1.45; color: var(--dim); }
@@ -85,15 +86,15 @@
   <div class="box llm rise" style="left: 1039px; width: 190px; --d: .44s"><div class="name">Explanation</div><div class="role">Nemotron 3 Super</div><div class="tag">Nebius Token Factory</div></div>
   <div class="box io rise" style="left: 1263px; width: 170px; --d: .5s"><div class="name">Simulator</div><div class="role">2D replay, robot failures</div><div class="tag">replan on failure</div></div>
 
-  <div class="evidence cue ev">
-    <div class="label">Live evaluation · run 2, Oct 23</div>
+  <div class="evidence">
+    <div class="label cue ev-head">Live evaluation · run 4, the final pipeline · Nemotron 3 Ultra</div>
     <div class="tiles">
-      <div class="tile"><div class="fig">{{eval_briefs}}</div><p>test briefs of {{eval_kinds|words}} designed kinds, impossible ones included</p></div>
-      <div class="tile"><div class="fig">{{eval_runs}}</div><p>live runs, Nemotron 3 Ultra on Token Factory</p></div>
-      <div class="tile"><div class="fig">{{eval_verified_pct}}</div><p>ended with a CP-SAT-verified plan; {{eval_first_try_pct}} without any repair round</p></div>
-      <div class="tile"><div class="fig">{{eval_in_scope_pct}}</div><p>verified with all of the work still in scope</p></div>
+      <div class="tile cue ev-runs"><div class="fig">{{eval_runs}}</div><p>live runs on {{eval_briefs}} test briefs of {{eval_kinds|words}} designed kinds, impossible ones included</p></div>
+      <div class="tile cue ev-verified"><div class="fig">{{eval_verified_pct}}</div><p>ended with a CP-SAT-verified plan</p></div>
+      <div class="tile cue ev-scope"><div class="fig">{{eval_in_scope_pct}}</div><p>verified with all of the work still in it</p></div>
+      <div class="tile cue ev-loop"><div class="fig">+{{eval_loop_gain_pts}}<span class="unit">pts</span></div><p>from the repair loop: {{eval_first_try_pct}} verified on the first graph</p></div>
     </div>
-    <p class="foot">Rescored with the supply-order check added after this run, {{eval_supply_flagged}} of the {{eval_verified_runs}} verified plans started a haul before its material was dug; the validator now rejects such plans.</p>
+    <p class="foot cue ev-loop">Every run was planned live on Nebius Token Factory, every repair was fed the solver’s infeasibility core, and every run was scored with the final checks; the plans are saved in the repository.</p>
   </div>
 </div>
 <script>
