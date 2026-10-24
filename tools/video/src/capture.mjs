@@ -168,7 +168,7 @@ function estimate(a) {
     case "scrollBy":
       return (a.duration ?? 1100) / 1000 + 0.05;
     case "typeText":
-      return (String(a.text).length * (a.delay ?? 45)) / 1000 + 0.9;
+      return (String(a.value ?? a.text ?? "").length * (a.delay ?? 45)) / 1000 + (a.role || a.text !== undefined || a.selector ? 0.9 : 0.05);
     case "waitForScroll":
       return 0.35;
     case "zoomIn":

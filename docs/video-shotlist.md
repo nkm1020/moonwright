@@ -1,18 +1,31 @@
 # Demo video shot list (<= 3:00, >= 1:00 of the key modules in action)
 
-Record at 1440x900 or 1920x1080, UI zoomed so labels are readable, no copyrighted music.
-Voice-over in English. Target 2:40 so there is slack.
+Rendered by `tools/video/render.sh` from `tools/video/storyboard.json`: 1920x1080, 30 fps, macOS
+voice, captions burned in, no music. Every figure on screen and in the voice comes from
+`tools/video/facts.json`, checked against its source before anything is recorded: the Oct 24
+live takes in `frontend/public/samples` (`landing_pad_final1`, `front_loaded_final2`, which the
+backend's fixtures replay), the simulation and Monte Carlo files computed from them, run 4 of the
+live evaluation (`docs/eval/2026-10-24-live-eval-run4/eval.rescored.csv`, Nemotron 3 Ultra arm), or,
+for the Monte Carlo MTBF (a panel setting no recorded file holds), the screen itself. The figures
+the app computes during the capture (the replan's +7 h, the 118 of 126 misses, the what-if's 86 %
+and +49 pts) are checked against the recorded files and waited for on screen. Total 2:34 (limit
+2:55); the app is on screen for 1:47 of it.
 
-| Time | Shot | Voice-over gist |
-| --- | --- | --- |
-| 0:00-0:20 | Title card, then the problem: a drawing of the Earth-Moon delay and a robot crew | Robots on the Moon execute plans alone; a plan that breaks a battery budget or a safety zone is dangerous, and language models cannot guarantee either. |
-| 0:20-0:40 | The UI: the landing-pad brief, "Structure brief", requirements card appears (Nemotron 3.5 Lightning, 7.3 s) | Nemotron turns the brief into requirements the planner can correct. |
-| 0:40-1:25 | "Plan": the progress trace streams structure -> task graph -> validate; the validator refuses Nemotron 3 Ultra's first graph with `energy:printer` (at least 4,095 Wh of printer work and travel for PR1's 4,000 Wh); repair 1 trims the berm crest's sintering from 160 to 150 m2 and is still 9 Wh over, repair 2 trims it to 145 m2, and CP-SAT proves 72 h optimal. Cut to "Impossible deadline": three repairs, no plan, CP-SAT-proven advice "finishing needs 85 h" | The verifier names the conflict in numbers and Nemotron repairs the graph; only verified plans continue, and an impossible brief ends with proven advice instead of shrunken work. |
-| 1:25-1:50 | Gantt + explanation for the verified plan; hover a task to show precedence arrows | Every bar was checked by CP-SAT: precedence, one task per robot, one robot per zone, battery budgets, the deadline. |
-| 1:50-2:25 | Simulator: EX1 fails at 10 h, 78 % into T3; the replay holds on the event, the agent replans, before/after Gantt comparison | When a robot fails, the remaining work is replanned and re-verified; here CP-SAT reschedules the 10 remaining tasks solver-only and the run finishes at 79 h instead of 72 h. |
-| 2:25-2:40 | Monte Carlo panel: 200 runs, 37 % within the deadline (95 % CI 31-44 %), compactor, printer and surveyor as single points of failure; one spare of each: 86 % (81-90 %) | Robustness in one number, and what buys it. |
-| 2:40-2:55 | Architecture slide: Token Factory routing (Lightning / Ultra / Super), CP-SAT, simulator; loop on/off table | What runs where, and what the loop is worth: 55 % of runs verify on the first graph, 86 % after at most three repairs (run 4, Nemotron 3 Ultra). |
-| 2:55-3:00 | Closing card with repo URL | |
+| Time | Scene | Shot | Voice-over gist |
+| --- | --- | --- | --- |
+| 0:00-0:08 | title | Title card | A planning agent for robot crews on the Moon: Nemotron proposes the plan, a solver proves it. |
+| 0:08-0:20 | problem | Three failure chips: `energy:EX1` battery, `zone:Z1` safety, `horizon` deadline | Language models write plans that look right but quietly break what matters. |
+| 0:20-0:33 | brief | The landing-pad brief, "Structure brief", the requirements card and its `recorded answer` badge; a battery field clicked; "Plan with these requirements" | Nemotron 3.5 Lightning on Nebius Token Factory turns the brief into requirements; the demo replays a run recorded live there; every field stays editable. |
+| 0:33-1:04 | plan | The trace of the Oct 24 take, replayed: Nemotron 3 Ultra's first graph refused with `energy:printer`, punch-in on at least 4,095 Wh for the printer's 4,000; repair round 1 trims the berm crest's sintering 160 -> 150 m2 (diff chip), the second core is still 9 Wh over (4,009 Wh, 100.2 % of budget); repair round 2 trims it to 145 m2 and its ring holds for a beat; then the verification receipt over the verified Gantt, 72 of 336 h | Nothing Nemotron says is trusted. The refusal's proof becomes the repair prompt; Ultra trims, is still 9 Wh over, trims again, and CP-SAT proves precedence, robots, zones, batteries and the 336-hour deadline: done in 72 hours. |
+| 1:04-1:22 | simulate | EX1 picked and 10 typed into the failure row; Run; the replay holds on the failure (78 % into T3) with the banner "CP-SAT rescheduled 10 tasks"; the replan card and its before/after Gantt fill the view, 72 h -> 79 h, +7 h | The plan meets the Moon: excavator one breaks at hour ten, CP-SAT reschedules the remaining ten tasks in milliseconds with no model call, done at 79 hours instead of 72, still verified. |
+| 1:22-1:41 | robustness | Monte Carlo, 200 runs at MTBF 500 h: 37 % within the deadline (95 % CI 31-44 %), punch-in; 118 of 126 misses from a robot with no backup (printer, surveyor, compactor); + add PR2, SV2, CP2 | Only 37 % finish by the deadline; the misses trace to three robots with no backup, so add a spare of each and replay the same draws. |
+| 1:41-1:47 | whatif | One dissolve past the seconds the what-if takes to compute: 86 % (81-90 %), +49 pts vs baseline | Now 86 % finish: a replan can hand the lost work to a spare. |
+| 1:47-2:07 | impossible | The Impossible deadline sample (recorded live run): Lightning dropped the pad's compaction and the structure stage restored it ("operation restored", quoting "subgrade compacted and inspected"); repair rounds at 0 % scope drift; CP-SAT-verified advice: finishing needs 85 h, 25 h past the 60 h deadline, punch-in on 85 h | Three repairs kept every task, yet CP-SAT proves the 60-hour deadline cannot hold and finds the one it can meet: 85 hours. |
+| 2:07-2:30 | evidence | Architecture slide (three Nemotron roles on Token Factory inside the solver loop), then run 4 tile by tile: 66 live runs on 22 briefs, 86 % verified, 80 % with all of the work in it, +31 pts from the repair loop (55 % on the first graph) | On the final pipeline Nemotron 3 Ultra ended verified 86 % of the time, 80 % in scope; the repair loop adds 31 points to the first try. |
+| 2:30-2:34 | close | Closing card; the repository line appears once `repo_url` is set (public Oct 29-30) | Plans you can prove. |
 
-Key-module footage (must total >= 1:00): the streaming trace with a repair round, the Gantt,
-the simulator replay with the replan. Keep those segments uncut.
+Key-module footage (must total >= 1:00), each segment one uncut capture: the trace with both
+repair rounds, the receipt and the Gantt (31 s); the simulator replay with the solver-only replan
+(19 s); Monte Carlo and the spare what-if (25 s); the impossible run's advice (20 s). The README
+hero GIF (`tools/video/out/readme-hero.gif`) is 14 s of the plan scene, from the refusal to the
+second trim, ending on its ring.

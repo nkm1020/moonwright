@@ -98,11 +98,16 @@ export function spareRobotId(robots: Robot[], type: string, taken: ReadonlySet<s
   return `${prefix}${n}`;
 }
 
-/** One clone per type, same battery and speed as the type's first robot, in the given order. */
+/** One clone per type, same battery and speed as the type's first robot, in fleet order (the
+ *  order the types' first robots appear in), whatever order `types` lists them in. Monte Carlo
+ *  draws one failure time per robot in fleet order, so the same spares appended in another
+ *  order are other draws: in fleet order they are the fleet the CLI's what-if replays
+ *  (docs/reference.md, the recorded landing_pad.whatif.mc.json: CP2, PR2, SV2). */
 export function spareRobots(robots: Robot[], types: string[]): Robot[] {
   const taken = new Set(robots.map((r) => r.id));
   const out: Robot[] = [];
-  for (const type of types) {
+  const fleetTypes = [...new Set(robots.map((r) => r.type))];
+  for (const type of fleetTypes.filter((t) => types.includes(t))) {
     const sample = robots.find((r) => r.type === type);
     if (!sample) continue;
     const id = spareRobotId(robots, type, taken);

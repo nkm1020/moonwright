@@ -4,21 +4,28 @@ Renders the Moonwright demo video from `storyboard.json`: four HTML slides and t
 driven by Playwright in Chromium and recorded with CDP `Page.startScreencast`, narrated with
 macOS `say`, captioned and assembled with ffmpeg. Every figure the video quotes comes from
 `facts.json`, which is checked before anything is recorded: against the recorded runs in
-`frontend/public/samples/`, against the live evaluation in `docs/eval/`, or, for figures the app
-computes during the recording, against the screen itself.
+`frontend/public/samples/`, against the live evaluation in `docs/eval/`, or, for a figure only the
+app computes during the recording, against the screen itself. Figures the screen shows are also
+waited for on screen during the capture, so the recording and the recorded run must agree.
 
 ## What the video shows, and what it does not claim
 
 The recording runs against the backend in fixture mode, so no model is called while recording.
-In that mode the backend replays prepared answers for the structure, task-graph, repair and
-explanation steps; the validator, CP-SAT, the simulator and Monte Carlo run for real. The
-narration says so: the brief scene says the offline demo replays prepared answers, the plan
-scene describes the task graph as Nemotron 3 Ultra's job (not as this run's output), and the
-repair scene calls its repair a prepared one. The only Nemotron output on screen is the
-Impossible deadline sample, a recorded live run, and the narration credits it as such. The
-evidence slide reports the live evaluation (docs/eval/2026-10-23-live-eval-run2, the Nemotron 3
-Ultra arm). The failure injection, the replan and both Monte Carlo runs (60% baseline and the
-spare-robot what-if) are computed live during the capture.
+The fixtures are the landing pad's live run, recorded on Nebius Token Factory on Oct 24 on the
+final pipeline (`backend/fixtures/landing_pad`, the same take as
+`frontend/public/samples/landing_pad.plan.json`): in fixture mode the backend replays its
+answers for the structure, task-graph, repair and explanation steps, step for step, while the
+validator, CP-SAT, the simulator and Monte Carlo run for real. The narration says so: the brief
+scene says the demo replays a run recorded live on Token Factory, and the trace labels every
+replayed answer `recorded answer`. The plan scene's refusal, its two repairs and the verified
+schedule are that run's Nemotron 3 Ultra answers, checked again by the validator and CP-SAT
+during the capture. The Impossible deadline sample is the other recorded live run, loaded as
+recorded, and the narration credits it as such. The evidence slide reports run 4 of the live
+evaluation, the first on the final pipeline (docs/eval/2026-10-24-live-eval-run4, the Nemotron 3
+Ultra arm, `eval.rescored.csv`: scored with the final checks). The failure injection, the replan
+and both Monte Carlo runs (the baseline and the spare-robot what-if) are computed live during the
+capture; the spares join the fleet in its own order, the fleet the recorded
+`landing_pad.whatif.mc.json` was computed with, so the panel shows the README's figure.
 
 ## One command
 
@@ -66,7 +73,7 @@ chromium-headless-shell`).
 | `captions.srt` | sidecar captions for the whole narration, slides included: at most 2 lines x 42 characters, 1.2-6 s per cue, typographic apostrophes |
 | `thumbnail.png` | 1920x1080 poster (the title slide), since frame 0 is the fade from black |
 | `contact-sheet.png` | one still per scene, labelled with scene id, start time and length |
-| `readme-hero.gif` | 14 s of the repair scene (no captions), 1280 px wide, 15 fps, two-pass palette, under 8 MB |
+| `readme-hero.gif` | 14 s of the plan scene's recorded live repairs (the refusal and both trims, no captions), 1280 px wide, 15 fps, two-pass palette, under 8 MB |
 | `timing.txt`, `timing.json` | per-scene start, duration, narration and action seconds, output checks, loudness, the motion check |
 
 Working files live in `out/work` (narration WAVs and their timing, per-scene clips, caption
@@ -102,11 +109,11 @@ images) and `out/logs` (render, build, backend and app logs).
   cursor reaches what is being named as it is said; `pause` actions stretch to fill the time
   before the next cue, the narration is never cut, and a page that is done early is simply held.
 - Joins: a dip through the console background (#0b0f14) between the slides and the app, hard
-  cuts between the app scenes (one continuous session), one short dissolve that skips the ~7 s
+  cuts between the app scenes (one continuous session), one short dissolve that skips the seconds
   the spare-robot what-if takes to compute (the panel keeps the real time), plus a fade in and
   out. The narration is limited to -3 dBFS and normalised with two-pass `loudnorm` (linear) to
   -16 LUFS.
-- Captions: Geist on a translucent graphite box, bottom centre inside the 90 % safe area (a
+- Captions: Geist on a nearly opaque graphite box, bottom centre inside the 90 % safe area (a
   scene can move them to the bottom left or right where the app is empty). Each cue is a
   transparent PNG rendered by Chromium and overlaid by ffmpeg.
 - The total must stay within 2:55; `timing.txt` reports an overrun instead of dropping scenes.
@@ -120,7 +127,7 @@ sample-identical to "Nemmatron" (NEM-uh-tron) and her "Nebius" is closest to NEE
 once with any new voice. A scene has:
 
 - `id`, `kind` (`slide` or `ui`) and `narration`.
-- Optional: `caption` (shown instead of the narration, timed sentence by sentence, e.g. "9,915 Wh"
+- Optional: `caption` (shown instead of the narration, timed sentence by sentence, e.g. "4,095 Wh"
   where the voice says the number in words), `voDelay` (seconds before the voice starts),
   `pauseBefore` (`{"<sentence index>": seconds}` of extra silence before a sentence),
   `minDuration`, `transition` (`{"type": "dip" | "fade", "duration": 0.5}`, default a cut),
@@ -162,8 +169,11 @@ when a value disagrees with it:
 | a recorded sample | `samples/landing_pad.mc.json within_horizon_rate \|pct` |
 | any JSON file | `<repo path>.json <json.path> \|formatters` |
 | a file count | `count backend/examples/eval/*.md` |
-| CSV rows | `csv docs/eval/2026-10-23-live-eval-run2/eval.csv condition=ultra/loop_on \|share:success=True \|pct` (also `\|len`, `\|distinct:col`) |
-| the screen | `screen`: a figure the app computes during the capture (the what-if Monte Carlo); the gate requires a `waitForText` in the storyboard that quotes it, so the render stops if the screen shows anything else |
+| CSV rows | `csv docs/eval/2026-10-24-live-eval-run4/eval.rescored.csv condition=ultra/loop_on \|share:success=True \|pct` (also `\|len`, `\|distinct:col`, and `\|gain:success=True;first_try_feasible=True`: the points one share is ahead of another, each rounded to a whole percent first) |
+| a figure inside a sentence | `samples/landing_pad.plan.json steps.2.failure.details.0 \|re:at least ([\d,]+) Wh`: the first match of a pattern (its group, or the list of its groups); `\|num` reads "4,009" as 4009 and `\|diff` subtracts the second of two figures from the first (how far a demand is over its battery) |
+| two figures of one file, or of two | `samples/landing_pad.sim.json replans.0 \|pick:after.schedule.makespan_h,before.makespan_h \|diff` (the replan's delay); `samples/landing_pad.whatif.mc.json within_horizon_rate \|minus:samples/landing_pad.mc.json within_horizon_rate \|pts` (the what-if's gain in points, as the panel prints it) |
+| a Monte Carlo count | `samples/landing_pad.mc.json \|misses` (runs that missed the horizon) and `\|nobackup` (the misses that lost a robot with no backup), counted as the panel counts them |
+| the screen | `screen`: a figure the app computes during the capture that no recorded file holds (the Monte Carlo MTBF, a panel setting); the gate requires a `waitForText` in the storyboard that quotes it, so the render stops if the screen shows anything else |
 
 `TBD` marks a value that is not known yet: `repo_url` is TBD until the public repository exists,
 and the close slide leaves the repository line out until it is set.

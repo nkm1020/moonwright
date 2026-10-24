@@ -101,6 +101,31 @@ function rowFilter(args) {
     });
 }
 
+/** The value at a dotted path ("replans.0.before.makespan_h"); a missing key is an error. */
+function dig(value, jsonPath, where) {
+  let v = value;
+  for (const key of String(jsonPath || "").split(".").filter(Boolean)) {
+    if (v == null) throw new Error(`${where}: ${key} not found`);
+    v = v[/^\d+$/.test(key) ? Number(key) : key];
+  }
+  if (v === undefined) throw new Error(`${where}: ${jsonPath} not found`);
+  return v;
+}
+
+/** `<file> [json.path]`: a recorded sample (samples/...) or any JSON file in the repository. */
+function readJson(head) {
+  const [file, jsonPath] = head.split(/\s+/);
+  const abs = file.startsWith("samples/") ? path.join(SAMPLES_DIR, file.slice(8)) : path.join(REPO_DIR, file);
+  return dig(JSON.parse(fs.readFileSync(abs, "utf8")), jsonPath, head);
+}
+
+/** Runs of a Monte Carlo result that finished within the horizon (the samples when they are all
+ *  there, else the rate), like the panel. */
+function withinHorizon(mc) {
+  if (Array.isArray(mc.samples) && mc.samples.length === mc.runs) return mc.samples.filter((s) => s.within_horizon).length;
+  return Math.round(mc.within_horizon_rate * mc.runs);
+}
+
 const FORMATTERS = {
   len: (v) => v.length,
   round: (v) => Math.round(v),
@@ -114,8 +139,58 @@ const FORMATTERS = {
   abs: (v) => Math.abs(Number(v)),
   /** a number already in percent: 10.8 -> "10.8%" */
   pctn: (v) => `${Number(v)}%`,
+  /** text -> the first match of a regular expression: its capture group, or the array of its
+   *  groups when it has several (a verdict's "printer tasks need at least 4,095 Wh, ..."
+   *  |re:at least ([\d,]+) Wh -> "4,095"); no match is an error. The pattern cannot hold a "|". */
+  re: (v, pattern) => {
+    const m = new RegExp(pattern).exec(String(v));
+    if (!m) throw new Error(`/${pattern}/ does not match ${JSON.stringify(String(v).slice(0, 80))}`);
+    return m.length > 2 ? m.slice(1) : (m[1] ?? m[0]);
+  },
+  /** "4,095" -> 4095 (each item of an array) */
+  num: (v) => (Array.isArray(v) ? v.map((x) => Number(String(x).replace(/,/g, ""))) : Number(String(v).replace(/,/g, ""))),
+  /** [a, b] -> a - b (4,009 Wh needed of a 4,000 Wh battery -> 9) */
+  diff: (v) => Number(v[0]) - Number(v[1]),
+  /** an object -> the values at these dotted paths, as a list (a replan's two makespans:
+   *  |pick:after.schedule.makespan_h,before.makespan_h |diff -> the delay) */
+  pick: (v, args) =>
+    String(args || "")
+      .split(",")
+      .map((p) => p.trim())
+      .filter(Boolean)
+      .map((p) => dig(v, p, `|pick:${args}`)),
+  /** a number -> it minus a figure of another JSON file (`<file> <json.path>`, as in a source):
+   *  the what-if's rate minus the baseline's */
+  minus: (v, args) => Number(v) - Number(readJson(String(args || "").trim())),
+  /** a difference of two rates -> percentage points, at most one decimal, as the Monte Carlo
+   *  panel prints "+49 pts vs baseline" (0.86 - 0.37 -> 49) */
+  pts: (v) => Number((Number(v) * 100).toFixed(1)),
+  /** a Monte Carlo result -> its misses: the runs that did not finish within the horizon, counted
+   *  as the panel counts them (withinHorizonCount in frontend OutcomeBar.tsx) */
+  misses: (mc) => mc.runs - withinHorizon(mc),
+  /** a Monte Carlo result -> the misses that came from a robot with no backup: the lost_only
+   *  outcomes that lost one of its single_points_of_failure, as the panel's "118 of 126 misses"
+   *  counts them (attributeOutcomes in OutcomeBar.tsx) */
+  nobackup: (mc) => {
+    const spof = new Set(mc.single_points_of_failure ?? []);
+    let n = 0;
+    for (const [key, count] of Object.entries(mc.outcomes ?? {})) {
+      const i = key.indexOf(":");
+      if (i < 0 || key.slice(0, i) !== "lost_only") continue;
+      if (key.slice(i + 1).split(",").some((t) => spof.has(t.trim()))) n += count;
+    }
+    return n;
+  },
   /** rows -> share of them matching every col=value */
   share: (rows, args) => rows.filter(rowFilter(args)).length / rows.length,
+  /** rows -> percentage points the first filter's share is ahead of the second's ("a;b"), each
+   *  share rounded to a whole percent first, as the slides print them (86% - 55% -> 31) */
+  gain: (rows, args) => {
+    const [a, b] = String(args || "").split(";");
+    if (!a || !b) throw new Error(`|gain needs two filters, "a;b" (got "${args}")`);
+    const pct = (f) => Math.round((100 * rows.filter(rowFilter(f)).length) / rows.length);
+    return pct(a) - pct(b);
+  },
   /** rows -> how many distinct values a column takes */
   distinct: (rows, col) => new Set(rows.map((r) => r[col])).size,
 };
@@ -160,7 +235,10 @@ function readCsv(file) {
  *   samples/<file> <json.path>        a recorded sample under frontend/public/samples
  *   <repo path>.json <json.path>      any JSON file in the repository
  *   count <dir>/*.<ext>               number of files
- *   csv <repo path>.csv [col=val,col!=val,...] the rows matching every filter (then |len, |share:..., |distinct:col)
+ *   csv <repo path>.csv [col=val,col!=val,...] the rows matching every filter (then |len, |share:..., |gain:...;..., |distinct:col)
+ * A figure inside a sentence (a verdict's details) is read with |re:<pattern> (then |num, |diff);
+ * two figures of one file with |pick:a,b (then |diff); a figure of another file with
+ * |minus:<file> <json.path>; a Monte Carlo result's misses with |misses and |nobackup.
  */
 function evalSource(spec) {
   const [head, ...pipes] = spec.split("|").map((p) => p.trim());
@@ -175,13 +253,7 @@ function evalSource(spec) {
     value = readCsv(path.join(REPO_DIR, file)).filter(filter ? rowFilter(filter) : () => true);
     if (!value.length) throw new Error(`${spec}: no row matches`);
   } else {
-    const [file, jsonPath] = head.split(/\s+/);
-    const abs = file.startsWith("samples/") ? path.join(SAMPLES_DIR, file.slice(8)) : path.join(REPO_DIR, file);
-    value = JSON.parse(fs.readFileSync(abs, "utf8"));
-    for (const key of (jsonPath || "").split(".").filter(Boolean)) {
-      if (value == null) throw new Error(`${spec}: ${key} not found`);
-      value = value[/^\d+$/.test(key) ? Number(key) : key];
-    }
+    value = readJson(head);
   }
   for (const p of pipes) {
     const k = p.indexOf(":");
