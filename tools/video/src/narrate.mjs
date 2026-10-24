@@ -10,7 +10,9 @@
 //
 // TTS=openai (the default when OPENAI_API_KEY is set, e.g. in tools/video/.env) synthesizes the
 // same sentences with OpenAI's speech endpoint instead of `say` (OPENAI_TTS_MODEL, default
-// gpt-4o-mini-tts; OPENAI_TTS_VOICE, default ash; OPENAI_TTS_INSTRUCTIONS steers the delivery).
+// gpt-4o-mini-tts; OPENAI_TTS_VOICE, default ash; OPENAI_TTS_SPEED, default 1.4, since the voice
+// reads about 125 words a minute at 1.0 against say's 180; OPENAI_TTS_INSTRUCTIONS steers the
+// delivery, not the pace).
 // Sentences stay separate calls, so the timing below is measured the same way for either voice.
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -60,13 +62,17 @@ async function sayToWav(text, { voice, rate, cacheDir }) {
 
 const OPENAI_SPEECH_URL = "https://api.openai.com/v1/audio/speech";
 
+// OpenAI clips end on up to half a second of silence; `say`'s do not, so each clip keeps only
+// this much at either edge and the sentence gap stays the storyboard's
+const OPENAI_EDGE_S = 0.06;
+
 async function openaiToWav(text, { openai, cacheDir }) {
-  const { model, voice, instructions } = openai;
-  const key = crypto.createHash("sha1").update(`openai|${model}|${voice}|${instructions}|${text}`).digest("hex").slice(0, 16);
+  const { model, voice, instructions, speed } = openai;
+  const key = crypto.createHash("sha1").update(`openai|${model}|${voice}|${speed}|${instructions}|${text}`).digest("hex").slice(0, 16);
   const wav = path.join(cacheDir, `${key}.wav`);
   if (!fs.existsSync(wav)) {
     const raw = path.join(cacheDir, `${key}.openai.wav`);
-    const body = { model, voice, input: text, response_format: "wav" };
+    const body = { model, voice, input: text, response_format: "wav", speed };
     if (instructions && model !== "tts-1" && model !== "tts-1-hd") body.instructions = instructions;
     for (let attempt = 1; ; attempt++) {
       const res = await fetch(OPENAI_SPEECH_URL, {
@@ -89,6 +95,11 @@ async function openaiToWav(text, { openai, cacheDir }) {
     }
     await toWav48(raw, wav);
     await fsp.rm(raw, { force: true });
+    const clip = await readWav(wav);
+    const edges = silenceEdges(clip);
+    const from = Math.max(0, Math.round((edges.lead - OPENAI_EDGE_S) * clip.rate));
+    const to = clip.samples.length - Math.max(0, Math.round((edges.trail - OPENAI_EDGE_S) * clip.rate));
+    await writeWav(wav, { rate: clip.rate, samples: clip.samples.slice(from, Math.max(from, to)) });
   }
   return readWav(wav);
 }

@@ -38,8 +38,9 @@
   "eval_in_scope_pct": "80%",
   "eval_first_try_pct": "55%",
   "eval_loop_gain_pts": 31,
+  "eval_core_repair_pct": "70%",
+  "eval_verdict_repair_pct": "32%",
   "repo_url": "TBD",
-
   "_comment": "Every figure the narration, captions and slides quote. {{name}} in storyboard.json and slides/*.html is replaced by the value here. The render checks every entry in _sources before anything is recorded and stops on a mismatch: the recorded live runs (frontend/public/samples, the Oct 24 takes the backend's fixtures replay, and the simulation and Monte Carlo files computed from them), the live evaluation (docs/eval/2026-10-24-live-eval-run4/eval.rescored.csv, run 4 on the final pipeline, the Nemotron 3 Ultra arm the architecture slide routes to, scored with the final checks), or 'screen' for a figure the app computes live during the capture and no recorded file holds (the Monte Carlo MTBF, a panel setting): those must be quoted by a waitForText in storyboard.json, so the render stops if the screen shows anything else. Figures the screen also shows (the plan's verdicts and repairs, the failure's progress, the replan's delay, the Monte Carlo misses, the what-if and its gain) are quoted by a waitForText too, so they are checked against both the recorded run and the capture. TBD = not known yet: repo_url hides the close slide's repository line until it is set.",
   "_sources": {
     "landing_makespan_h": "samples/landing_pad.plan.json schedule.makespan_h",
@@ -80,6 +81,8 @@
     "eval_verified_pct": "csv docs/eval/2026-10-24-live-eval-run4/eval.rescored.csv condition=ultra/loop_on |share:success=True |pct",
     "eval_in_scope_pct": "csv docs/eval/2026-10-24-live-eval-run4/eval.rescored.csv condition=ultra/loop_on |share:success=True,in_scope=True |pct",
     "eval_first_try_pct": "csv docs/eval/2026-10-24-live-eval-run4/eval.rescored.csv condition=ultra/loop_on |share:first_try_feasible=True |pct",
-    "eval_loop_gain_pts": "csv docs/eval/2026-10-24-live-eval-run4/eval.rescored.csv condition=ultra/loop_on |gain:success=True;first_try_feasible=True"
+    "eval_loop_gain_pts": "csv docs/eval/2026-10-24-live-eval-run4/eval.rescored.csv condition=ultra/loop_on |gain:success=True;first_try_feasible=True",
+    "eval_core_repair_pct": "csv docs/eval/2026-10-24-live-eval-run4/eval.rescored.csv condition=ultra/loop_on,first_try_feasible=False |share:success=True |pct",
+    "eval_verdict_repair_pct": "csv docs/eval/2026-10-24-ablation-core-vs-verdict/eval.rescored.csv condition=ultra/loop_on,first_try_feasible=False |share:success=True |pct"
   }
 }

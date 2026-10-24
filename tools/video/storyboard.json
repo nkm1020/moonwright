@@ -1105,7 +1105,7 @@
         "type": "dip",
         "duration": 0.5
       },
-      "narration": "Three Nemotron models on Nebius Token Factory, each routed to its job, inside a solver loop. On the final pipeline, Nemotron 3 Ultra planned {{eval_briefs}} test briefs in {{eval_runs}} live runs: {{eval_verified_pct}} ended verified, {{eval_in_scope_pct}} with all of the work in it. The repair loop adds {{eval_loop_gain_pts}} points to the {{eval_first_try_pct}} verified on the first try.",
+      "narration": "Three Nemotron models on Nebius Token Factory, each routed to its job, inside a solver loop. On the final pipeline, Nemotron 3 Ultra planned {{eval_briefs}} test briefs in {{eval_runs}} live runs: {{eval_verified_pct}} ended verified, {{eval_in_scope_pct}} with all of the work in it. The repair loop adds {{eval_loop_gain_pts}} points to the {{eval_first_try_pct}} verified on the first try. And the proof is what does it: given the solver's core, Ultra repaired {{eval_core_repair_pct}} of the plans it got wrong; told only that they were refused, {{eval_verdict_repair_pct}}.",
       "actions": [
         {
           "action": "reveal",
@@ -1142,6 +1142,12 @@
           "selector": ".ev-loop",
           "cue": "The repair loop adds",
           "lead": 0.2
+        },
+        {
+          "action": "reveal",
+          "selector": ".ev-proof",
+          "cue": "the proof is what does it",
+          "lead": 0.3
         }
       ],
       "burnCaptions": false

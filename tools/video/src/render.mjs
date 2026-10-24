@@ -6,6 +6,7 @@
 import fsp from "node:fs/promises";
 import { API_HEALTH, APP_URL, CLIPS_DIR, FPS, FRAMES_DIR, OUT_DIR, OUTPUTS, STATE_FILE, WORK_DIR } from "./lib/paths.mjs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { checkFacts, loadStoryboard } from "./lib/story.mjs";
 import { ensureDir, fmtClock, log, readJson, writeJson } from "./lib/util.mjs";
 import { norm, tokenize } from "./lib/text.mjs";
@@ -18,7 +19,7 @@ import { contactSheet, heroGif, thumbnail, timingTable } from "./extras.mjs";
 
 // tools/video/.env (gitignored) may hold OPENAI_API_KEY for the narration; it is loaded into this
 // process only, never into the fixture backend, and its values are never logged
-const VIDEO_DIR = path.join(path.dirname(new URL(import.meta.url).pathname), "..");
+const VIDEO_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");   // the repo path has spaces
 for (const dotenv of [path.join(VIDEO_DIR, ".env"), path.join(VIDEO_DIR, "voice", ".env")]) {
   try {
     process.loadEnvFile(dotenv);
@@ -32,10 +33,11 @@ const env = {
   openai: {
     model: process.env.OPENAI_TTS_MODEL || "gpt-4o-mini-tts",
     voice: process.env.OPENAI_TTS_VOICE || "ash",
+    speed: Number(process.env.OPENAI_TTS_SPEED || 1.4),
     instructions:
       process.env.OPENAI_TTS_INSTRUCTIONS ||
-      "A calm, confident documentary narrator explaining an engineering demo. Clear diction, an even, " +
-        "unhurried pace, warm but precise; read numbers and technical terms plainly, no dramatic emphasis.",
+      "A calm, confident documentary narrator explaining an engineering demo. Clear diction, a steady, " +
+        "natural pace, warm but precise; read numbers and technical terms plainly, no dramatic emphasis.",
   },
   voice: process.env.VOICE || "Samantha",
   rate: Number(process.env.RATE || 180),

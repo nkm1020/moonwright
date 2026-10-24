@@ -59,6 +59,7 @@ chromium-headless-shell`).
 | `TTS` | `openai` when `OPENAI_API_KEY` is set, else `say` | narration engine. Put `OPENAI_API_KEY=...` in `tools/video/.env` or `tools/video/voice/.env` (both gitignored; loaded by the render's node process only, never by the fixture backend, and never logged). Sentences are still synthesized one by one, so the timing and captions work the same; synthesized sentences are cached in `out/work/audio/cache` like `say`'s |
 | `OPENAI_TTS_MODEL` | `gpt-4o-mini-tts` | OpenAI speech model (`tts-1`, `tts-1-hd` ignore the instructions) |
 | `OPENAI_TTS_VOICE` | `ash` | OpenAI voice |
+| `OPENAI_TTS_SPEED` | `1.4` | OpenAI speaking speed (0.25-4); at 1.0 the voice reads about 125 words a minute, `say` 180, and the instructions do not change the pace |
 | `OPENAI_TTS_INSTRUCTIONS` | a calm documentary narrator | how the voice should speak (gpt-4o-mini-tts) |
 | `VOICE` | `Samantha` | macOS voice (`say -v '?'` lists them). A downloaded Premium voice sounds much better: System Settings, Accessibility, Spoken Content, System voice, Manage Voices, then e.g. `VOICE="Ava (Premium)"` |
 | `RATE` | `180` | speaking rate, words per minute |

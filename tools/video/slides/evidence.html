@@ -37,7 +37,7 @@
 
   .evidence { position: absolute; left: 103px; top: 552px; width: 1330px; }
   .evidence .label { font: 500 12px/1 var(--mono); letter-spacing: 0.16em; text-transform: uppercase; color: var(--dim); }
-  .tiles { margin-top: 16px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 24px; }
+  .tiles { margin-top: 16px; display: grid; grid-template-columns: repeat(5, 1fr); gap: 22px; }
   .tile { padding-top: 16px; border-top: 1px solid var(--line); }
   .fig { font: 500 50px/1 var(--mono); letter-spacing: -0.02em; color: var(--fg); }
   .fig .unit { margin-left: 8px; font-size: 24px; letter-spacing: 0; color: var(--muted); }
@@ -93,8 +93,9 @@
       <div class="tile cue ev-verified"><div class="fig">{{eval_verified_pct}}</div><p>ended with a CP-SAT-verified plan</p></div>
       <div class="tile cue ev-scope"><div class="fig">{{eval_in_scope_pct}}</div><p>verified with all of the work still in it</p></div>
       <div class="tile cue ev-loop"><div class="fig">+{{eval_loop_gain_pts}}<span class="unit">pts</span></div><p>from the repair loop: {{eval_first_try_pct}} verified on the first graph</p></div>
+      <div class="tile cue ev-proof"><div class="fig">{{eval_core_repair_pct}}</div><p>of refused plans repaired with the solver's core; {{eval_verdict_repair_pct}} when told only "refused"</p></div>
     </div>
-    <p class="foot cue ev-loop">Every run was planned live on Nebius Token Factory, every repair was fed the solver’s infeasibility core, and every run was scored with the final checks; the plans are saved in the repository.</p>
+    <p class="foot cue ev-proof">Every run was planned live on Nebius Token Factory and scored with the final checks; run 4’s repairs were fed the solver’s infeasibility core, and the 32% comes from the same 66-run matrix rerun with repairs told only “refused”. The plans are saved in the repository.</p>
   </div>
 </div>
 <script>
