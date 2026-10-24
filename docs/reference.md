@@ -13,6 +13,7 @@ uv sync
 # offline demo (no API key needed; replays the Nemotron answers recorded under fixtures/)
 uv run moonwright plan examples/briefs/landing_pad.md --llm fixture        # energy:printer, two repairs, 72 h
 uv run moonwright plan examples/briefs/front_loaded.md --llm fixture       # no plan after 3 repairs; advice 85 h
+uv run moonwright plan examples/briefs/habitat_berm.md --llm fixture       # a 13-conflict core, one repair, 52 h of 72 h
 uv run moonwright plan examples/briefs/tight_battery.md --llm fixture      # a CP-SAT energy core, repaired
 uv run moonwright simulate out/landing_pad.plan.json --fail EX1@10         # failure + solver-only replan
 uv run moonwright montecarlo out/landing_pad.plan.json --runs 200 --seed 1 # robustness: P(finish in time)
@@ -52,9 +53,9 @@ changing it (it can also be set in the shell: `NEXT_PUBLIC_API_URL=http://127.0.
 The page runs the whole flow: brief (or one of the example briefs) -> editable requirements
 card -> streamed progress trace (structure -> task graph -> validate -> schedule -> repair n) ->
 verified plan (Gantt, task table, explanation) -> 2D replay with injected failures and
-before/after replans -> Monte Carlo robustness. The top bar's **Landing pad** and **Impossible
-deadline** buttons show the recorded live runs under `public/samples` without a backend (the
-static demo build replays only those: [deploy.md](deploy.md)). `/dev/gantt` and `/dev/sim` are
+before/after replans -> Monte Carlo robustness. The top bar's **Landing pad**, **Impossible
+deadline** and **Tight deadline** buttons show the recorded live runs under `public/samples`
+without a backend (the static demo build replays only those: [deploy.md](deploy.md)). `/dev/gantt` and `/dev/sim` are
 component galleries over the bundled sample payloads.
 
 ## CLI
@@ -78,12 +79,14 @@ samples' numbers. A sample is the take's own PlanResult, never such a replay: a 
 name `fixture:` models, and the page would lose its "recorded live run" labels.
 `tests/test_pipeline_e2e.py` checks both for every `*.plan.json` here. From `backend/`, with the
 takes in `out/demo/` (recording them: [live-run-runbook.md](live-run-runbook.md), section 2;
-today's samples are the takes `landing_pad_final1` and `front_loaded_final2`):
+today's samples are the takes `landing_pad_final1`, `front_loaded_final2` and
+`habitat_berm_final3`):
 
 ```bash
 S=../frontend/public/samples
 cp out/demo/landing_pad_next.plan.json $S/landing_pad.plan.json     # the takes, as recorded
 cp out/demo/front_loaded_next.plan.json $S/front_loaded.plan.json
+cp out/demo/habitat_berm_next.plan.json $S/habitat_berm.plan.json
 uv run moonwright simulate $S/landing_pad.plan.json --fail EX1@10 --llm fixture --out $S/landing_pad.sim.json
 uv run moonwright montecarlo $S/landing_pad.plan.json --runs 200 --seed 1 --out $S/landing_pad.mc.json
 uv run python - <<'PY'   # the what-if: one spare per single-point type (CP2, PR2, SV2)
@@ -106,6 +109,16 @@ uv run moonwright montecarlo out/landing_pad.whatif.plan.json --runs 200 --seed 
   (4,000 Wh) and SV2 (1,500 Wh), copies of CP1, PR1 and SV1: 86 % (81-90 %), no single point
   of failure.
 * `front_loaded.plan.json` has neither: there is no plan to run.
+* `habitat_berm.plan.json` (the 72 h brief, the eval's `habitat_berm_tight_horizon`): Nemotron
+  3 Ultra's first graph passes the validator, but its hauls move 400 m3 into the berm against
+  264 m3 dug, so zone Z2 needs 49 h of one-robot-at-a-time work, and CP-SAT proves the
+  deadline cannot hold (a 13-conflict core: the horizon, 10 precedence edges, SV1 and Z2).
+  One repair drops the double haul (280 m3, Z2 39 h) and splits the digs so each haul follows
+  its part; both excavators start at 8 h and CP-SAT proves 52 h. The brief's own digs give
+  264 of the berm's 280 m3: Ultra's final graph says so in its notes and hauls the last 16 m3
+  as sourced externally. The supply check accepts that within its 25 % swell allowance
+  (`SUPPLY_SLACK`), and the console shows the note under the explanation. It ships its plan
+  only: the static demo points to the landing pad for the simulation and the Monte Carlo.
 
 ## HTTP API (`backend/moonwright/api.py`)
 

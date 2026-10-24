@@ -1,0 +1,243 @@
+{
+ "tasks": [
+  {
+   "id": "T1",
+   "name": "survey S1_stake",
+   "robot_type": "surveyor",
+   "duration_h": 1,
+   "energy_wh": 72.0,
+   "zone": "Z1",
+   "after": [],
+   "structure": "S1",
+   "quantity": 144.0,
+   "unit": "m2",
+   "basis": "12 m x 12 m = 144 m2",
+   "estimated_duration_h": null,
+   "estimated_energy_wh": null
+  },
+  {
+   "id": "T2",
+   "name": "survey S2_stake",
+   "robot_type": "surveyor",
+   "duration_h": 2,
+   "energy_wh": 140.0,
+   "zone": "Z2",
+   "after": [
+    "T1"
+   ],
+   "structure": "S2",
+   "quantity": 280.0,
+   "unit": "m2",
+   "basis": "70 m x 4 m = 280 m2",
+   "estimated_duration_h": null,
+   "estimated_energy_wh": null
+  },
+  {
+   "id": "T3",
+   "name": "excavate S1_excavate_1",
+   "robot_type": "excavator",
+   "duration_h": 11,
+   "energy_wh": 1152.0,
+   "zone": "Z1",
+   "after": [
+    "T1"
+   ],
+   "structure": "S1",
+   "quantity": 72.0,
+   "unit": "m3",
+   "basis": "144 m3 / 2 = 72 m3",
+   "estimated_duration_h": null,
+   "estimated_energy_wh": null
+  },
+  {
+   "id": "T4",
+   "name": "excavate S1_excavate_2",
+   "robot_type": "excavator",
+   "duration_h": 11,
+   "energy_wh": 1152.0,
+   "zone": "Z1",
+   "after": [
+    "T3"
+   ],
+   "structure": "S1",
+   "quantity": 72.0,
+   "unit": "m3",
+   "basis": "144 m3 / 2 = 72 m3",
+   "estimated_duration_h": null,
+   "estimated_energy_wh": null
+  },
+  {
+   "id": "T5",
+   "name": "excavate S3_excavate_1",
+   "robot_type": "excavator",
+   "duration_h": 9,
+   "energy_wh": 960.0,
+   "zone": "Z3",
+   "after": [
+    "T1",
+    "T2"
+   ],
+   "structure": "S3",
+   "quantity": 60.0,
+   "unit": "m3",
+   "basis": "120 m3 / 2 = 60 m3",
+   "estimated_duration_h": null,
+   "estimated_energy_wh": null
+  },
+  {
+   "id": "T6",
+   "name": "excavate S3_excavate_2",
+   "robot_type": "excavator",
+   "duration_h": 9,
+   "energy_wh": 960.0,
+   "zone": "Z3",
+   "after": [
+    "T5"
+   ],
+   "structure": "S3",
+   "quantity": 60.0,
+   "unit": "m3",
+   "basis": "120 m3 / 2 = 60 m3",
+   "estimated_duration_h": null,
+   "estimated_energy_wh": null
+  },
+  {
+   "id": "T7",
+   "name": "haul S3_haul_1",
+   "robot_type": "hauler",
+   "duration_h": 5,
+   "energy_wh": 420.0,
+   "zone": "Z2",
+   "after": [
+    "T6"
+   ],
+   "structure": "S3",
+   "quantity": 60.0,
+   "unit": "m3",
+   "basis": "120 m3 / 2 = 60 m3",
+   "estimated_duration_h": null,
+   "estimated_energy_wh": null
+  },
+  {
+   "id": "T8",
+   "name": "haul S3_haul_2",
+   "robot_type": "hauler",
+   "duration_h": 5,
+   "energy_wh": 420.0,
+   "zone": "Z2",
+   "after": [
+    "T7"
+   ],
+   "structure": "S3",
+   "quantity": 60.0,
+   "unit": "m3",
+   "basis": "120 m3 / 2 = 60 m3",
+   "estimated_duration_h": null,
+   "estimated_energy_wh": null
+  },
+  {
+   "id": "T9",
+   "name": "haul S2_haul_1",
+   "robot_type": "hauler",
+   "duration_h": 12,
+   "energy_wh": 980.0,
+   "zone": "Z2",
+   "after": [
+    "T4",
+    "T6"
+   ],
+   "structure": "S2",
+   "quantity": 140.0,
+   "unit": "m3",
+   "basis": "280 m3 / 2 = 140 m3",
+   "estimated_duration_h": null,
+   "estimated_energy_wh": null
+  },
+  {
+   "id": "T10",
+   "name": "haul S2_haul_2",
+   "robot_type": "hauler",
+   "duration_h": 12,
+   "energy_wh": 980.0,
+   "zone": "Z2",
+   "after": [
+    "T9"
+   ],
+   "structure": "S2",
+   "quantity": 140.0,
+   "unit": "m3",
+   "basis": "280 m3 / 2 = 140 m3",
+   "estimated_duration_h": null,
+   "estimated_energy_wh": null
+  },
+  {
+   "id": "T11",
+   "name": "compact S1_compact",
+   "robot_type": "compactor",
+   "duration_h": 6,
+   "energy_wh": 576.0,
+   "zone": "Z1",
+   "after": [
+    "T4"
+   ],
+   "structure": "S1",
+   "quantity": 144.0,
+   "unit": "m2",
+   "basis": "12 m x 12 m = 144 m2",
+   "estimated_duration_h": null,
+   "estimated_energy_wh": null
+  },
+  {
+   "id": "T12",
+   "name": "compact S3_compact",
+   "robot_type": "compactor",
+   "duration_h": 10,
+   "energy_wh": 960.0,
+   "zone": "Z3",
+   "after": [
+    "T6"
+   ],
+   "structure": "S3",
+   "quantity": 240.0,
+   "unit": "m2",
+   "basis": "40 m x 6 m = 240 m2",
+   "estimated_duration_h": null,
+   "estimated_energy_wh": null
+  },
+  {
+   "id": "T13",
+   "name": "compact S2_compact",
+   "robot_type": "compactor",
+   "duration_h": 11,
+   "energy_wh": 1120.0,
+   "zone": "Z2",
+   "after": [
+    "T10"
+   ],
+   "structure": "S2",
+   "quantity": 280.0,
+   "unit": "m2",
+   "basis": "70 m x 4 m = 280 m2",
+   "estimated_duration_h": null,
+   "estimated_energy_wh": null
+  },
+  {
+   "id": "T14",
+   "name": "inspect S2_inspect",
+   "robot_type": "surveyor",
+   "duration_h": 2,
+   "energy_wh": 140.0,
+   "zone": "Z2",
+   "after": [
+    "T13"
+   ],
+   "structure": "S2",
+   "quantity": 280.0,
+   "unit": "m2",
+   "basis": "70 m x 4 m = 280 m2",
+   "estimated_duration_h": null,
+   "estimated_energy_wh": null
+  }
+ ],
+ "notes": "Berm (S2) requires 280 m3 fill; available excavation from pit (S1) 144 m3 and borrow strip (S3) 120 m3 totals 264 m3, a 16 m3 deficit. Haul tasks for S3 and S2 both target zone Z2; the plan assumes haulers will move material from both sources to the berm. Surveyor stakes pit (S1) and berm line (S2) before any excavation. All tasks fit within robot batteries and 72-hour horizon."
+}

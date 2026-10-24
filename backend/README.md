@@ -8,13 +8,14 @@ repair -> the verified schedule runs in a 2D simulator that reschedules with the
 failure and escalates to Nemotron only when the remaining fleet provably cannot finish.
 
 See the repository root README for the full story and the limitations. Quick start (the demo
-briefs `landing_pad` and `front_loaded` replay live runs recorded on Oct 23; `landing_pad_v1`,
-`access_road` and `tight_battery` are the hand-made fixtures of Oct 22, whose arithmetic the
-tests check):
+briefs `landing_pad`, `front_loaded` and `habitat_berm` replay live runs recorded on Oct 24;
+`landing_pad_v1`, `access_road` and `tight_battery` are the hand-made fixtures of Oct 22, whose
+arithmetic the tests check):
 
     uv sync
     uv run moonwright plan examples/briefs/landing_pad.md --llm fixture --out out/landing_pad.plan.json
     uv run moonwright plan examples/briefs/front_loaded.md --llm fixture    # no plan after 3 repairs: the advice
+    uv run moonwright plan examples/briefs/habitat_berm.md --llm fixture    # a horizon core, one repair: 52 h
     uv run moonwright plan examples/briefs/tight_battery.md --llm fixture --max-repairs 0   # loop off: the solver's advice
     uv run moonwright simulate out/landing_pad.plan.json --fail EX1@10 --llm fixture
     uv run moonwright montecarlo out/landing_pad.plan.json --runs 200 --seed 1 --out out/landing_pad.mc.json

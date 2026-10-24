@@ -11,8 +11,8 @@
  * (the tooltip and the task list still say them).
  *
  * The climax: around each event a banner in the event colour fills the band at the top of the
- * canvas, where the site / time line sits otherwise, so it never covers the map ("10.0 h · EX2
- * failed on T5 (44% done) → CP-SAT rescheduled 13 tasks in <0.01 s → verified, 89 h → 91 h"),
+ * canvas, where the site / time line sits otherwise, so it never covers the map ("10.0 h · EX1
+ * failed on T3 (78% done) → CP-SAT rescheduled 10 tasks in 0.01 s → verified, 72 h → 79 h"),
  * and autoplay holds for HOLD_MS (4 s) at every robot failure and replan marker (click the map
  * or press space to continue). Failed robots keep a red X at their last position with "failed
  * at 10 h"; robots queued behind a busy zone read "waiting · zone Z1".
@@ -135,7 +135,7 @@ interface Banner {
   t: number;
   kind: EventKind;
   color: string;
-  /** "EX2 failed on T5 (44% done)" */
+  /** "EX1 failed on T3 (78% done)" */
   lead: string;
   /** clauses drawn after arrows; the last one carries the verdict glyph when set */
   outcome: string[];
@@ -748,10 +748,11 @@ const CALLOUT_BAR_W = 22;
 /** Canvas width under which callouts leave the captions out. */
 const COMPACT_W = 520;
 
-/** What a callout row says after the bar: the caption, with the charge first when it is low. */
+/** A callout row's words: what the robot is doing, after its battery share when that is low
+ *  ("1% battery · done", so the figure never reads as progress). */
 function rowText(p: Placed): string {
   const frac = p.cap > 0 ? p.battery / p.cap : 0;
-  return p.status !== "failed" && frac < 0.2 ? `${Math.round(frac * 100)}% · ${p.caption}` : p.caption;
+  return p.status !== "failed" && frac < 0.2 ? `${Math.round(frac * 100)}% battery · ${p.caption}` : p.caption;
 }
 
 /** Lower first: whose cluster gets its callout placed first. */
@@ -865,6 +866,8 @@ interface DrawInput {
   hold: { frac: number } | null;
   /** the zone captions (zoneCaptions) */
   zoneCaps: ZoneCaption[];
+  /** the robots' id tags (layoutLabels): the depot's caption gives way to them */
+  tags: IdTag[];
 }
 
 /** A run of short teeth along a straight edge (a break's mark): horizontal at y, or vertical at
@@ -912,7 +915,7 @@ function drawBreaks(ctx: CanvasRenderingContext2D, geo: Geo, area: Box) {
   }
 }
 
-function drawSite({ ctx, geo, model, snap, placed, zoneCaps }: DrawInput) {
+function drawSite({ ctx, geo, model, snap, placed, zoneCaps, tags }: DrawInput) {
   const { w, h, s } = geo;
   const [gx, gy] = model.grid;
   ctx.fillStyle = C.bg;
@@ -998,7 +1001,11 @@ function drawSite({ ctx, geo, model, snap, placed, zoneCaps }: DrawInput) {
     ctx.strokeStyle = withAlpha("#cbd5e1", 0.55);
     ctx.stroke();
     ctx.restore();
-    label(ctx, "Depot", dx, dy - half - 5, `11px ${FONT_SANS}`, C.muted);
+    // the caption gives way to a robot's id tag drawn over it (robots parked in a cluster on
+    // the pad, a failed one among them), which would otherwise garble both
+    const font = `11px ${FONT_SANS}`;
+    const caption = textBox(ctx, "Depot", font, 11, dx, dy - half - 5, "center");
+    if (!tags.some((t) => overlapArea(t.box, caption) > 0)) label(ctx, "Depot", dx, dy - half - 5, font, C.muted);
   }
 
   // heading lines for moving robots (under the markers)
@@ -1199,8 +1206,8 @@ function drawVerdict(ctx: CanvasRenderingContext2D, verdict: "ok" | "fail", cx: 
 }
 
 /**
- * Event banner in the header band, in the event colour: "10.0 h · EX2 failed on T5 (44% done)
- * → CP-SAT rescheduled 13 tasks in <0.01 s → ✓ verified, 89 h → 91 h". One line when it fits,
+ * Event banner in the header band, in the event colour: "10.0 h · EX1 failed on T3 (78% done)
+ * → CP-SAT rescheduled 10 tasks in 0.01 s → ✓ verified, 72 h → 79 h". One line when it fits,
  * otherwise the outcome goes under the lead, a clause that does not fit taking the next line
  * while the band has one (two in all, three on a narrow canvas); what still overflows is
  * ellipsised. It covers the header line, never the map. While autoplay holds on the event a
@@ -1431,7 +1438,7 @@ export function SimReplay({
     const hover = hoverRef.current;
     const zoneCaps = zoneCaptions(ctx, geo, m);
     const { tags, callouts } = layoutLabels(ctx, geo, m, placed, zoneCaps);
-    const input: DrawInput = { ctx, geo, model: m, snap, placed, hover, pointer: pointerRef.current, hold, zoneCaps };
+    const input: DrawInput = { ctx, geo, model: m, snap, placed, hover, pointer: pointerRef.current, hold, zoneCaps, tags };
     drawSite(input);
     for (const p of placed) if (p.id !== hover) drawRobot(ctx, p, false);
     const hp = hover ? placed.find((p) => p.id === hover) : undefined;

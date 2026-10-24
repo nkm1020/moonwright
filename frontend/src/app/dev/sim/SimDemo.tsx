@@ -26,7 +26,7 @@ type Variant = "recorded" | "escalated" | "failed";
 /** Hours the synthetic escalation adds to the recorded replan's makespan. */
 const ESCALATION_EXTRA_H = 4;
 
-/** "89 h → 91 h": the recorded replan's makespans, `extraH` added to the new one. */
+/** "72 h → 79 h": the recorded replan's makespans, `extraH` added to the new one. */
 function makespans(r: ReplanRecord | undefined, extraH = 0): string {
   const after = r?.after.schedule?.makespan_h;
   return r && after !== undefined ? `${r.before.makespan_h} h → ${after + extraH} h` : "no replan recorded";

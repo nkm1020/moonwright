@@ -18,7 +18,7 @@
  * read-only: the fields keep their values at full contrast, the add / remove / edit
  * affordances are gone, and the plan button replays the recorded run.
  */
-import { createContext, useContext, useMemo, useState, type ReactNode } from "react";
+import { createContext, useContext, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { LoopStep, Operation, Requirements, Robot, Site, Structure, Task, Unit } from "@/lib/types";
 import { ID_PATTERN, LIMITS } from "@/lib/types";
 import { ROBOT_TYPE_COLORS, robotTypeColor, zoneColor } from "@/lib/palette";
@@ -28,10 +28,10 @@ import {
   dimPhrase,
   fmtCompact,
   fmtHorizon,
-  fmtHours,
   fmtNum,
   fmtSeconds,
   fmtWh,
+  humanizeFields,
   isFixtureModel,
   isOperation,
   minDimension,
@@ -186,6 +186,7 @@ const DIM_PHRASES: Record<string, (v: string) => string> = {
   thickness_m: (v) => `${v} m thick`,
   trench_width_m: (v) => `trench ${v} m wide`,
   trench_depth_m: (v) => `trench ${v} m deep`,
+  lifts: (v) => (v === "1" ? "1 lift" : `${v} lifts`),
 };
 
 /** "20 m diameter · min diameter 12 m · 0.4 m deep · 0.3 m thick" from a structure's numeric
@@ -252,11 +253,12 @@ export function taskOperation(t: Task): Operation | null {
   }
 }
 
-/** "6 tasks · 80 h · 8,058 Wh · survey 2 × 706.9 m² · excavate 2 × 141.4 m³ · compact 2 ×
- *  353.4 m²" for the tasks of one structure. Quantities are grouped by operation and unit in
- *  work order, so excavated m³ and surveyed or compacted m² never add up into one figure;
- *  equal quantities read as a count (two passes over a pad are not summed into an area larger
- *  than the pad), unequal ones of one operation are summed. */
+/** "6 tasks · 31 robot-hours · 2,882 Wh · survey 160 m² · haul 2 × 60 m³ · compact 160 m² ·
+ *  sinter 145 m²" for the tasks of one structure: the work summed over its tasks, as the task
+ *  table counts it, so it never reads like the makespan. Quantities are grouped by operation
+ *  and unit in work order, so excavated m³ and surveyed or compacted m² never add up into one
+ *  figure; equal quantities read as a count (two passes over a pad are not summed into an area
+ *  larger than the pad), unequal ones of one operation are summed. */
 export function structureWork(tasks: Task[]): string | null {
   if (tasks.length === 0) return null;
   const hours = tasks.reduce((a, t) => a + t.duration_h, 0);
@@ -280,10 +282,11 @@ export function structureWork(tasks: Task[]): string | null {
     .map(({ label, unit, quantities: qs }) => {
       const same = qs.length > 1 && qs.every((q) => Math.abs(q - qs[0]) < 0.05);
       const figure = same ? `${qs.length} × ${fmtNum(qs[0], 1)}` : fmtNum(qs.reduce((a, q) => a + q, 0), 1);
-      return `${label} ${figure} ${UNIT_LABELS[unit]}`;
+      return `${label} ${figure} ${UNIT_LABELS[unit]}`;
     })
     .join(" · ");
-  return `${plural(tasks.length, "task")} · ${fmtHours(hours, 1)} · ${fmtWh(wh)}${quantities ? ` · ${quantities}` : ""}`;
+  const robotHours = `${fmtNum(hours, 1)}\u00a0${hours === 1 ? "robot-hour" : "robot-hours"}`;
+  return `${plural(tasks.length, "task")} · ${robotHours} · ${fmtWh(wh)}${quantities ? ` · ${quantities}` : ""}`;
 }
 
 // ------------------------------------------------------------------ geometry
@@ -387,7 +390,8 @@ export interface CardWarning {
   structure: string | null;
   /** the operations an unstaffed / dropped / restored / unsupported note is about */
   operations: Operation[];
-  /** the sentence as shown: an amber note drops the clause its lead already says */
+  /** the sentence as shown, field names read as words and a length kept with its unit
+   *  ("diameter 12 m -> 12 m x 12 m"): an amber note drops the clause its lead already says */
   text: string;
   raw: string;
 }
@@ -451,7 +455,9 @@ export function classifyWarning(raw: string): CardWarning {
       : shape === "no_dimensions"
         ? text.replace(/,\s*so add the brief's numbers before planning\.?$/, "")
         : text;
-  return { shape, tone: lead ? "warn" : "muted", lead, structure, operations, text: shown, raw };
+  // a narrow column wraps a note often: never between a length and its unit ("12 / m")
+  const words = humanizeFields(shown).replace(/(\d) (m|m2|m3)\b/g, "$1\u00a0$2");
+  return { shape, tone: lead ? "warn" : "muted", lead, structure, operations, text: words, raw };
 }
 
 /** The structure step's warnings as the card lists them: amber notes first, order kept. */
@@ -723,12 +729,8 @@ export function RequirementsCard({
               )}
               <ul className="space-y-1.5">
                 {value.constraints.map((c, i) => (
-                  <li key={i} className="flex items-center gap-1.5">
-                    <TextInput
-                      value={c}
-                      onChange={(e) => setConstraint(i, e.target.value)}
-                      aria-label={`constraint ${i + 1}`}
-                    />
+                  <li key={i} className="flex items-start gap-1.5">
+                    <ConstraintInput value={c} onChange={(text) => setConstraint(i, text)} label={`constraint ${i + 1}`} />
                     <RemoveButton onClick={() => removeConstraint(i)} label={`remove constraint ${i + 1}`} />
                   </li>
                 ))}
@@ -785,21 +787,23 @@ export function RequirementsCard({
                 </Button>
               }
             >
+              {/* narrower columns on a phone, so the read-only card fits its width (an
+                  editable one adds the remove column and may scroll) */}
               <div className="overflow-x-auto">
-                <table className="w-full min-w-[520px] border-separate border-spacing-y-1 text-xs">
+                <table className="w-full border-separate border-spacing-y-1 text-xs sm:min-w-[520px]">
                   <thead>
                     <tr className="text-left text-[11px] uppercase tracking-wider text-dim">
                       <th className="px-1 font-medium">Id</th>
                       <th className="px-1 font-medium">Type</th>
                       <th className="px-1 font-medium">Battery (Wh)</th>
                       <th className="px-1 font-medium">Speed (cells/h)</th>
-                      <th className="px-1" />
+                      {!locked && <th className="px-1" />}
                     </tr>
                   </thead>
                   <tbody>
                     {value.robots.map((r, i) => (
                       <tr key={i}>
-                        <td className="w-24 px-1">
+                        <td className="w-14 px-1 sm:w-24">
                           <TextInput
                             value={r.id}
                             onChange={(e) => setRobot(i, { id: e.target.value })}
@@ -821,7 +825,7 @@ export function RequirementsCard({
                             />
                           </div>
                         </td>
-                        <td className="w-32 px-1">
+                        <td className="w-[4.5rem] px-1 sm:w-32">
                           <NumberInput
                             value={r.battery_wh}
                             min={1}
@@ -832,7 +836,7 @@ export function RequirementsCard({
                             aria-label={`robot ${i + 1} battery in Wh`}
                           />
                         </td>
-                        <td className="w-32 px-1">
+                        <td className="w-16 px-1 sm:w-32">
                           <NumberInput
                             value={r.speed_cells_per_h}
                             min={0.1}
@@ -843,9 +847,11 @@ export function RequirementsCard({
                             aria-label={`robot ${i + 1} speed in cells per hour`}
                           />
                         </td>
-                        <td className="w-8 px-1">
-                          <RemoveButton onClick={() => removeRobot(i)} label={`remove robot ${r.id || i + 1}`} />
-                        </td>
+                        {!locked && (
+                          <td className="w-8 px-1">
+                            <RemoveButton onClick={() => removeRobot(i)} label={`remove robot ${r.id || i + 1}`} />
+                          </td>
+                        )}
                       </tr>
                     ))}
                   </tbody>
@@ -1151,6 +1157,44 @@ function Group({
   );
 }
 
+/** A constraint is a sentence: its field wraps and grows with it instead of cutting it off at
+ *  the edge (the card is read whole, on a phone as well); Enter adds no line break, since the
+ *  planner reads each constraint as one line. */
+function ConstraintInput({ value, onChange, label }: { value: string; onChange: (text: string) => void; label: string }) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const fit = () => {
+      el.style.height = "auto";
+      el.style.height = `${el.scrollHeight + el.offsetHeight - el.clientHeight}px`;
+    };
+    fit();
+    // the column narrows on a phone or a resize: fit again when the width changes
+    let width = el.clientWidth;
+    const observer = new ResizeObserver(() => {
+      if (el.clientWidth === width) return;
+      width = el.clientWidth;
+      fit();
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [value]);
+  return (
+    <textarea
+      ref={ref}
+      rows={1}
+      value={value}
+      onChange={(e) => onChange(e.target.value.replace(/\s*\n\s*/g, " "))}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") e.preventDefault();
+      }}
+      aria-label={label}
+      className={cx(inputClass.replace("h-8 ", ""), "block resize-none overflow-hidden py-[5px] leading-5")}
+    />
+  );
+}
+
 function RemoveButton({ onClick, label }: { onClick: () => void; label: string }) {
   const locked = useContext(LockedContext);
   if (locked) return null;
@@ -1247,7 +1291,8 @@ function StructureRow({
   }
   return (
     <li className="rounded-md border border-white/10 bg-surface/60 p-3">
-      <div className="grid grid-cols-[4rem_minmax(0,1fr)_7rem_auto] items-center gap-2">
+      {/* the zone column narrows on a phone, where the type needs the room */}
+      <div className="grid grid-cols-[4rem_minmax(0,1fr)_5.5rem_auto] items-center gap-2 sm:grid-cols-[4rem_minmax(0,1fr)_7rem_auto]">
         <TextInput
           value={structure.id}
           onChange={(e) => onChange({ ...structure, id: e.target.value })}

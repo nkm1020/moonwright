@@ -20,10 +20,8 @@ import type {
   Task,
   VerificationReceipt,
 } from "@/lib/types";
-import { conflictPrefix } from "@/lib/types";
 import { EVENT_COLORS, STAGE_LABELS, robotTypeColor, zoneColor } from "@/lib/palette";
 import {
-  conflictMeaning,
   fmtHours,
   fmtSeconds,
   isFixtureModel,
@@ -38,6 +36,7 @@ import {
   tidyMessage,
 } from "@/lib/format";
 import { Gantt, defaultZoneIds } from "./Gantt";
+import { ConflictChips, HintText } from "./ProgressTrace";
 import { ESCALATION_MODEL, KindPill, escalationText, eventKindLabel, formatHours, replanOutcome as outcomeOf } from "./EventList";
 import { Badge } from "./Section";
 import { Suggestions } from "./Suggestions";
@@ -122,9 +121,9 @@ function repairModel(steps: LoopStep[]): string {
 }
 
 /** The one-line story of the replan, built from the closing step's payload when it parses
- *  ("CP-SAT rescheduled 13 tasks in <0.01 s, Nemotron not needed · makespan 89 h → 91 h");
- *  for older recordings and failed replans the backend message, tidied ("89 h -> 91 h" reads
- *  "89 h → 91 h"). Recordings made before phase 3d end the message in a time-base flag,
+ *  ("CP-SAT rescheduled 10 tasks in 0.01 s, Nemotron not needed · makespan 72 h → 79 h");
+ *  for older recordings and failed replans the backend message, tidied ("72 h -> 79 h" reads
+ *  "72 h → 79 h"). Recordings made before phase 3d end the message in a time-base flag,
  *  "(absolute)", which is dropped; current ones carry none, so the strip is a no-op. */
 function outcomeHeadline(
   outcome: { step: LoopStep; payload: ReplanOutcomePayload | null } | null,
@@ -507,20 +506,10 @@ function FailurePanel({ after, atH }: { after: PlanResult; atH: number }) {
       </div>
       {failure ? (
         <>
-          {failure.conflicts.length > 0 && (
-            <div className="flex flex-wrap gap-1">
-              {failure.conflicts.map((c) => (
-                <span
-                  key={c}
-                  title={conflictMeaning(c) ?? conflictPrefix(c)}
-                  className="rounded-md border border-fail/50 px-1.5 py-0.5 font-mono text-[11px]"
-                >
-                  {c}
-                </span>
-              ))}
-            </div>
-          )}
-          {failure.hint && <p className={mutedClass}>{tidyHint(failure.hint)}</p>}
+          {/* as the trace shows a core: precedence edges joined into chains, a long core and a
+              long hint folded, every conflict and sentence one click away */}
+          <ConflictChips conflicts={failure.conflicts} />
+          {failure.hint && <HintText hint={tidyHint(failure.hint)} className={mutedClass} />}
           {failure.details.length > 0 && (
             <ul className={`list-disc space-y-0.5 pl-5 text-xs ${mutedClass}`}>
               {failure.details.slice(0, 6).map((d, i) => (

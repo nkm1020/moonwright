@@ -56,6 +56,7 @@ EXPECTED_KIND: dict[str, str] = {
 DEMO_TWINS: dict[str, str] = {
     "access_road": "access_road",
     "front_loaded": "front_loaded_excavation",
+    "habitat_berm": "habitat_berm_tight_horizon",
     "landing_pad": "landing_pad",
     "tight_battery": "tight_battery",
 }

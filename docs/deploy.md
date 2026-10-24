@@ -19,10 +19,15 @@ step of the recorded run, so one button at a time walks the whole loop:
 | 04 Simulate | Replay the simulation | EX1 fails at 10 h, CP-SAT replans alone, the run finishes at 79 h |
 | 05 Robustness | Replay Monte Carlo | 200 runs, the single points of failure, and the recorded what-if with one spare of each |
 
-The top bar loads a whole sample in one click: **Landing pad** (everything above at once) and
+The top bar loads a whole sample in one click: **Landing pad** (everything above at once),
 **Impossible deadline** (the 60 h brief: three repair rounds, no plan, and the CP-SAT-proven
-advice of an 85 h deadline). Every figure on the example cards and in the tooltips is read from
-those files.
+advice of an 85 h deadline) and **Tight deadline** (the 72 h brief: CP-SAT proves the first
+graph too slow, since its hauls move 400 m3 into the berm against 264 m3 dug; one repair drops
+the double haul and splits the digs, 52 h proved; the brief's own digs give 264 of the berm's
+280 m3, and the planner notes under the explanation say the last 16 m3 is sourced externally,
+which the supply check accepts within its 25 % swell allowance; its plan only, so steps 04 and
+05 are one line that loads the landing pad). Every figure on the example cards and in the
+tooltips is read from those files.
 
 Whatever would need a new request is locked, with a one-line reason: structuring or planning a
 brief of your own, editing the requirements (Re-structure is not offered), applying a proven
@@ -88,8 +93,9 @@ Pages on a private repository needs a paid plan, so the demo goes live with the 
 2. **Settings → Pages → Build and deployment → Source: GitHub Actions.**
 3. **Actions → Pages → Run workflow** on `main` (or add the push trigger and push).
 4. Open https://nkm1020.github.io/moonwright/ and check: the landing-pad brief on the first
-   view, the walk through to the Monte Carlo what-if, the Impossible deadline button, no errors
-   in the browser console, and a phone width without sideways scrolling.
+   view, the walk through to the Monte Carlo what-if, the Impossible deadline and Tight
+   deadline buttons, no errors in the browser console, and a phone width without sideways
+   scrolling.
 
 The deploy job's `github-pages` environment shows the URL of each deployment.
 
