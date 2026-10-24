@@ -56,7 +56,7 @@ chromium-headless-shell`).
 
 | Variable | Default | Effect |
 | --- | --- | --- |
-| `TTS` | `openai` when `OPENAI_API_KEY` is set, else `say` | narration engine. Put `OPENAI_API_KEY=...` in `tools/video/.env` (gitignored; loaded by the render's node process only, never by the fixture backend, and never logged). Sentences are still synthesized one by one, so the timing and captions work the same; synthesized sentences are cached in `out/work/audio/cache` like `say`'s |
+| `TTS` | `openai` when `OPENAI_API_KEY` is set, else `say` | narration engine. Put `OPENAI_API_KEY=...` in `tools/video/.env` or `tools/video/voice/.env` (both gitignored; loaded by the render's node process only, never by the fixture backend, and never logged). Sentences are still synthesized one by one, so the timing and captions work the same; synthesized sentences are cached in `out/work/audio/cache` like `say`'s |
 | `OPENAI_TTS_MODEL` | `gpt-4o-mini-tts` | OpenAI speech model (`tts-1`, `tts-1-hd` ignore the instructions) |
 | `OPENAI_TTS_VOICE` | `ash` | OpenAI voice |
 | `OPENAI_TTS_INSTRUCTIONS` | a calm documentary narrator | how the voice should speak (gpt-4o-mini-tts) |

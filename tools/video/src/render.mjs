@@ -18,11 +18,13 @@ import { contactSheet, heroGif, thumbnail, timingTable } from "./extras.mjs";
 
 // tools/video/.env (gitignored) may hold OPENAI_API_KEY for the narration; it is loaded into this
 // process only, never into the fixture backend, and its values are never logged
-const DOTENV = path.join(path.dirname(new URL(import.meta.url).pathname), "..", ".env");
-try {
-  process.loadEnvFile(DOTENV);
-} catch {
-  // no .env: macOS say narrates
+const VIDEO_DIR = path.join(path.dirname(new URL(import.meta.url).pathname), "..");
+for (const dotenv of [path.join(VIDEO_DIR, ".env"), path.join(VIDEO_DIR, "voice", ".env")]) {
+  try {
+    process.loadEnvFile(dotenv);
+  } catch {
+    // no such file: macOS say narrates unless the other one sets a key
+  }
 }
 
 const env = {
