@@ -7,6 +7,11 @@
 // sounds the same as one long call (measured: 6.97 s vs 7.02 s for the title narration).
 //
 // A human voice-over overrides `say`: drop tools/video/voice/<scene>.wav (any rate/channels).
+//
+// TTS=openai (the default when OPENAI_API_KEY is set, e.g. in tools/video/.env) synthesizes the
+// same sentences with OpenAI's speech endpoint instead of `say` (OPENAI_TTS_MODEL, default
+// gpt-4o-mini-tts; OPENAI_TTS_VOICE, default ash; OPENAI_TTS_INSTRUCTIONS steers the delivery).
+// Sentences stay separate calls, so the timing below is measured the same way for either voice.
 import crypto from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
@@ -53,6 +58,45 @@ async function sayToWav(text, { voice, rate, cacheDir }) {
   return readWav(wav);
 }
 
+const OPENAI_SPEECH_URL = "https://api.openai.com/v1/audio/speech";
+
+async function openaiToWav(text, { openai, cacheDir }) {
+  const { model, voice, instructions } = openai;
+  const key = crypto.createHash("sha1").update(`openai|${model}|${voice}|${instructions}|${text}`).digest("hex").slice(0, 16);
+  const wav = path.join(cacheDir, `${key}.wav`);
+  if (!fs.existsSync(wav)) {
+    const raw = path.join(cacheDir, `${key}.openai.wav`);
+    const body = { model, voice, input: text, response_format: "wav" };
+    if (instructions && model !== "tts-1" && model !== "tts-1-hd") body.instructions = instructions;
+    for (let attempt = 1; ; attempt++) {
+      const res = await fetch(OPENAI_SPEECH_URL, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(60000),
+      }).catch((e) => ({ ok: false, status: 0, text: async () => String(e) }));
+      if (res.ok) {
+        await fsp.writeFile(raw, Buffer.from(await res.arrayBuffer()));
+        break;
+      }
+      // the key never appears in the message: only the status and the endpoint's own words
+      const detail = (await res.text()).slice(0, 300);
+      if (attempt >= 3 || (res.status >= 400 && res.status < 500 && res.status !== 429)) {
+        throw new Error(`OpenAI speech failed (HTTP ${res.status}) on "${text.slice(0, 40)}...": ${detail}`);
+      }
+      log(`OpenAI speech HTTP ${res.status} on "${text.slice(0, 40)}...", retrying (${attempt}/3)`);
+      await new Promise((r) => setTimeout(r, 2000 * attempt));
+    }
+    await toWav48(raw, wav);
+    await fsp.rm(raw, { force: true });
+  }
+  return readWav(wav);
+}
+
+function synthesize(text, opts) {
+  return opts.engine === "openai" ? openaiToWav(text, opts) : sayToWav(text, opts);
+}
+
 function humanVoiceFile(id) {
   for (const ext of [".wav", ".aiff", ".m4a", ".mp3"]) {
     const f = path.join(VOICE_DIR, `${id}${ext}`);
@@ -96,7 +140,7 @@ async function narrateScene(scene, opts) {
       parts.push(gap);
       offset += gap.length;
     }
-    const clip = await sayToWav(scene.ttsSentences[i], opts);
+    const clip = await synthesize(scene.ttsSentences[i], opts);
     const edges = silenceEdges(clip);
     const start = offset / RATE_HZ;
     const len = clip.samples.length / RATE_HZ;
@@ -126,7 +170,7 @@ async function narrateScene(scene, opts) {
   await writeWav(out, { rate: RATE_HZ, samples });
   return {
     id: scene.id,
-    source: `say -v ${opts.voice} -r ${opts.rate}`,
+    source: opts.engine === "openai" ? `openai ${opts.openai.model} ${opts.openai.voice}` : `say -v ${opts.voice} -r ${opts.rate}`,
     wav: out,
     duration: samples.length / RATE_HZ,
     speechStart: timed[0].speechStart,
@@ -138,8 +182,11 @@ async function narrateScene(scene, opts) {
 export async function narrate(scenes, opts) {
   await ensureDir(AUDIO_DIR);
   const cacheDir = await ensureDir(path.join(AUDIO_DIR, "cache"));
-  const needsSay = scenes.some((s) => s.narration && !humanVoiceFile(s.id));
-  if (needsSay) await checkVoice(opts.voice);
+  const needsTts = scenes.some((s) => s.narration && !humanVoiceFile(s.id));
+  if (needsTts && opts.engine === "openai" && !process.env.OPENAI_API_KEY) {
+    throw new Error("TTS=openai needs OPENAI_API_KEY (put it in tools/video/.env)");
+  }
+  if (needsTts && opts.engine !== "openai") await checkVoice(opts.voice);
   const timings = {};
   const queue = [...scenes];
   const worker = async () => {

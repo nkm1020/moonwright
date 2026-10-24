@@ -125,7 +125,7 @@ for _ in $(seq 1 120); do
 done
 [ "$(curl -s -m 2 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$APP_PORT/")" = 200 ] || { tail -20 "$LOGS/app.log"; die "app did not come up"; }
 
-say_step "narration + capture (voice $VOICE, rate $RATE)"
+say_step "narration + capture (the engine is logged below)"
 node "$HERE/src/render.mjs" capture
 
 say_step "stopping the servers"

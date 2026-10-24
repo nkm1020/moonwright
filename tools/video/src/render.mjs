@@ -16,7 +16,25 @@ import { renderCaptionImages, timelineCues, writeSrt } from "./captions.mjs";
 import { assemble, integratedLoudness, motionHoles, verifyOutput } from "./assemble.mjs";
 import { contactSheet, heroGif, thumbnail, timingTable } from "./extras.mjs";
 
+// tools/video/.env (gitignored) may hold OPENAI_API_KEY for the narration; it is loaded into this
+// process only, never into the fixture backend, and its values are never logged
+const DOTENV = path.join(path.dirname(new URL(import.meta.url).pathname), "..", ".env");
+try {
+  process.loadEnvFile(DOTENV);
+} catch {
+  // no .env: macOS say narrates
+}
+
 const env = {
+  tts: process.env.TTS || (process.env.OPENAI_API_KEY ? "openai" : "say"),
+  openai: {
+    model: process.env.OPENAI_TTS_MODEL || "gpt-4o-mini-tts",
+    voice: process.env.OPENAI_TTS_VOICE || "ash",
+    instructions:
+      process.env.OPENAI_TTS_INSTRUCTIONS ||
+      "A calm, confident documentary narrator explaining an engineering demo. Clear diction, an even, " +
+        "unhurried pace, warm but precise; read numbers and technical terms plainly, no dramatic emphasis.",
+  },
   voice: process.env.VOICE || "Samantha",
   rate: Number(process.env.RATE || 180),
   frameFormat: process.env.FRAME_FORMAT === "jpeg" ? "jpeg" : "png",
@@ -45,7 +63,14 @@ async function capturePhase() {
   factsGate(story);
   const health = await fetch(API_HEALTH).then((r) => r.json());
   if (health.llm !== "fixture") throw new Error(`backend reports llm=${health.llm}; the video is recorded against the fixture backend only`);
-  const timings = await narrate(story.scenes, { voice: env.voice, rate: env.rate, sentenceGap: story.defaults.sentenceGap ?? 0.12 });
+  log(`narration: ${env.tts === "openai" ? `OpenAI ${env.openai.model}, voice ${env.openai.voice}` : `macOS say, voice ${env.voice}, rate ${env.rate}`}`);
+  const timings = await narrate(story.scenes, {
+    engine: env.tts,
+    openai: env.openai,
+    voice: env.voice,
+    rate: env.rate,
+    sentenceGap: story.defaults.sentenceGap ?? 0.12,
+  });
   const { results, browser } = await captureScenes(story.scenes, timings, { facts: story.facts, format: env.frameFormat });
   await browser.close();
   const durations = Object.fromEntries(Object.values(results).map((r) => [r.id, r.duration]));
