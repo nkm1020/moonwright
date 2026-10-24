@@ -183,11 +183,14 @@ export interface SampleSpec {
 
 /** The recorded live runs under public/samples (Nemotron on Nebius Token Factory, Oct 24
  *  2026, the final pipeline), in display order: the landing pad, repaired twice and then
- *  stressed (simulation, Monte Carlo, spare what-if), and an impossible 60 h brief that ends
- *  with solver-proven advice. A new sample is one line here plus its files. */
+ *  stressed (simulation, Monte Carlo, spare what-if); an impossible 60 h brief that ends
+ *  with solver-proven advice; and a 72 h brief whose first graph CP-SAT proves too slow, which
+ *  one repair restructures to 52 h (its plan only: the console points to the landing pad for
+ *  stages 04 and 05). A new sample is one line here plus its files. */
 export const SAMPLES = [
   { id: "landing_pad", title: "Landing pad", files: ["sim", "mc", "whatif"], example: true },
   { id: "front_loaded", title: "Impossible deadline", files: [], example: true },
+  { id: "habitat_berm", title: "Tight deadline", files: [], example: true },
 ] as const satisfies readonly SampleSpec[];
 
 export type SampleId = (typeof SAMPLES)[number]["id"];

@@ -35,6 +35,10 @@ export { OPERATIONS } from "./types";
  *  (a non-numeric value is skipped anyway; a boolean flag is never 1 m). */
 export const NON_DIMENSION_KEYS: ReadonlySet<string> = new Set(["id", "type", "zone", "operations"]);
 
+/** The space inside a figure ("52 h", "1 m 16 s", "4,009 Wh"): no-break, so a figure never
+ *  wraps between its number and its unit. */
+const NBSP = "\u00a0";
+
 export function fmtNum(n: number | null | undefined, digits = 1): string {
   if (n === null || n === undefined || !Number.isFinite(n)) return "—";
   if (Number.isInteger(n)) return n.toLocaleString("en-US");
@@ -44,24 +48,25 @@ export function fmtNum(n: number | null | undefined, digits = 1): string {
 /** "77 h", "90.3 h"; integers print without decimals, null prints an em dash. */
 export function fmtHours(h: number | null | undefined, digits = 1): string {
   if (h === null || h === undefined || !Number.isFinite(h)) return "—";
-  return `${fmtNum(h, digits)} h`;
+  return `${fmtNum(h, digits)}${NBSP}h`;
 }
 
 /** "336 h (14 d)" for horizons; anything under two days stays in hours only. */
 export function fmtHorizon(h: number): string {
   if (!Number.isFinite(h)) return "—";
   if (h < 48) return fmtHours(h, 0);
-  return `${fmtHours(h, 0)} (${fmtNum(h / 24, 1)} d)`;
+  return `${fmtHours(h, 0)} (${fmtNum(h / 24, 1)}${NBSP}d)`;
 }
 
+/** "4.57 s", "12.3 s", "1 m 16 s", one unbreakable figure. */
 export function fmtSeconds(s: number | null | undefined): string {
   if (s === null || s === undefined || !Number.isFinite(s)) return "—";
-  if (s < 0.005) return "<0.01 s";
-  if (s < 10) return `${s.toFixed(2)} s`;
-  if (s < 60) return `${s.toFixed(1)} s`;
+  if (s < 0.005) return `<0.01${NBSP}s`;
+  if (s < 10) return `${s.toFixed(2)}${NBSP}s`;
+  if (s < 60) return `${s.toFixed(1)}${NBSP}s`;
   const m = Math.floor(s / 60);
   const rest = Math.round(s - m * 60);
-  return `${m} m ${String(rest).padStart(2, "0")} s`;
+  return `${m}${NBSP}m${NBSP}${String(rest).padStart(2, "0")}${NBSP}s`;
 }
 
 export function fmtPercent(x: number | null | undefined, digits = 0): string {
@@ -79,7 +84,7 @@ export function fmtCompact(n: number | null | undefined): string {
 }
 
 export function fmtWh(wh: number): string {
-  return `${fmtNum(wh, 0)} Wh`;
+  return `${fmtNum(wh, 0)}${NBSP}Wh`;
 }
 
 export function plural(n: number, singular: string, pluralForm = `${singular}s`): string {
@@ -302,11 +307,12 @@ export function modelTitle(model: string | null | undefined): string {
 }
 
 /** Badge text of one model call: "Nemotron 3 Ultra · 1.2k in · 0.8k out · 12.3 s"; a recorded
- *  answer carries no tokens and reads "recorded answer · <0.01 s". */
+ *  answer carries no tokens and reads "recorded answer · <0.01 s". A narrow badge wraps only
+ *  between the parts, never inside a figure. */
 export function fmtUsage(usage: Usage): string {
   const parts = [modelDisplayName(usage.model) || "model"];
   if (usage.input_tokens + usage.output_tokens > 0) {
-    parts.push(`${fmtCompact(usage.input_tokens)} in`, `${fmtCompact(usage.output_tokens)} out`);
+    parts.push(`${fmtCompact(usage.input_tokens)}${NBSP}in`, `${fmtCompact(usage.output_tokens)}${NBSP}out`);
   }
   parts.push(fmtSeconds(usage.latency_s));
   return parts.join(" · ");
@@ -385,13 +391,13 @@ export function humanizeVolume(text: string): string {
 }
 
 /** Quantities as the console writes them: "360 m3" -> "360 m³", "600 m2" -> "600 m²" (also
- *  "10m3" and "10 m^3", as model prose writes them), "100 x 6 x 0.6 m" -> "100 × 6 × 0.6 m",
- *  "12-20 m" / "68-189 m3" -> "12–20 m" / "68–189 m³", "(33 %)" -> "(33%)". Ids and words are
- *  left alone. */
+ *  "10m3" and "10 m^3", as model prose writes them; the figure never wraps from its unit),
+ *  "100 x 6 x 0.6 m" -> "100 × 6 × 0.6 m", "12-20 m" / "68-189 m3" -> "12–20 m" / "68–189 m³",
+ *  "(33 %)" -> "(33%)". Ids and words are left alone. */
 export function tidyQuantities(text: string): string {
   return text
-    .replace(/(\d)\s?m\^?3\b/g, "$1 m³")
-    .replace(/(\d)\s?m\^?2\b/g, "$1 m²")
+    .replace(/(\d)\s?m\^?3\b/g, `$1${NBSP}m³`)
+    .replace(/(\d)\s?m\^?2\b/g, `$1${NBSP}m²`)
     .replace(/\bm\^?3\b/g, "m³")
     .replace(/\bm\^?2\b/g, "m²")
     .replace(/(\d)\s+x\s+(?=\d)/g, "$1 × ")
@@ -399,7 +405,13 @@ export function tidyQuantities(text: string): string {
     .replace(/(\d) %/g, "$1%");
 }
 
-/** Backend sentences name schema fields ("every duration_h and energy_wh"): read them as words. */
+/** A structure's dimension fields as the backend names them in a note ("diameter_m",
+ *  "trench_depth_m", "min_width_m"); the first group is the dimension, the second its value. */
+const DIMENSION_FIELD =
+  /\b((?:min_)?(?:trench_)?(?:diameter|length|width|depth|height|thickness))_m\b(?: (\d+(?:\.\d+)?)(?!\d|\.\d| ?m\b))?/g;
+
+/** Backend sentences name schema fields ("every duration_h and energy_wh", "diameter_m 12 -> 12
+ *  m x 12 m"): read them as words ("diameter 12 m -> 12 m x 12 m"). */
 export function humanizeFields(text: string): string {
   return text
     .replace(/\bduration_h\b/g, "duration")
@@ -408,10 +420,13 @@ export function humanizeFields(text: string): string {
     .replace(/\bestimated_energy_wh\b/g, "estimated energy")
     .replace(/\brobot_type\b/g, "robot type")
     .replace(/\bhorizon_h\b/g, "horizon")
-    .replace(/\bbattery_wh\b/g, "battery");
+    .replace(/\bbattery_wh\b/g, "battery")
+    .replace(DIMENSION_FIELD, (_, field: string, value?: string) =>
+      `${field.replace(/_/g, " ")}${value !== undefined ? ` ${value}${NBSP}m` : ""}`,
+    );
 }
 
-/** Backend step messages print "horizon 336h" / "makespan 89h": space the unit like the rest
+/** Backend step messages print "horizon 336h" / "makespan 72h": space the unit like the rest
  *  of the console ("336 h"). */
 export function tidyUnits(text: string): string {
   return text.replace(/(\d)(Wh|h)\b/g, "$1 $2");
@@ -438,9 +453,10 @@ const UNIT_NUMBER = new RegExp(`\\b${NUM}\\s?(kWh|Wh|h)\\b`, "g");
 
 /** Numbers that carry a unit get the console's formatting: "5000 Wh" -> "5,000 Wh", "336h" ->
  *  "336 h", while text the backend already formatted stays as it is ("10,000 Wh",
- *  "9,930 Wh", "1,784.39 Wh"); bare counts, token counts and ids are left alone. */
+ *  "9,930 Wh", "1,784.39 Wh"); bare counts, token counts and ids are left alone. The space is
+ *  the figures' no-break one (fmtHours), so a hint never wraps "64 / h" on a phone. */
 export function tidyNumbers(text: string): string {
-  return text.replace(UNIT_NUMBER, (_, n: string, unit: string) => `${groupDigits(n)} ${unit}`);
+  return text.replace(UNIT_NUMBER, (_, n: string, unit: string) => `${groupDigits(n)}${NBSP}${unit}`);
 }
 
 /** The model's own prose (the explanation, the planner's notes) with the console's figures:
@@ -476,7 +492,7 @@ function resolvePlurals(s: string): string {
 
 /** Machine words inside backend prose read as words: a structure's type id in its label ("S2
  *  (blast_berm)" -> "S2 (blast berm)"), a chain of ids drawn with the console's arrow
- *  ("T1->T2->T7" -> "T1→T2→T7", "89 h -> 91 h" -> "89 h → 91 h"), the Token Factory's request
+ *  ("T1->T2->T7" -> "T1→T2→T7", "72 h -> 79 h" -> "72 h → 79 h"), the Token Factory's request
  *  formats ("json_schema, json_object and plain text were all refused" -> "every request format
  *  (JSON schema, JSON object, plain text) was refused") and the API's finish reasons ("empty
  *  completion (finish_reason=stop)" -> "empty answer", "(finish_reason=length)" -> "(cut off at
@@ -578,7 +594,7 @@ export function tidyDetail(text: string): string {
 }
 
 /** A step message as the trace prints it: "makespan 68h (optimal)" -> "makespan 68 h
- *  (optimal)", a replan's "89 h -> 91 h" -> "89 h → 91 h"; an offline backend's miss
+ *  (optimal)", a replan's "72 h -> 79 h" -> "72 h → 79 h"; an offline backend's miss
  *  ("offline: missing fixture taskgraph_3.json for brief 'x'", "offline: This backend is
  *  running offline ...") reads as one short clause, since the step's failure carries the rest
  *  and recording file names never reach the page. */
@@ -609,8 +625,8 @@ export function joinAnd(words: string[]): string {
 }
 
 /** Solver sentence for a robot type whose work fits the pool but no single battery, as the
- *  backend wrote it before phase 3d (one copy per robot of the type); kept so recordings made
- *  before then (front_loaded.plan.json and older) still merge into one sentence. */
+ *  backend wrote it before phase 3d (one copy per robot of the type); kept so recordings older
+ *  than phase 3d still merge into one sentence. */
 const POOL_SENTENCE =
   /^(\S+) has (\d+(?:\.\d+)?) Wh, and the (\S+) tasks \((\d+(?:\.\d+)?) Wh in total(?: \(incl\. ~(\d+(?:\.\d+)?) Wh of travel\))?\) cannot be split across the (\d+) \S+ robot\(s\) \((\d+(?:\.\d+)?) Wh combined\) without exceeding its budget\.?$/;
 
@@ -637,8 +653,8 @@ function renderPool(type: string, p: PoolHint): string {
       : sameBudget
         ? `${joinAnd(ids)} each have ${fmtWh(p.robots[0].budget)}`
         : joinAnd(p.robots.map((r) => `${r.id} has ${fmtWh(r.budget)}`));
-  const travel = p.travel !== null && Math.round(p.travel) >= 1 ? `, about ${fmtNum(p.travel, 0)} Wh of it travel,` : "";
-  return `${who}; the ${type} tasks need ${fmtNum(p.total, 0)} Wh in total${travel} and cannot be split across ${plural(p.count, type)} (${fmtWh(p.pool)} combined) without exceeding one budget.`;
+  const travel = p.travel !== null && Math.round(p.travel) >= 1 ? `, about ${fmtWh(p.travel)} of it travel,` : "";
+  return `${who}; the ${type} tasks need ${fmtWh(p.total)} in total${travel} and cannot be split across ${plural(p.count, type)} (${fmtWh(p.pool)} combined) without exceeding one budget.`;
 }
 
 /** One sentence of a hint, tidied (tidyText), with an older recording's nested
@@ -686,6 +702,92 @@ export function tidyHint(text: string | null | undefined): string {
   return out
     .map((s) => (s.startsWith("\u0000") ? renderPool(s.slice(1), pools.get(s.slice(1)) as PoolHint) : s))
     .join(" ");
+}
+
+/** A hint longer than this many characters opens folded (hintLead). */
+const HINT_FOLD_CHARS = 480;
+/** The folded hint's opening: whole sentences up to about this many characters, at least one. */
+const HINT_LEAD_CHARS = 260;
+
+/** A tidied hint as the console first shows it. Most hints are a sentence or three and show
+ *  whole (`rest` is ""); a long one, such as a large core's one sentence per precedence edge,
+ *  opens on its first sentences (the verdict and its bounds) with the rest folded behind a
+ *  toggle, every sentence still there. `folded` counts the sentences in `rest`. */
+export function hintLead(hint: string): { lead: string; rest: string; folded: number } {
+  const text = hint.trim();
+  if (text.length <= HINT_FOLD_CHARS) return { lead: text, rest: "", folded: 0 };
+  const sentences = text.split(/(?<=[.!?])\s+(?=[A-Z("])/);
+  let n = 1;
+  while (n < sentences.length && sentences.slice(0, n + 1).join(" ").length <= HINT_LEAD_CHARS) n += 1;
+  if (n >= sentences.length) return { lead: text, rest: "", folded: 0 };
+  return { lead: sentences.slice(0, n).join(" "), rest: sentences.slice(n).join(" "), folded: sentences.length - n };
+}
+
+// ------------------------------------------------------------------ conflict groups
+/** One entry of a verdict's conflict list as the console shows it: a conflict id, or the
+ *  precedence edges of a core joined into the chain they form ("precedence:T3->T4" and
+ *  "precedence:T4->T9" read "precedence:T3->T4->T9"). `ids` keeps every conflict the entry
+ *  stands for, in the verdict's order. */
+export interface ConflictGroup {
+  id: string;
+  ids: string[];
+}
+
+/** "precedence:T3->T4" -> ["T3", "T4"]; null for any other id. */
+function precedenceEdge(conflict: string): [string, string] | null {
+  if (conflictPrefix(conflict) !== "precedence") return null;
+  const ends = conflict.slice("precedence:".length).split("->");
+  return ends.length === 2 && ends[0] && ends[1] ? [ends[0], ends[1]] : null;
+}
+
+/** A verdict's conflicts with its precedence edges joined into chains, so a CP-SAT core that
+ *  names ten edges reads as the three chains they form (T1->T5->T6->T7->T8, T2->T5,
+ *  T3->T4->T9->T10->T13->T14). Each chain starts at an edge no unused edge leads into and
+ *  follows the verdict's order where it forks; the chains stand where the first edge stood,
+ *  every other conflict where it was. A verdict with one edge or none comes back one id per
+ *  entry. */
+export function conflictGroups(conflicts: string[]): ConflictGroup[] {
+  const edges = conflicts.flatMap((c) => {
+    const e = precedenceEdge(c);
+    return e ? [{ id: c, from: e[0], to: e[1] }] : [];
+  });
+  if (edges.length < 2) return conflicts.map((c) => ({ id: c, ids: [c] }));
+  const used = new Set<number>();
+  const chains: ConflictGroup[] = [];
+  while (used.size < edges.length) {
+    const open = (j: number) => !used.has(j);
+    let i = edges.findIndex((e, j) => open(j) && !edges.some((f, k) => open(k) && k !== j && f.to === e.from));
+    if (i < 0) i = edges.findIndex((_, j) => open(j)); // a cycle: start anywhere
+    const chain = [i];
+    used.add(i);
+    for (;;) {
+      const last = edges[chain[chain.length - 1]];
+      const next = edges.findIndex((e, j) => open(j) && e.from === last.to);
+      if (next < 0) break;
+      chain.push(next);
+      used.add(next);
+    }
+    const nodes = [edges[chain[0]].from, ...chain.map((j) => edges[j].to)];
+    const ids = chain.map((j) => edges[j].id);
+    chains.push({ id: ids.length === 1 ? ids[0] : `precedence:${nodes.join("->")}`, ids });
+  }
+  const out: ConflictGroup[] = [];
+  for (const c of conflicts) {
+    if (!precedenceEdge(c)) out.push({ id: c, ids: [c] });
+    else if (c === edges[0].id) out.push(...chains);
+  }
+  return out;
+}
+
+/** A verdict's conflicts for a one-line outcome ("rejected horizon, 10 precedence edges,
+ *  robot:SV1, zone:Z2"): ids with the console's arrow, the precedence edges counted in one
+ *  phrase where there are several. */
+export function conflictPhrases(conflicts: string[]): string[] {
+  const edges = conflicts.filter((c) => precedenceEdge(c) !== null);
+  if (edges.length < 2) return conflicts.map(fmtConflictId);
+  return conflicts.flatMap((c) =>
+    precedenceEdge(c) === null ? [fmtConflictId(c)] : c === edges[0] ? [plural(edges.length, "precedence edge")] : [],
+  );
 }
 
 // ------------------------------------------------------------------ structure warnings
@@ -793,7 +895,7 @@ export interface RunOutcome {
   rejected: string[];
   /** repair rounds, as PlanResult.repairs counts them */
   repairs: number;
-  /** "89 h of 336 h" for a verified plan, else null */
+  /** "72 h of 336 h" for a verified plan, else null */
   verified: string | null;
   /** the top solver-proven suggestion of a plan that was not verified, as the console prints
    *  it ("finishing needs 85 h, 25 h past the 60 h deadline (CP-SAT optimal)"), else null */
@@ -820,11 +922,11 @@ export function fmtConflictId(conflict: string): string {
   return conflict.replace(/->/g, "→");
 }
 
-/** The outcome in one line, for a tooltip: "rejected energy:printer → 1 repair round →
- *  verified, 89 h of 336 h". */
+/** The outcome in one line, for a tooltip: "rejected energy:printer → 2 repair rounds →
+ *  verified, 72 h of 336 h" (several precedence edges counted: conflictPhrases). */
 export function fmtRunOutcome(o: RunOutcome): string {
   return [
-    o.rejected.length > 0 ? `rejected ${o.rejected.map(fmtConflictId).join(", ")}` : "first graph accepted",
+    o.rejected.length > 0 ? `rejected ${conflictPhrases(o.rejected).join(", ")}` : "first graph accepted",
     plural(o.repairs, "repair round"),
     o.verified ? `verified, ${o.verified}` : `not verified${o.advice ? `: ${o.advice}` : ""}`,
   ].join(" → ");
@@ -836,7 +938,7 @@ export function suggestionKindLabel(kind: SuggestionKind | string): string {
 }
 
 /** The detail sentence as the console prints it: the words verbatim, every number that carries
- *  a unit in the console's format ("5950 Wh" -> "5,950 Wh", "86h" -> "86 h") so the row reads
+ *  a unit in the console's format ("5950 Wh" -> "5,950 Wh", "85h" -> "85 h") so the row reads
  *  like the apply button and the hint next to it; ids and bare counts are left alone. */
 export function fmtSuggestion(s: Suggestion): string {
   return tidyNumbers(tidyUnits(s.detail.trim()));
@@ -1072,7 +1174,7 @@ export function budgetRows(
       add({ subject: arrows(m[1]), kind: "chain", demanded: parseNum(m[2]), budget: parseNum(m[3]), unit: "h", note: "critical path" }),
     );
     // solver horizon hint: "The plan cannot finish within the 60 h horizon: the longest
-    // precedence chain alone needs 86 h, 26 h past the 60 h deadline; the busiest robot type
+    // precedence chain alone needs 85 h, 25 h past the 60 h deadline; the busiest robot type
     // (hauler) needs at least 24 h." (3d; "takes 61 h (transit to its first zone included) and"
     // before)
     const horizon = new RegExp(`within the ${NUM} h horizon`).exec(text);
@@ -1180,7 +1282,7 @@ export interface RepairSummary {
   scopeReason: string | null;
   /** signed % change of total energy (RepairDiff.scope_drift_pct) */
   drift: number;
-  /** "15,700 → 14,000 Wh (−10.8%) · 123 → 117 h" */
+  /** "15,700 → 14,000 Wh (−10.8%) · 123 → 117 robot-hours" (the work summed over tasks) */
   totals: string;
 }
 
@@ -1562,7 +1664,7 @@ export function describeRepairDiff(diff: RepairDiff, tasks: readonly Task[] = []
   let scopeReason: string | null = null;
   if (drift < -25) scopeReason = `total energy ${fmtSignedPct(drift)}: work was re-scoped away`;
   else if (quantityDropped) scopeReason = `quantity reduced on ${quantityDropped}`;
-  const totals = `${fmtNum(diff.total_energy_wh_before, 0)} → ${fmtNum(diff.total_energy_wh_after, 0)} Wh (${fmtSignedPct(drift)}) · ${fmtNum(diff.total_duration_h_before, 0)} → ${fmtNum(diff.total_duration_h_after, 0)} h`;
+  const totals = `${fmtNum(diff.total_energy_wh_before, 0)} → ${fmtNum(diff.total_energy_wh_after, 0)} Wh (${fmtSignedPct(drift)}) · ${fmtNum(diff.total_duration_h_before, 0)} → ${fmtNum(diff.total_duration_h_after, 0)} robot-hours`;
   return { chips, scopeReview: scopeReason !== null, scopeReason, drift, totals };
 }
 

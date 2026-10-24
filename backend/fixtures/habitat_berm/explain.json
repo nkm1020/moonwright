@@ -1,0 +1,3 @@
+{
+ "text": "The plan builds an excavation pit (S1) in zone Z1, a berm (S2) in zone Z2, and prepares a borrow strip (S3) in zone Z3 using two excavators, two haulers, two compactors, and one surveyor. Work proceeds with surveying stakes first, then parallel excavation in Z1 and Z3, followed by hauling regolith to Z2 for berm construction, compaction of all areas, and final berm inspection. The makespan is 52 hours, well under the 72-hour horizon. The tightest constraint is the single-robot-per-zone rule, which sequences haul tasks in Z2 and prevents overlap. The solver verified that all tasks respect battery limits, precedence, and zone exclusivity, with total energy use within each robot’s capacity."
+}

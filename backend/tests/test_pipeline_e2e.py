@@ -10,10 +10,11 @@ quantities and are checked against the arithmetic below:
 * ``tight_battery``  ``taskgraph_1.json`` passes the validator but the CP-SAT energy constraints
                      reject it; the ``taskgraph_2.json`` repair is feasible (repairs == 1)
 
-The fixtures of the demo briefs ``landing_pad`` and ``front_loaded`` are live runs recorded on
-Nebius Token Factory on Oct 23 with the final prompts; each replay is pinned to its run's story
-(two tests near the end), and the UI's samples (``frontend/public/samples``) are checked to be
-those live runs themselves, which the fixtures replay step for step (the last test).
+The fixtures of the demo briefs ``landing_pad``, ``front_loaded`` and ``habitat_berm`` are live
+runs recorded on Nebius Token Factory on Oct 24 on the final pipeline; each replay is pinned to
+its run's story (three tests near the end), and the UI's samples (``frontend/public/samples``)
+are checked to be those live runs themselves, which the fixtures replay step for step (the last
+test).
 
 Hand-verified feasibility arithmetic for the fixtures
 -----------------------------------------------------
@@ -91,7 +92,7 @@ import pytest
 
 from moonwright.llm.base import FIXTURES_DIR, ExplainText, FixtureClient, Usage, validate_into
 from moonwright.pipeline.loop import Planner, brief_key
-from moonwright.pipeline.rates import UNGROUNDED_ADVISORY, apply_rates, scope_gaps
+from moonwright.pipeline.rates import UNGROUNDED_ADVISORY, ancestors, apply_rates, scope_gaps
 from moonwright.pipeline.schedule import SolveOptions, check_schedule, solve_schedule
 from moonwright.pipeline.taskgraph import generate_task_graph
 from moonwright.pipeline.validate import validate_graph
@@ -507,6 +508,80 @@ def test_front_loaded_replays_its_live_run() -> None:
     assert [t.robot_type for t in plan.task_graph.tasks].count("compactor") == 3
 
 
+def test_habitat_berm_replays_its_live_run() -> None:
+    """Designed horizon-bound (kind C): a pit and a borrow strip feed a 280 m3 berm in 72 h,
+    which holds only if both are dug at once. The structure stage drops the berm's sintering
+    (no printer) and corrects the pit's diameter to its 12 m by 12 m footprint. Ultra's first
+    graph validates and already lets both digs run at once, but its hauls move 400 m3 into the
+    berm against 264 m3 dug (an advisory), so zone Z2 needs 49 h one robot at a time and
+    CP-SAT proves the deadline cannot hold: a 13-conflict core of the horizon, 10 precedence
+    edges, SV1 and Z2. One repair drops the double haul (280 m3, Z2 39 h, energy -8.4 %) and
+    splits the digs so each haul follows its part (11 tasks added, 8 removed, 6 renumbered);
+    both excavators start at 8 h and CP-SAT proves 52 h, in scope. The brief's own digs give
+    264 of the berm's 280 m3: the final graph's notes say so and haul the last 16 m3 as
+    sourced externally, which the supply check accepts within SUPPLY_SLACK."""
+    plan = _plan("habitat_berm")
+    assert (plan.steps[0].payload or {})["warnings"] == [
+        ("structure S2: operations sinter dropped: the fleet has no printer, so no sinter task "
+         "will be required of it (add a printer and the operation again to plan it)"),
+        ("structure S1: diameter_m 12 -> 12 m x 12 m: the brief's entry for S1 states a 12 m by "
+         "12 m footprint")]
+    assert [(s.id, s.type, s.operations) for s in plan.requirements.structures] == [
+        ("S1", "excavation_pit", ["survey", "excavate", "compact"]),
+        ("S2", "berm", ["haul", "compact", "survey"]),
+        ("S3", "borrow_strip", ["excavate", "haul", "compact"])]
+    assert (plan.requirements.structures[0].length_m, plan.requirements.structures[0].width_m) == (12, 12)
+
+    assert [(s.stage, s.ok) for s in plan.steps] == [
+        ("structure", True), ("taskgraph", True), ("validate", True), ("schedule", False),
+        ("repair", True), ("validate", True), ("schedule", True), ("explain", True)]
+    assert (plan.steps[1].payload or {})["advisories"] == [
+        ("supply:S2: its hauls (T7 60 m3, T8 60 m3, T9 140 m3, T10 140 m3) move 400 m3, more "
+         "than the 264 m3 the digs before them remove (S1 excavation pit: T3, T4; S3 borrow "
+         "strip: T5, T6)")]
+    edges = ["T1->T5", "T10->T13", "T13->T14", "T2->T5", "T3->T4", "T4->T9", "T5->T6", "T6->T7",
+             "T7->T8", "T9->T10"]
+    assert _verdicts(plan) == [("schedule", 1, "infeasible", [
+        "horizon", *(f"precedence:{e}" for e in edges), "robot:SV1", "zone:Z2"])]
+    core = plan.steps[3].failure
+    assert core is not None
+    assert core.hint.startswith(
+        "The plan cannot finish within the 72 h horizon: the longest precedence chain alone needs "
+        "64 h including the transit to its first zone; the busiest robot type (excavator) needs "
+        "at least 20 h.")
+    assert core.hint.endswith(
+        "Zone Z2 admits one robot at a time, so its 7 tasks (49 h in total) cannot overlap.")
+
+    [repair] = [s for s in plan.steps if s.stage == "repair"]
+    assert repair.usage is not None and repair.usage.model == "fixture:taskgraph_2.json"
+    diff = (repair.payload or {})["diff"]
+    assert (len(diff["added"]), len(diff["removed"]), len(diff["renumbered"]),
+            diff["scope_drift_pct"]) == (11, 8, 6, -8.4)
+    graph = plan.task_graph
+    assert graph is not None and graph.ids() == _graph("habitat_berm", "taskgraph_2.json").ids()
+    assert len(graph.tasks) == 17
+    assert plan.repairs == 1 and plan.schedule is not None
+    assert (plan.schedule.makespan_h, plan.schedule.status) == (52, "optimal")
+    # what the repair changed: the hauls into the berm (400 -> 280 m3) and with them zone Z2's
+    # one-robot-at-a-time work (49 -> 39 h); the first graph already let both digs run at once
+    first = _graph("habitat_berm", "taskgraph_1.json")
+    assert [sum(t.duration_h for t in g.tasks if t.zone == "Z2") for g in (first, graph)] == [49, 39]
+    before = ancestors(first)
+    assert all(pit not in before[strip] and strip not in before[pit]
+               for pit in ("T3", "T4") for strip in ("T5", "T6"))
+    # the pit (EX2) and the borrow strip (EX1) are dug at the same time
+    digs = {e.task: e for e in plan.schedule.entries if e.task.startswith("EX_")}
+    pit = [digs[t] for t in ("EX_S1_1", "EX_S1_2", "EX_S1_3")]
+    strip = [digs[t] for t in ("EX_S3_1", "EX_S3_2")]
+    assert {e.robot for e in pit} == {"EX2"} and {e.robot for e in strip} == {"EX1"}
+    assert min(e.start_h for e in pit) == min(e.start_h for e in strip) == 8
+    assert validate_graph(plan.requirements, graph, coverage=True, supply=True) is None
+    assert scope_gaps(plan.requirements, graph) == []
+    assert graph.notes is not None
+    assert "264 m3, a 16 m3 deficit" in graph.notes and "sourced externally" in graph.notes
+    _assert_verified_plan(plan)
+
+
 # --------------------------------------------------------------------------- the UI's samples
 def _verdicts(plan: PlanResult) -> list[tuple[str, int, str, list[str]]]:
     return [(s.stage, s.attempt, s.failure.kind, s.failure.conflicts)
@@ -514,7 +589,7 @@ def _verdicts(plan: PlanResult) -> list[tuple[str, int, str, list[str]]]:
 
 
 # a sample whose take predates a verdict change would be listed here (strict xfail) until it is
-# re-recorded; both takes were recorded on the final code (Oct 24)
+# re-recorded; the three takes were recorded on the final code (Oct 24)
 _STALE_SAMPLES: set[str] = set()
 
 

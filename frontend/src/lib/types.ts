@@ -477,7 +477,7 @@ export type BudgetPayload = ({ budget?: BudgetRow[] } & Partial<SuggestionsPaylo
  *  robot's battery raised; reduce_scope: no single change verifies, cut or defer work. */
 export type SuggestionKind = "extend_horizon" | "add_robot" | "raise_battery" | "reduce_scope";
 
-/** Row labels of the advice ("later deadline · finishing needs 86 h, ..."). */
+/** Row labels of the advice ("later deadline · finishing needs 85 h, ..."). */
 export const SUGGESTION_KIND_LABELS: Record<SuggestionKind, string> = {
   extend_horizon: "later deadline",
   add_robot: "one more robot",
@@ -508,7 +508,7 @@ export const SUGGESTION_COPY = {
  * sentence with units on every number: "EX1 needs 5950 Wh (has 5000 Wh): feasible at 62 h",
  * "one more excavator (EX3, 5000 Wh like EX1): feasible at 62 h", "a battery of 5200 Wh on
  * EX2 is enough (has 5000 Wh; a smaller one may be, the search ran out of time): feasible at
- * 62 h", "finishing needs 86 h, 26 h past the 60 h deadline (CP-SAT optimal)"; a replan's
+ * 62 h", "finishing needs 85 h, 25 h past the 60 h deadline (CP-SAT optimal)"; a replan's
  * add_robot reads "(EX3, 5000 Wh, a full battery)". Lists are best first, at most 4: changes
  * that keep the deadline (raise_battery, add_robot) before extend_horizon, smaller relative
  * change first; a lone reduce_scope when no single change verifies.

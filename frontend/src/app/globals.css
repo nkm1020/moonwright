@@ -89,6 +89,17 @@ input[type="number"]::-webkit-outer-spin-button {
   -webkit-text-fill-color: currentColor;
 }
 
+/* a locked number is content too: no spin buttons taking the room its digits need */
+.mw-locked input[type="number"]:disabled {
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+.mw-locked input[type="number"]:disabled::-webkit-inner-spin-button,
+.mw-locked input[type="number"]:disabled::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
 /* keyboard shortcut hint ("⌘ Enter") */
 kbd.mw-kbd {
   display: inline-block;

@@ -10,7 +10,7 @@
  *
  * Variants: `trace` is the compact block under the core block of the final failed step (no
  * footer); `outcome` is the card of a failed plan's verdict column: the heading row, the best
- * proven change as the one big figure ("86 h", "deadline that works · 26 h later"), the way
+ * proven change as the one big figure ("85 h", "deadline that works · 25 h later"), the way
  * back into the loop right under it (the console's apply buttons, the first one primary), the
  * rows and the footer, on the raised card surface with a green border, so the way out outranks
  * the red verdict next to it; `replan` is compact with the time-base note of a failed replan
@@ -60,9 +60,9 @@ const UNVERIFIED_TITLE =
 export interface SuggestionStat {
   /** the kind, e.g. "later deadline" */
   label: string;
-  /** the figure: "86 h", "5,950 Wh", "+1 excavator" */
+  /** the figure: "85 h", "5,950 Wh", "+1 excavator" */
   value: string;
-  /** what the figure is, with the rest of the numbers: "deadline that works · 26 h later",
+  /** what the figure is, with the rest of the numbers: "deadline that works · 25 h later",
    *  "battery EX1 needs · feasible at 62 h", "EX3, 5,000 Wh · feasible at 62 h" */
   sub: string;
 }

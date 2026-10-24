@@ -29,6 +29,7 @@ import {
   API_BASE,
   ApiError,
   RECORDED_ON,
+  SAMPLES,
   SAMPLE_IDS,
   STATIC_DEMO,
   errorMessage,
@@ -45,6 +46,7 @@ import {
   type SampleBundle,
   type SampleFile,
   type SampleId,
+  type SampleSpec,
 } from "@/lib/api";
 import { planStream } from "@/lib/sse";
 import { allTasks, tasksById } from "@/lib/tasks";
@@ -695,7 +697,7 @@ function withArticle(word: string): string {
 }
 
 /** Button label of a change the console can make for the user, with the figure the solver
- *  proved: "Set the deadline to 86 h", "Raise EX1 to 5,950 Wh", "Add EX3 (excavator,
+ *  proved: "Set the deadline to 85 h", "Raise EX1 to 5,950 Wh", "Add EX3 (excavator,
  *  5,000 Wh)"; null for a suggestion that needs a hand edit (reduce_scope). */
 function suggestionActionLabel(s: Suggestion): string | null {
   switch (s.kind) {
@@ -717,8 +719,8 @@ function suggestionActionLabel(s: Suggestion): string | null {
 
 /** Badge label once the change is in the requirements card (applied, or made by hand), with
  *  the figure the card holds: the past tense when it is the proven one ("Deadline set to
- *  86 h", "EX1 raised to 5,950 Wh", "EX3 added (excavator, 5,000 Wh)"), both figures when the
- *  card went further by hand ("Deadline 100 h in the card · 86 h proved enough"); null when the
+ *  85 h", "EX1 raised to 5,950 Wh", "EX3 added (excavator, 5,000 Wh)"), both figures when the
+ *  card went further by hand ("Deadline 100 h in the card · 85 h proved enough"); null when the
  *  suggestion has no figure to name. */
 function suggestionAppliedLabel(s: Suggestion, card: Requirements): string | null {
   switch (s.kind) {
@@ -1143,7 +1145,8 @@ export function App() {
 
   /** A demo button: a recorded run from /samples into the normal state, all it ships at once
    *  (landing_pad: the plan, its simulation and Monte Carlo; front_loaded is a failed live run
-   *  whose trace ends with solver-proven advice, so there is nothing to simulate). */
+   *  whose trace ends with solver-proven advice, so there is nothing to simulate; habitat_berm
+   *  ships its verified plan only). */
   const loadSample = async (id: SampleId) => {
     if (await replayTo("robustness", id)) scrollToSection("plan");
   };
@@ -1176,6 +1179,11 @@ export function App() {
   );
   const { stage, busy } = deriveStage(state);
   const verified = Boolean(planResult?.success && planResult.schedule && planResult.task_graph);
+  // the static demo's verified recording that ships no simulation or Monte Carlo of its own
+  // (SAMPLES declares the files): stages 04 / 05 are one line that points to a sample with them
+  const sampleFiles = STATIC_DEMO && verified && isSampleId(state.plan.briefId) ? sampleSpec(state.plan.briefId).files : null;
+  const simElsewhere = sampleFiles !== null && !sampleFiles.includes("sim");
+  const mcElsewhere = sampleFiles !== null && !sampleFiles.includes("mc");
   const mcElapsed = useElapsed(state.mcStartedAt, state.mc.status === "running");
   // the trace that goes with planResult: the streamed steps once the run is done, else the
   // result's own steps (a previous plan kept while a new run streams or after one failed)
@@ -1477,6 +1485,14 @@ export function App() {
                       onSelectTask={selectTask}
                     />
                   </TaskTableDisclosure>
+                  {(simElsewhere || mcElsewhere) && (
+                    <RecordedElsewhere
+                      sim={simElsewhere}
+                      mc={mcElsewhere}
+                      current={state.plan.briefId}
+                      onLoad={(id) => void loadSample(id)}
+                    />
+                  )}
                 </div>
               )}
 
@@ -1494,7 +1510,7 @@ export function App() {
           </Section>
         )}
 
-        {planResult && verified && planResult.schedule && (
+        {planResult && verified && planResult.schedule && !simElsewhere && (
           <Section
             id="simulate"
             step="04"
@@ -1550,7 +1566,7 @@ export function App() {
           </Section>
         )}
 
-        {planResult && verified && STATIC_DEMO && state.sampleMissing.mc && (
+        {planResult && verified && STATIC_DEMO && state.sampleMissing.mc && !mcElsewhere && (
           <Section id="robustness" step="05" title="Robustness">
             <Notice tone="warn" title="The recorded Monte Carlo did not load">
               This page {state.sampleMissing.mc}; the rest of the recorded run is shown.
@@ -1558,7 +1574,7 @@ export function App() {
           </Section>
         )}
 
-        {planResult && verified && !(STATIC_DEMO && state.sampleMissing.mc) && (
+        {planResult && verified && !(STATIC_DEMO && state.sampleMissing.mc) && !mcElsewhere && (
           <MonteCarloPanel
             plan={planResult}
             briefId={state.plan.briefId}
@@ -1597,7 +1613,8 @@ export function App() {
 }
 
 // ------------------------------------------------------------------ task table disclosure
-/** The task table folded under one row: "Show task table · 14 tasks · 103 h · 10,600 Wh". */
+/** The task table folded under one row: "Show task table · 12 tasks · 89 robot-hours · 9,083 Wh"
+ *  (the work summed over tasks, as the table's footer counts it; the makespan is the plan's). */
 function TaskTableDisclosure({
   tasks,
   label = "task table",
@@ -1618,7 +1635,9 @@ function TaskTableDisclosure({
         <span className="group-open:hidden">Show {label}</span>
         <span className="hidden group-open:inline">Hide {label}</span>
         <span className="font-mono text-[11px] font-normal tabular-nums text-dim">
-          {plural(tasks.length, "task")} · {fmtHours(hours, 0)} · {fmtWh(wh)}
+          <span className="whitespace-nowrap">{plural(tasks.length, "task")}</span> ·{" "}
+          <span className="whitespace-nowrap">{plural(hours, "robot-hour")}</span> ·{" "}
+          <span className="whitespace-nowrap">{fmtWh(wh)}</span>
         </span>
       </summary>
       <div className="border-t border-line p-4 md:p-5">{children}</div>
@@ -1771,6 +1790,47 @@ function DownstreamNote({ next }: { next: string }) {
   );
 }
 
+/** Stages 04 / 05 of a static-demo recording that ships its plan only (SAMPLES declares no
+ *  simulation or Monte Carlo for it): one line where the stages would start, naming the
+ *  sample that has them, with a button that loads it. Carries the stepper's anchors. */
+function RecordedElsewhere({
+  sim,
+  mc,
+  current,
+  onLoad,
+}: {
+  sim: boolean;
+  mc: boolean;
+  current: string | null;
+  onLoad: (id: SampleId) => void;
+}) {
+  const other = (SAMPLES as readonly SampleSpec[]).find(
+    (spec) => spec.id !== current && (!sim || spec.files.includes("sim")) && (!mc || spec.files.includes("mc")),
+  );
+  const steps = [sim ? "04" : null, mc ? "05" : null].filter((x): x is string => x !== null);
+  const what = [sim ? "the failure replay" : null, mc ? "the Monte Carlo" : null].filter((x): x is string => x !== null);
+  return (
+    <div
+      id={sim ? "simulate" : "robustness"}
+      role="note"
+      className="flex scroll-mt-24 flex-wrap items-center gap-x-3 gap-y-1.5 rounded-lg border border-dashed border-line px-4 py-2.5 text-[12.5px] text-muted"
+    >
+      {sim && mc && <span id="robustness" aria-hidden="true" className="scroll-mt-24" />}
+      <span className="font-mono text-[11px] font-medium tracking-[0.16em] text-dim">{steps.join(" · ")}</span>
+      <span className="font-medium text-fg/80">{sim && mc ? "Simulation and robustness" : sim ? "Simulation" : "Robustness"}</span>
+      <span className="min-w-0 flex-1 basis-64">
+        This recording ships its plan only;{" "}
+        {other ? `${what.join(" and ")} ${what.length > 1 ? "are" : "is"} recorded with the ${other.title} run.` : "no recording here has them."}
+      </span>
+      {other && (
+        <Button size="sm" variant="secondary" onClick={() => onLoad(other.id as SampleId)}>
+          Load {other.title}
+        </Button>
+      )}
+    </div>
+  );
+}
+
 /** The static demo says once, under the top bar, what the page is and where a live setup is
  *  described. */
 function StaticBanner() {
@@ -1856,7 +1916,7 @@ const CHIP_TONE: Record<ChipState, string> = {
   upcoming: "border-white/10 text-dim",
 };
 
-/** "13 tasks" in a task-graph or repair step's message -> 13. */
+/** "12 tasks" in a task-graph or repair step's message -> 12. */
 function taskCount(step: LoopStep): number | null {
   const m = /^(\d+) tasks?\b/.exec(step.message ?? "");
   return m ? Number(m[1]) : null;
@@ -2026,7 +2086,7 @@ function PlanningPlaceholder({
 }
 
 /** One line under the planning placeholder while a new run streams: the plan it will replace,
- *  whose outcome gives way to the run in progress ("Previous plan · verified, 89 h of the 336 h
+ *  whose outcome gives way to the run in progress ("Previous plan · verified, 72 h of the 336 h
  *  horizon · stays below, dimmed, until this run lands"). */
 function PreviousPlanLine({ plan, verified, proven }: { plan: PlanResult; verified: boolean; proven: number }) {
   const what =
@@ -2118,9 +2178,9 @@ function PlanSummary({ plan, tasks, receipt }: { plan: PlanResult; tasks: Task[]
       <table className="w-full text-xs">
         <thead>
           <tr className="text-left text-[11px] uppercase tracking-wider text-dim">
-            <th className="pb-1 font-medium">Robot</th>
-            <th className="pb-1 font-medium">Tasks</th>
-            <th className="pb-1 font-medium">Busy</th>
+            <th className="pb-1 pr-2 font-medium">Robot</th>
+            <th className="pb-1 pr-2 font-medium">Tasks</th>
+            <th className="pb-1 pr-2 font-medium">Busy</th>
             <th className="pb-1 font-medium">{withTransit ? "Battery budget (incl. transit)" : "Battery budget"}</th>
           </tr>
         </thead>
@@ -2128,23 +2188,25 @@ function PlanSummary({ plan, tasks, receipt }: { plan: PlanResult; tasks: Task[]
           {rows.map(({ robot, count, busy, energy, ratio }) => (
             <tr key={robot.id} className="border-t border-white/5">
               <td className="py-1.5 pr-2">
-                <span className="inline-flex items-center gap-1.5 font-mono">
+                {/* the type is the dot's colour on a phone, where its word would squeeze the
+                    battery column */}
+                <span className="inline-flex items-center gap-1.5 font-mono" title={robot.type}>
                   <Dot color={robotTypeColor(robot.type)} />
                   {robot.id}
-                  <span className="text-dim">{robot.type}</span>
+                  <span className="hidden text-dim sm:inline">{robot.type}</span>
                 </span>
               </td>
               <td className="py-1.5 pr-2 font-mono tabular-nums">{count}</td>
-              <td className="py-1.5 pr-2 font-mono tabular-nums">{fmtHours(busy, 0)}</td>
+              <td className="whitespace-nowrap py-1.5 pr-2 font-mono tabular-nums">{fmtHours(busy, 0)}</td>
               <td className="py-1.5">
                 <div className="flex items-center gap-2">
-                  <div className="h-1.5 w-24 overflow-hidden rounded-full bg-white/10" aria-hidden="true">
+                  <div className="h-1.5 w-12 shrink-0 overflow-hidden rounded-full bg-white/10 sm:w-24" aria-hidden="true">
                     <div
                       className={ratio > 0.9 ? "h-full rounded-full bg-warn" : "h-full rounded-full bg-muted"}
                       style={{ width: `${Math.min(100, ratio * 100)}%` }}
                     />
                   </div>
-                  <span className="font-mono tabular-nums text-muted">
+                  <span className="whitespace-nowrap font-mono tabular-nums text-muted">
                     {fmtWh(energy)} / {fmtWh(robot.battery_wh)}
                   </span>
                 </div>
@@ -2178,7 +2240,11 @@ function ReplayPane({ sim, plan, tasks }: { sim: SimResult; plan: PlanResult; ta
       aside={
         <div>
           <h3 className="mb-2 text-[14px] font-medium">
-            Events <span className="font-normal text-dim">{plural(sim.events.length, "event")}</span>
+            Events{" "}
+            <span className="font-normal text-dim">
+              {plural(sim.events.length, "event")}
+              {sim.replans.length > 0 && ` · ${plural(sim.replans.length, "replan")}`}
+            </span>
             {nowH !== null && <span className="ml-2 font-mono text-[11px] font-normal text-dim">t = {formatHours(nowH)}</span>}
           </h3>
           <EventList

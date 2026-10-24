@@ -49,6 +49,7 @@ import {
   ADVISORY_KIND_LABELS,
   answerFailure,
   budgetRows,
+  conflictGroups,
   conflictMeaning,
   describeRepairDiff,
   failureStep,
@@ -59,6 +60,7 @@ import {
   fmtSeconds,
   fmtSignedPct,
   fmtUsage,
+  hintLead,
   isFixtureModel,
   lastFailedStep,
   modelDisplayName,
@@ -718,7 +720,7 @@ function RepairDiffBlock({ diff, tasks }: { diff: NonNullable<ReturnType<typeof 
             key={`${c.kind}-${c.task}-${i}`}
             title={c.title}
             className={cx(
-              "inline-flex max-w-full items-baseline gap-1 rounded border px-1.5 py-px text-[11px] leading-[18px]",
+              "inline-flex max-w-full flex-wrap items-baseline gap-x-1 rounded border px-1.5 py-px text-[11px] leading-[18px]",
               DIFF_CHIP_TONE[c.kind],
             )}
           >
@@ -727,7 +729,8 @@ function RepairDiffBlock({ diff, tasks }: { diff: NonNullable<ReturnType<typeof 
               {c.task}
             </span>
             {c.was && <span className="shrink-0 font-mono text-dim">(was {c.was})</span>}
-            <span className="min-w-0 break-words">{c.text}</span>
+            {/* a grouped chip's one word ("added") stays whole beside its wrapping id list */}
+            <span className={c.task.includes(", ") ? "shrink-0" : "min-w-0 break-words"}>{c.text}</span>
           </span>
         ))}
         {(hidden > 0 || open) && (
@@ -749,26 +752,90 @@ function RepairDiffBlock({ diff, tasks }: { diff: NonNullable<ReturnType<typeof 
 }
 
 // ------------------------------------------------------------------ failures
+/** Chips a core shows before "+N more": a larger core keeps its first ones in view. */
+const CONFLICT_CHIP_LIMIT = 6;
+
 /** Conflict chips: the id in mono (a chain drawn with the console's arrow, "horizon_path:
- *  T1→T2→T7"), its meaning next to it, the raw id and the prefix's meaning as tooltip. */
+ *  T1→T2→T7"), its meaning next to it, the raw id and the prefix's meaning as tooltip. A
+ *  core's precedence edges show as the chains they form (format.ts conflictGroups: ten edges
+ *  read as three chains, each edge named in the chip's tooltip), and a core with more than
+ *  CONFLICT_CHIP_LIMIT entries folds the rest behind "+N more". */
 export function ConflictChips({ conflicts, className }: { conflicts: string[]; className?: string }) {
+  const [open, setOpen] = useState(false);
   if (conflicts.length === 0) return null;
+  const groups = conflictGroups(conflicts);
+  const fold = groups.length > CONFLICT_CHIP_LIMIT;
+  const visible = fold && !open ? groups.slice(0, CONFLICT_CHIP_LIMIT - 1) : groups;
   return (
     <div className={cx("flex flex-wrap gap-1.5", className)}>
-      {conflicts.map((c) => {
-        const meaning = conflictMeaning(c);
+      {visible.map((g) => {
+        const meaning = g.ids.length > 1 ? `${g.ids.length} edges cannot all be honoured` : conflictMeaning(g.id);
+        const prefix = conflictPrefix(g.id);
         return (
           <span
-            key={c}
-            title={meaning ? `${c} · ${conflictPrefix(c)}: ${meaning}` : c}
-            className="inline-flex max-w-full items-center gap-1.5 rounded border border-fail/40 bg-fail/10 px-1.5 py-px text-[11px] leading-[18px] text-fail"
+            key={g.id}
+            title={
+              g.ids.length > 1
+                ? `${g.ids.join(", ")} · ${prefix}: ${conflictMeaning(g.ids[0]) ?? meaning}`
+                : meaning
+                  ? `${g.id} · ${prefix}: ${meaning}`
+                  : g.id
+            }
+            className="inline-flex max-w-full flex-wrap items-baseline gap-x-1.5 rounded border border-fail/40 bg-fail/10 px-1.5 py-px text-[11px] leading-[18px] text-fail"
           >
-            <span className="break-all font-mono font-semibold">{c.replace(/->/g, "→")}</span>
+            {/* the meaning goes under the id where the two do not fit on one line; a long
+                chain wraps after an arrow */}
+            <span className="min-w-0 break-words font-mono font-semibold">
+              {g.id
+                .replace(/->/g, "→")
+                .split(/(?<=→)/)
+                .map((part, i) => (
+                  <span key={i}>
+                    {i > 0 && <wbr />}
+                    {part}
+                  </span>
+                ))}
+            </span>
             {meaning && <span className="text-fail/80">{meaning}</span>}
           </span>
         );
       })}
+      {fold && (
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          className="rounded border border-fail/25 px-1.5 text-[11px] leading-[18px] text-fail/80 hover:text-fail"
+        >
+          {open ? "show fewer" : `+${groups.length - visible.length} more`}
+        </button>
+      )}
     </div>
+  );
+}
+
+/** A hint as the console first shows it (format.ts hintLead): whole when it is short; a long
+ *  one opens on its first sentences, the rest one click away. `className` sets the text style
+ *  (the trace's by default; BeforeAfter's failed replan passes its muted one). */
+export function HintText({ hint, className = "text-[13px] leading-relaxed text-fg/90" }: { hint: string; className?: string }) {
+  const [open, setOpen] = useState(false);
+  const { lead, rest, folded } = hintLead(hint);
+  return (
+    <p className={className}>
+      {lead}
+      {rest && open && ` ${rest}`}
+      {rest && (
+        <>
+          {" "}
+          <button
+            type="button"
+            onClick={() => setOpen((v) => !v)}
+            className="whitespace-nowrap rounded border border-white/10 px-1.5 align-baseline text-[11px] leading-[18px] text-muted hover:text-fg"
+          >
+            {open ? "show less" : `+${plural(folded, "more sentence")}`}
+          </button>
+        </>
+      )}
+    </p>
   );
 }
 
@@ -789,12 +856,13 @@ function rowDigits(r: BudgetTableRow): number {
   return 2;
 }
 
-/** "102%" of budget, whole; a demand just over its budget keeps the decimals that show it over
- *  ("4,009 Wh 100.2% of budget", never "100%" next to a red figure). */
+/** "89%", "28%"; a share that rounds to 100% but is not exactly it keeps one decimal, so a
+ *  demand just over its budget never reads as fitting it ("4,009 Wh 100.2% of budget"). */
 function budgetShare(demanded: number, budget: number): string {
-  const share = demanded / budget;
-  for (let d = 0; d <= 2; d += 1) if (share <= 1 || Number((share * 100).toFixed(d)) > 100) return fmtPercent(share, d);
-  return "over 100%";
+  const x = demanded / budget;
+  if (demanded === budget || fmtPercent(x) !== "100%") return fmtPercent(x);
+  for (const d of [1, 2]) if (fmtPercent(x, d) !== `${(100).toFixed(d)}%`) return fmtPercent(x, d);
+  return demanded > budget ? ">100%" : "<100%";
 }
 
 /** The numbers behind a failure: subject / budget / demanded. */
@@ -820,8 +888,18 @@ function BudgetTable({ rows }: { rows: BudgetTableRow[] }) {
             return (
               <tr key={`${r.kind}-${r.subject}-${r.unit}`} className="border-t border-white/5 align-top">
                 <td className="px-2.5 py-1.5">
-                  <span className="font-mono font-medium text-fg">{r.subject}</span>
-                  {r.note && <span className="ml-1.5 text-dim">{r.note}</span>}
+                  {/* a chain id has no spaces: it may wrap after an arrow rather than push the
+                      figures out of a phone-wide table */}
+                  <span className="break-words font-mono font-medium text-fg">
+                    {r.subject.split(/(?<=→)/).map((part, i) => (
+                      <span key={i}>
+                        {i > 0 && <wbr />}
+                        {part}
+                      </span>
+                    ))}
+                  </span>
+                  {/* a space, not a margin: the note may start the next line, unindented */}
+                  {r.note && <span className="text-dim"> {r.note}</span>}
                 </td>
                 <td className="whitespace-nowrap px-2.5 py-1.5 font-mono tabular-nums text-fg">
                   {fmtNum(r.budget, digits)} {r.unit}
@@ -831,8 +909,13 @@ function BudgetTable({ rows }: { rows: BudgetTableRow[] }) {
                     <span className={cx("font-medium", binding ? "text-fail" : "text-fg")}>
                       {fmtNum(r.demanded, digits)} {r.unit}
                     </span>
-                    {r.budget > 0 && <span className="ml-1.5 text-dim">{budgetShare(r.demanded, r.budget)} of budget</span>}
                   </span>
+                  {/* beside the figure from sm up, under it on a phone */}
+                  {r.budget > 0 && (
+                    <span className="block whitespace-nowrap text-dim sm:ml-1.5 sm:inline">
+                      {budgetShare(r.demanded, r.budget)} of budget
+                    </span>
+                  )}
                   {binding && r.why && <div className="font-sans text-[11px] text-fail/85">{r.why}</div>}
                 </td>
               </tr>
@@ -935,7 +1018,7 @@ export function FailureDetails({
   const hasBody = Boolean(failure.hint) || rows.length > 0 || failure.details.length > 0;
   const body = (
     <>
-      {failure.hint && <p className="text-[13px] leading-relaxed text-fg/90">{tidyHint(failure.hint)}</p>}
+      {failure.hint && <HintText hint={tidyHint(failure.hint)} />}
       {rows.length > 0 && <BudgetTable rows={rows} />}
       {answer ? (
         <AskList details={failure.details} hint={tidyHint(failure.hint)} />

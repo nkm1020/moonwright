@@ -191,16 +191,17 @@ def test_cli_plan_then_simulate_landing_pad_with_ex1_failure(tmp_path, capsys):
 
 def test_cli_eval_over_example_briefs(tmp_path, capsys):
     """The demo briefs as shipped: with the loop on, the recorded repairs of landing_pad (the
-    printer's Wh, twice) and tight_battery (the excavators' core) verify; front_loaded, designed
-    impossible, fails both ways, after three repairs with the loop on."""
+    printer's Wh, twice), tight_battery (the excavators' core) and habitat_berm (a horizon core,
+    once) verify; front_loaded, designed impossible, fails both ways, after three repairs with
+    the loop on."""
     out_json, out_csv = tmp_path / "eval.json", tmp_path / "eval.csv"
     code = main(["eval", "--briefs", str(EXAMPLES_DIR), "--llm", "fixture",
                  "--out", str(out_json), "--csv", str(out_csv)])
     assert code == EXIT_OK
     report = json.loads(out_json.read_text())
     summary = {s["condition"]: s for s in report["summary"]}
-    assert (summary["loop_off"]["feasible"], summary["loop_on"]["feasible"]) == (1, 3)
-    assert summary["loop_on"]["mean_repairs"] == pytest.approx(6 / 4)
+    assert (summary["loop_off"]["feasible"], summary["loop_on"]["feasible"]) == (1, 4)
+    assert summary["loop_on"]["mean_repairs"] == pytest.approx(7 / 5)
     rows = {(r["brief"], r["condition"]): r for r in report["rows"]}
     assert rows["tight_battery", "loop_off"]["conflicts"] == ["energy:EX1", "energy:EX2"]
     assert rows["tight_battery", "loop_on"]["repairs"] == 1
@@ -212,6 +213,10 @@ def test_cli_eval_over_example_briefs(tmp_path, capsys):
     assert rows["front_loaded", "loop_on"]["conflicts"] == ["horizon_path:T1->T2->T3->T6->T7->T8"]
     assert rows["front_loaded", "loop_on"]["repairs"] == 3
     assert not rows["front_loaded", "loop_on"]["success"]
+    assert rows["habitat_berm", "loop_off"]["conflicts"][:2] == ["horizon", "precedence:T1->T5"]
+    assert len(rows["habitat_berm", "loop_off"]["conflicts"]) == 13
+    assert (rows["habitat_berm", "loop_on"]["repairs"], rows["habitat_berm", "loop_on"]["makespan_h"]) == (1, 52)
+    assert rows["habitat_berm", "loop_on"]["scope_drift_pct"] == pytest.approx(-8.4, abs=0.05)
     # phase-3 columns: fixture answers are valid, only the road is feasible first try, the
     # other briefs need a repair and every verified repair changed the graph's total energy
     assert all(r["answer_valid"] for r in report["rows"])
@@ -229,7 +234,7 @@ def test_cli_eval_over_example_briefs(tmp_path, capsys):
     assert (loop_on["first_try_feasible"], loop_on["answer_valid_rate"]) == (1, 1.0)
     assert loop_on["feasible_ci_low"] < loop_on["feasible_rate"] <= loop_on["feasible_ci_high"]
     assert (report["workers"], report["feedback"], report["thinking"]) == (1, "core", "auto")
-    assert len(out_csv.read_text().splitlines()) == 1 + 8
+    assert len(out_csv.read_text().splitlines()) == 1 + 10
     table = capsys.readouterr().out
     assert "loop_on" in table and "95% CI" in table
 

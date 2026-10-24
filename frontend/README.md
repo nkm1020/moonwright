@@ -19,8 +19,8 @@ surface. A single scrolling page walks through the PRD flow:
    finish-time histogram.
 
 The sticky top bar shows the stage stepper and the backend mode from `GET /health`
-(*recorded answers* vs *Nemotron live*). **Landing pad** and **Impossible deadline** load the
-recorded live runs under `public/samples` (`SAMPLES` in `src/lib/api.ts`: the plan, and for the
+(*recorded answers* vs *Nemotron live*). **Landing pad**, **Impossible deadline** and **Tight
+deadline** load the recorded live runs under `public/samples` (`SAMPLES` in `src/lib/api.ts`: the plan, and for the
 landing pad the simulation, Monte Carlo and spare what-if computed from it), so the whole page
 can be reviewed without a backend. The static demo build (GitHub Pages) replays only those
 recordings, one stage at a time: [docs/deploy.md](../docs/deploy.md).

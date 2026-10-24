@@ -231,7 +231,14 @@ export function attributeOutcomes(result: MonteCarloResult, robots: Robot[]): At
       .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
       .map(([t, n]) => `${t} ${n}`)
       .join(", ");
-    clauses.push(`${total} lost every robot of a type (types involved: ${detail})`);
+    // the tally counts a run once per type it lost; say so when it adds up to more than total
+    const multi = otherLost.filter((c) => c.types.length > 1);
+    const multiRuns = multi.reduce((acc, c) => acc + c.count, 0);
+    const overlap =
+      multiRuns > 0
+        ? `; ${plural(multiRuns, "run")} lost ${multi.every((c) => c.types.length === 2) ? "two types" : "more than one type"}`
+        : "";
+    clauses.push(`${total} lost every robot of a type (types involved: ${detail}${overlap})`);
   } else {
     for (const c of otherLost) clauses.push(`${c.count} lost every ${joinWords(c.types, "and")}`);
   }
@@ -265,6 +272,8 @@ export function OutcomeBar({ result, title = "Outcomes", className }: OutcomeBar
   const slices = outcomeSlices(outcomeCounts(result), result.runs);
   // integer shares that add up to 100 (independent rounding prints 59 + 37 + 5 = 101)
   const pct = roundShares(slices.map((s) => s.count), result.runs);
+  // a family with runs never reads 0% (1 of 200 runs reads "<1%")
+  const share = (i: number) => (slices[i].count > 0 && pct[i] === 0 ? "<1%" : `${pct[i]}%`);
   const hovered = hover === null ? null : (slices.find((s) => s.family === hover) ?? null);
   return (
     <div className={className}>
@@ -277,7 +286,7 @@ export function OutcomeBar({ result, title = "Outcomes", className }: OutcomeBar
             if (s.count === 0) return null;
             const style = FAMILY_STYLE[s.family];
             const dimmed = hover !== null && hover !== s.family;
-            const text = `${style.label}: ${plural(s.count, "run")} (${pct[i]}%)`;
+            const text = `${style.label}: ${plural(s.count, "run")} (${share(i)})`;
             return (
               <div
                 key={s.family}
@@ -312,7 +321,7 @@ export function OutcomeBar({ result, title = "Outcomes", className }: OutcomeBar
             />
             <span>{FAMILY_STYLE[s.family].label}</span>
             <span className="font-mono tabular-nums text-fg">{s.count}</span>
-            <span className="font-mono tabular-nums text-dim">{pct[i]}%</span>
+            <span className="font-mono tabular-nums text-dim">{share(i)}</span>
           </li>
         ))}
       </ul>

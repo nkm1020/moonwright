@@ -72,16 +72,17 @@ export function TopBar({
     <header className="sticky top-0 z-30 border-b border-line bg-surface">
       {/* one row from xl (brand [+ tagline] | stepper | demo + health); below xl the stepper
           takes its own centred row. The tagline shows only where the row has room for all of
-          it, measured: from lg to xl (the stepper on its own row leaves the brand ~460 px) and
-          from 1400 px, where the row reaches its 1,400 px cap (1440 and the 1536 recording
-          width leave the brand 340-365 px whatever the backend badge says, for a 238 px
-          tagline). Between 1280 and 1399 px the stepper, the sample buttons and the badge
-          fill the row, and an ellipsis is worse than no tagline (the two ranges never
-          overlap: Tailwind emits min-[1400px] before the named breakpoints, so an xl:hidden
-          would win over it). From xl the demo group keeps its full width (it shares the row
-          with the brand); below xl it wraps rather than overflow, and below sm it dissolves
-          into the row (display: contents): the badge stays beside the brand and the sample
-          buttons take a row of their own, so a phone never scrolls sideways */}
+          it, measured with the three sample buttons: from lg to xl (the stepper on its own row
+          leaves the brand 415 px or more) and from 1400 px, where the row reaches its 1,400 px
+          cap (1440 and the 1536 recording width leave the brand 335-355 px whatever the
+          backend badge says, for a 238 px tagline). Between 1280 and 1399 px the stepper, the
+          sample buttons and the badge fill the row, and an ellipsis is worse than no tagline
+          (the two ranges never overlap: Tailwind emits min-[1400px] before the named
+          breakpoints, so an xl:hidden would win over it). From xl the demo group keeps its
+          full width (it shares the row with the brand); below xl it wraps rather than
+          overflow, and below sm it dissolves into the row (display: contents): the badge stays
+          beside the brand and the sample buttons take a row of their own (one row at 390 px),
+          so a phone never scrolls sideways */}
       <div className="mx-auto flex w-full max-w-[1400px] flex-wrap items-center gap-x-2.5 gap-y-2 px-4 py-2 md:px-6 lg:px-8">
         <div className="flex min-w-0 flex-1 basis-0 items-baseline gap-2.5">
           <h1
@@ -147,7 +148,8 @@ export function TopBar({
                   key={spec.id}
                   variant="ghost"
                   size="sm"
-                  className="px-2 text-fg"
+                  // a little tighter on a phone, where the three samples share one row
+                  className="px-2 text-fg max-sm:gap-1 max-sm:px-1.5"
                   title={sampleTooltip(spec, sampleOutcomes[spec.id])}
                   aria-label={`${spec.title}: load the recorded run`}
                   loading={sampleLoading && pending === spec.id}

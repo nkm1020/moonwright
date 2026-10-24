@@ -135,7 +135,7 @@ export function whatIfFits(recorded: MonteCarloResult, fleet: Robot[]): boolean 
 }
 
 /** The hazard the inputs imply, in numbers a judge can check: "0.002 failures per robot-hour
- *  = MTBF 500 h, about 16% per robot over the 89 h plan (71% that at least one of 7 robots
+ *  = MTBF 500 h, about 13% per robot over the 72 h plan (64% that at least one of 7 robots
  *  fails); task durations jittered ±15%; up to 2 solver replans per run." */
 export function hazardCopy(rate: number, jitter: number, maxReplans: number, sortieH: number, fleet: number): string {
   const jitterText = `task durations jittered ±${fmtPercent(jitter)}`;
@@ -855,6 +855,10 @@ const H = 252;
 const PAD = { l: 44, r: 16, t: 30, b: 46 };
 /** viewBox units; the panel renders the 640-unit box at 560–630 CSS px, so this is 11–12 px */
 const AXIS_FONT = 12.5;
+/** Below this many CSS px the chart is drawn at its own width (at least NARROW_MIN_W units),
+ *  so a phone reads the axis at about 12 px rather than a 640-unit box shrunk to half. */
+const NARROW_W = 480;
+const NARROW_MIN_W = 280;
 
 function niceStep(range: number, maxTicks: number): number {
   const rough = range / Math.max(1, maxTicks);
@@ -942,6 +946,17 @@ function Histogram({
   const [hover, setHover] = useState<number | null>(null);
   const uid = useId().replace(/[^A-Za-z0-9_-]/g, "");
   const bins = useMemo(() => binFinishes(finishes, axes?.grid ?? binGrid(finishes)), [finishes, axes]);
+  const boxRef = useRef<HTMLDivElement>(null);
+  const [boxW, setBoxW] = useState<number | null>(null);
+  useEffect(() => {
+    const el = boxRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver(() => setBoxW(el.clientWidth));
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+  // the viewBox width: the 640-unit box on a wide panel, the panel's own width on a phone
+  const w = boxW !== null && boxW > 0 && boxW < NARROW_W ? Math.max(NARROW_MIN_W, Math.round(boxW)) : W;
   const header = (
     <div className="mb-1 flex items-baseline justify-between gap-3">
       <h3 className="text-[13px] font-medium">Finish time distribution</h3>
@@ -952,7 +967,7 @@ function Histogram({
   );
   if (bins.length === 0) {
     return (
-      <div className={className}>
+      <div className={className} ref={boxRef}>
         {header}
         <div className="flex min-h-40 items-center justify-center rounded-md border border-dashed border-white/10 text-xs text-dim">
           No run completed, so there are no finish times to plot.
@@ -969,7 +984,7 @@ function Histogram({
   const span = Math.max(1, dataMax - dataMin);
   const x0 = Math.max(0, dataMin - span * 0.04);
   const x1 = dataMax + span * 0.06;
-  const plotW = W - PAD.l - PAD.r;
+  const plotW = w - PAD.l - PAD.r;
   const plotH = H - PAD.t - PAD.b;
   const baseline = PAD.t + plotH;
   const xs = (h: number) => PAD.l + ((h - x0) / (x1 - x0)) * plotW;
@@ -977,7 +992,7 @@ function Histogram({
   const yStep = niceStep(maxCount, 4);
   const yMax = Math.max(yStep, Math.ceil(maxCount / yStep) * yStep);
   const ys = (c: number) => PAD.t + (1 - c / yMax) * plotH;
-  const xStep = niceStep(x1 - x0, 7);
+  const xStep = niceStep(x1 - x0, w < W ? 4 : 7);
   const xTicks = ticks(x0, x1, xStep);
   const yTicks = ticks(0, yMax, yStep);
   const hovered = hover !== null ? bins[hover] : null;
@@ -1010,10 +1025,10 @@ function Histogram({
   const mono = "var(--font-mono)";
 
   return (
-    <div className={className}>
+    <div className={className} ref={boxRef}>
       {header}
       <svg
-        viewBox={`0 0 ${W} ${H}`}
+        viewBox={`0 0 ${w} ${H}`}
         role="img"
         aria-label={`Histogram of finish times over ${runs} runs with the ${horizonH} hour horizon marked`}
         className="h-auto w-full select-none"
@@ -1024,7 +1039,7 @@ function Histogram({
             <rect x={0} y={0} width={Math.max(0, horizonX)} height={H} />
           </clipPath>
           <clipPath id={clipOut}>
-            <rect x={horizonX} y={0} width={Math.max(0, W - horizonX)} height={H} />
+            <rect x={horizonX} y={0} width={Math.max(0, w - horizonX)} height={H} />
           </clipPath>
         </defs>
 

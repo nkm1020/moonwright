@@ -10,7 +10,7 @@
 import { useEffect, useRef, type KeyboardEvent } from "react";
 import type { ExampleBrief, PlanResult, Requirements } from "@/lib/types";
 import {
-  fmtConflictId,
+  conflictPhrases,
   fmtHours,
   fmtNum,
   fmtSeconds,
@@ -169,14 +169,23 @@ function deriveHorizon(text: string): string | null {
 }
 
 /** What a card's recorded run did, every figure read from its PlanResult: "rejected
- *  energy:printer → 1 repair round → verified, 89 h of 336 h". */
+ *  energy:printer → 2 repair rounds → verified, 72 h of 336 h"; a core's precedence edges are
+ *  counted in one phrase ("10 precedence edges"), and an id never breaks inside itself. */
 function OutcomeLine({ outcome }: { outcome: RunOutcome }) {
+  const phrases = conflictPhrases(outcome.rejected);
   return (
     <span className="text-[11.5px] leading-snug text-muted">
       {outcome.rejected.length > 0 ? (
         <>
           rejected{" "}
-          <span className="break-all font-mono text-fail/90">{outcome.rejected.map(fmtConflictId).join(", ")}</span>
+          <span className="font-mono text-fail/90">
+            {phrases.map((p, i) => (
+              <span key={p}>
+                <span className="whitespace-nowrap">{p}</span>
+                {i < phrases.length - 1 ? ", " : ""}
+              </span>
+            ))}
+          </span>
         </>
       ) : (
         "first graph accepted"

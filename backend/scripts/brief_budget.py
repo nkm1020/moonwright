@@ -348,8 +348,9 @@ BRIEF_STRUCTURES: dict[str, list[dict[str, Any]]] = {
 
 # The demo briefs under examples/briefs that do not share an entry with their eval twin by
 # stem: the demo landing_pad's berm is a 40 m arc 1.5 m high (120 m3, which the pad's 125.7 m3
-# of spoil builds) while its twin keeps the 300 m3 berm so live runs 1-3 stay comparable, and
-# front_loaded is front_loaded_excavation under the demo's shorter name.
+# of spoil builds) while its twin keeps the 300 m3 berm so live runs 1-3 stay comparable;
+# front_loaded is front_loaded_excavation and habitat_berm is habitat_berm_tight_horizon under
+# the demo's shorter names.
 DEMO_DIR = Path(__file__).resolve().parents[1] / "examples" / "briefs"
 DEMO_STRUCTURES: dict[str, list[dict[str, Any]]] = {
     "landing_pad": [
@@ -359,6 +360,7 @@ DEMO_STRUCTURES: dict[str, list[dict[str, Any]]] = {
          "fill_from": "S1", "operations": ["haul", "compact", "sinter", "survey"]},
     ],
     "front_loaded": BRIEF_STRUCTURES["front_loaded_excavation"],
+    "habitat_berm": BRIEF_STRUCTURES["habitat_berm_tight_horizon"],
 }
 
 

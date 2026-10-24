@@ -130,7 +130,7 @@ export function SimControls({
     const used = new Set(value.failures.map((f) => f.robot));
     const robot = robots.find((r) => !used.has(r.id)) ?? robots[0];
     const base = makespanH && makespanH > 0 ? makespanH : horizonH;
-    // ~40 % into the work, on a 5 h grid (89 h makespan -> 35 h)
+    // ~40 % into the work, on a 5 h grid (72 h makespan -> 30 h)
     const t = Math.min(horizonH, Math.max(0, Math.round((base * 0.4) / 5) * 5));
     patch({ failures: [...value.failures, { robot: robot.id, t_h: t }] });
   };
