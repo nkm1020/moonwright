@@ -1,0 +1,190 @@
+{
+ "brief": "four_mast_pads",
+ "repeat": 2,
+ "requirements_sha": "815d55700b",
+ "requirements": {
+  "site": {
+   "name": "LS-1",
+   "grid": [
+    40,
+    40
+   ],
+   "zones": [
+    {
+     "id": "Z1",
+     "center": [
+      20,
+      2
+     ],
+     "radius": 3
+    },
+    {
+     "id": "Z2",
+     "center": [
+      38,
+      2
+     ],
+     "radius": 3
+    },
+    {
+     "id": "Z3",
+     "center": [
+      2,
+      38
+     ],
+     "radius": 3
+    },
+    {
+     "id": "Z4",
+     "center": [
+      38,
+      38
+     ],
+     "radius": 3
+    }
+   ],
+   "depot": [
+    20,
+    20
+   ]
+  },
+  "structures": [
+   {
+    "id": "M1",
+    "type": "mast_pad",
+    "zone": "Z1",
+    "operations": [
+     "survey",
+     "grade",
+     "excavate",
+     "compact"
+    ],
+    "length_m": 8,
+    "depth_m": 1,
+    "thickness_m": 0.2,
+    "width_m": 8
+   },
+   {
+    "id": "M2",
+    "type": "mast_pad",
+    "zone": "Z2",
+    "operations": [
+     "survey",
+     "grade",
+     "excavate",
+     "compact"
+    ],
+    "length_m": 8,
+    "depth_m": 1,
+    "thickness_m": 0.2,
+    "width_m": 8
+   },
+   {
+    "id": "M3",
+    "type": "mast_pad",
+    "zone": "Z3",
+    "operations": [
+     "survey",
+     "grade",
+     "excavate",
+     "compact"
+    ],
+    "length_m": 8,
+    "depth_m": 1,
+    "thickness_m": 0.2,
+    "width_m": 8
+   },
+   {
+    "id": "M4",
+    "type": "mast_pad",
+    "zone": "Z4",
+    "operations": [
+     "survey",
+     "grade",
+     "excavate",
+     "compact"
+    ],
+    "length_m": 8,
+    "depth_m": 1,
+    "thickness_m": 0.2,
+    "width_m": 8
+   }
+  ],
+  "robots": [
+   {
+    "id": "EX1",
+    "type": "excavator",
+    "battery_wh": 5000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "EX2",
+    "type": "excavator",
+    "battery_wh": 5000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "HL1",
+    "type": "hauler",
+    "battery_wh": 3000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "CP1",
+    "type": "compactor",
+    "battery_wh": 3500.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "CP2",
+    "type": "compactor",
+    "battery_wh": 3500.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "SV1",
+    "type": "surveyor",
+    "battery_wh": 1500.0,
+    "speed_cells_per_h": 12.0
+   }
+  ],
+  "horizon_h": 144,
+  "constraints": [
+   "The four pads are independent and should proceed in parallel wherever the fleet allows.",
+   "Each pad is staked before stripping and inspected after the anchor backfill.",
+   "Only one robot may work inside a pad at a time."
+  ],
+  "source_brief": "# Four Communication Mast Pads\n\n**Site.** Four corners of a 100 m square around the habitat area, each on firm regolith with 20 cm of fines. The depot is at the centre of the square; no recharging.\n\n**Structures.**\n\n1. Mast pad NE, 2. mast pad NW, 3. mast pad SE, 4. mast pad SW: each 8 m by 8 m, stripped of fines, levelled, compacted, with a 1 m deep central anchor hole excavated and backfilled with compacted regolith around the anchor.\n\n**Fleet.** EX1 and EX2 (excavators, 5000 Wh each), HL1 (hauler, 3000 Wh), CP1 and CP2 (compactors, 3500 Wh each) and SV1 (surveyor, 1500 Wh). Batteries are the whole budget.\n\n**Deadline.** 6 days.\n\n**Operational constraints.**\n\n- The four pads are independent and should proceed in parallel wherever the fleet allows.\n- Each pad is staked before stripping and inspected after the anchor backfill.\n- Only one robot may work inside a pad at a time.\n"
+ },
+ "ok": true,
+ "message": "4 structures, 6 robots, horizon 144h",
+ "payload": {
+  "zones": 4,
+  "grid": [
+   40,
+   40
+  ],
+  "depot": [
+   20,
+   20
+  ],
+  "warnings": [
+   "structure M1: operations sinter dropped: the fleet has no printer, so no sinter task will be required of it (add a printer and the operation again to plan it)",
+   "structure M2: operations sinter dropped: the fleet has no printer, so no sinter task will be required of it (add a printer and the operation again to plan it)",
+   "structure M3: operations sinter dropped: the fleet has no printer, so no sinter task will be required of it (add a printer and the operation again to plan it)",
+   "structure M4: operations sinter dropped: the fleet has no printer, so no sinter task will be required of it (add a printer and the operation again to plan it)",
+   "structure M1: diameter_m 8 -> 8 m x 8 m: the brief's entry for M1 states an 8 m by 8 m footprint",
+   "structure M2: diameter_m 8 -> 8 m x 8 m: the brief's entry for M2 states an 8 m by 8 m footprint",
+   "structure M3: diameter_m 8 -> 8 m x 8 m: the brief's entry for M3 states an 8 m by 8 m footprint",
+   "structure M4: diameter_m 8 -> 8 m x 8 m: the brief's entry for M4 states an 8 m by 8 m footprint"
+  ]
+ },
+ "failure": null,
+ "usage": {
+  "model": "nvidia/Nemotron-3_5-Lightning",
+  "input_tokens": 3063,
+  "output_tokens": 673,
+  "latency_s": 4.130116832908243
+ },
+ "latency_s": 4.14
+}

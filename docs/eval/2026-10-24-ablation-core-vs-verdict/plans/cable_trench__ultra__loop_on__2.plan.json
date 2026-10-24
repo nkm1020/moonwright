@@ -1,0 +1,628 @@
+{
+ "requirements": {
+  "site": {
+   "name": "LS-1",
+   "grid": [
+    40,
+    40
+   ],
+   "zones": [
+    {
+     "id": "Z1",
+     "center": [
+      20,
+      2
+     ],
+     "radius": 3
+    },
+    {
+     "id": "Z2",
+     "center": [
+      20,
+      12
+     ],
+     "radius": 3
+    },
+    {
+     "id": "Z3",
+     "center": [
+      20,
+      22
+     ],
+     "radius": 3
+    }
+   ],
+   "depot": [
+    20,
+    2
+   ]
+  },
+  "structures": [
+   {
+    "id": "S1",
+    "type": "cable_trench",
+    "zone": "Z1",
+    "operations": [
+     "excavate",
+     "compact"
+    ],
+    "length_m": 150,
+    "width_m": 0.4,
+    "depth_m": 0.6,
+    "lifts": 1
+   },
+   {
+    "id": "S2",
+    "type": "earth_bridge",
+    "zone": "Z2",
+    "operations": [
+     "haul",
+     "compact"
+    ],
+    "length_m": 10,
+    "width_m": 4,
+    "thickness_m": 0.5
+   }
+  ],
+  "robots": [
+   {
+    "id": "EX1",
+    "type": "excavator",
+    "battery_wh": 5000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "HL1",
+    "type": "hauler",
+    "battery_wh": 3000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "CP1",
+    "type": "compactor",
+    "battery_wh": 3500.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "SV1",
+    "type": "surveyor",
+    "battery_wh": 1500.0,
+    "speed_cells_per_h": 12.0
+   }
+  ],
+  "horizon_h": 120,
+  "constraints": [
+   "Segments are cut in order from the array end; compactor beds a segment only after surveyor has checked its depth.",
+   "Earth bridge is built before segment two is cut through the depression.",
+   "Only one robot may work inside a zone at a time."
+  ],
+  "source_brief": "# Power Cable Trench to the Habitat Site\n\n**Site.** A 150 m corridor from the solar array pad to the habitat foundation, across loose regolith with scattered cobbles. The route crosses one shallow 10 m wide depression. The depot is at the array end; no recharging.\n\n**Structures.**\n\n1. Cable trench: 150 m long, 0.4 m wide, 0.6 m deep, cut in three 50 m segments so the cable crew can follow behind, with a compacted 10 cm bedding layer in each segment before the cable goes in.\n2. Depression crossing: a 10 m long, 4 m wide earth bridge of compacted fill, 0.5 m thick (about 20 cubic metres, taken from the trench spoil), across the depression so the trench keeps a steady depth.\n\n**Fleet.** EX1 (excavator, 5000 Wh), HL1 (hauler, 3000 Wh), CP1 (compactor, 3500 Wh) and SV1 (surveyor, 1500 Wh). Each battery is the whole job's budget.\n\n**Deadline.** 5 days.\n\n**Operational constraints.**\n\n- Segments are cut in order from the array end; the compactor beds a segment only after the surveyor has checked its depth.\n- The earth bridge is built before segment two is cut through the depression.\n- Only one robot may work inside a zone at a time.\n"
+ },
+ "task_graph": {
+  "tasks": [
+   {
+    "id": "T1",
+    "name": "excavate segment 3",
+    "robot_type": "excavator",
+    "duration_h": 2,
+    "energy_wh": 192.0,
+    "zone": "Z1",
+    "after": [],
+    "structure": "S1",
+    "quantity": 12.0,
+    "unit": "m3",
+    "basis": "50 m * 0.4 m * 0.6 m = 12 m3",
+    "estimated_duration_h": 2.0,
+    "estimated_energy_wh": 192.0
+   },
+   {
+    "id": "T2",
+    "name": "inspect depth segment 3",
+    "robot_type": "surveyor",
+    "duration_h": 1,
+    "energy_wh": 75.0,
+    "zone": "Z1",
+    "after": [
+     "T1"
+    ],
+    "structure": "S1",
+    "quantity": null,
+    "unit": null,
+    "basis": "depth check segment 3",
+    "estimated_duration_h": null,
+    "estimated_energy_wh": null
+   },
+   {
+    "id": "T3",
+    "name": "compact segment 3",
+    "robot_type": "compactor",
+    "duration_h": 1,
+    "energy_wh": 80.0,
+    "zone": "Z1",
+    "after": [
+     "T2",
+     "T12"
+    ],
+    "structure": "S1",
+    "quantity": 20.0,
+    "unit": "m2",
+    "basis": "50 m * 0.4 m = 20 m2",
+    "estimated_duration_h": 1.0,
+    "estimated_energy_wh": 80.0
+   },
+   {
+    "id": "T4",
+    "name": "excavate segment 2",
+    "robot_type": "excavator",
+    "duration_h": 2,
+    "energy_wh": 192.0,
+    "zone": "Z1",
+    "after": [
+     "T3",
+     "T12"
+    ],
+    "structure": "S1",
+    "quantity": 12.0,
+    "unit": "m3",
+    "basis": "50 m * 0.4 m * 0.6 m = 12 m3",
+    "estimated_duration_h": 2.0,
+    "estimated_energy_wh": 192.0
+   },
+   {
+    "id": "T5",
+    "name": "inspect depth segment 2",
+    "robot_type": "surveyor",
+    "duration_h": 1,
+    "energy_wh": 75.0,
+    "zone": "Z1",
+    "after": [
+     "T4"
+    ],
+    "structure": "S1",
+    "quantity": null,
+    "unit": null,
+    "basis": "depth check segment 2",
+    "estimated_duration_h": null,
+    "estimated_energy_wh": null
+   },
+   {
+    "id": "T6",
+    "name": "compact segment 2",
+    "robot_type": "compactor",
+    "duration_h": 1,
+    "energy_wh": 80.0,
+    "zone": "Z1",
+    "after": [
+     "T5"
+    ],
+    "structure": "S1",
+    "quantity": 20.0,
+    "unit": "m2",
+    "basis": "50 m * 0.4 m = 20 m2",
+    "estimated_duration_h": 1.0,
+    "estimated_energy_wh": 80.0
+   },
+   {
+    "id": "T7",
+    "name": "excavate segment 1",
+    "robot_type": "excavator",
+    "duration_h": 2,
+    "energy_wh": 192.0,
+    "zone": "Z1",
+    "after": [
+     "T6"
+    ],
+    "structure": "S1",
+    "quantity": 12.0,
+    "unit": "m3",
+    "basis": "50 m * 0.4 m * 0.6 m = 12 m3",
+    "estimated_duration_h": 2.0,
+    "estimated_energy_wh": 192.0
+   },
+   {
+    "id": "T8",
+    "name": "inspect depth segment 1",
+    "robot_type": "surveyor",
+    "duration_h": 1,
+    "energy_wh": 75.0,
+    "zone": "Z1",
+    "after": [
+     "T7"
+    ],
+    "structure": "S1",
+    "quantity": null,
+    "unit": null,
+    "basis": "depth check segment 1",
+    "estimated_duration_h": null,
+    "estimated_energy_wh": null
+   },
+   {
+    "id": "T9",
+    "name": "compact segment 1",
+    "robot_type": "compactor",
+    "duration_h": 1,
+    "energy_wh": 80.0,
+    "zone": "Z1",
+    "after": [
+     "T8"
+    ],
+    "structure": "S1",
+    "quantity": 20.0,
+    "unit": "m2",
+    "basis": "50 m * 0.4 m = 20 m2",
+    "estimated_duration_h": 1.0,
+    "estimated_energy_wh": 80.0
+   },
+   {
+    "id": "T10",
+    "name": "inspect cable_trench",
+    "robot_type": "surveyor",
+    "duration_h": 1,
+    "energy_wh": 75.0,
+    "zone": "Z1",
+    "after": [
+     "T9"
+    ],
+    "structure": "S1",
+    "quantity": null,
+    "unit": null,
+    "basis": "final inspection S1",
+    "estimated_duration_h": null,
+    "estimated_energy_wh": null
+   },
+   {
+    "id": "T11",
+    "name": "haul fill earth_bridge",
+    "robot_type": "hauler",
+    "duration_h": 2,
+    "energy_wh": 140.0,
+    "zone": "Z2",
+    "after": [],
+    "structure": "S2",
+    "quantity": 20.0,
+    "unit": "m3",
+    "basis": "10 m * 4 m * 0.5 m = 20 m3",
+    "estimated_duration_h": 2.0,
+    "estimated_energy_wh": 140.0
+   },
+   {
+    "id": "T12",
+    "name": "compact earth_bridge",
+    "robot_type": "compactor",
+    "duration_h": 2,
+    "energy_wh": 160.0,
+    "zone": "Z2",
+    "after": [
+     "T11"
+    ],
+    "structure": "S2",
+    "quantity": 40.0,
+    "unit": "m2",
+    "basis": "10 m * 4 m = 40 m2",
+    "estimated_duration_h": 2.0,
+    "estimated_energy_wh": 160.0
+   },
+   {
+    "id": "T13",
+    "name": "inspect earth_bridge",
+    "robot_type": "surveyor",
+    "duration_h": 1,
+    "energy_wh": 75.0,
+    "zone": "Z2",
+    "after": [
+     "T12"
+    ],
+    "structure": "S2",
+    "quantity": null,
+    "unit": null,
+    "basis": "final inspection S2",
+    "estimated_duration_h": null,
+    "estimated_energy_wh": null
+   }
+  ],
+  "notes": "Added dependency T4 after T12 to enforce constraint: earth bridge built before segment two excavation. All tasks satisfy battery limits, horizon, volume, and zone concurrency constraints. Surveyor inspections added per structure."
+ },
+ "schedule": null,
+ "explanation": null,
+ "steps": [
+  {
+   "stage": "structure",
+   "attempt": 1,
+   "ok": true,
+   "failure": null,
+   "duration_s": 13.845946416957304,
+   "usage": {
+    "model": "nvidia/Nemotron-3_5-Lightning",
+    "input_tokens": 3129,
+    "output_tokens": 426,
+    "latency_s": 13.841054666088894
+   },
+   "message": "2 structures, 4 robots, horizon 120h",
+   "payload": {
+    "zones": 3,
+    "grid": [
+     40,
+     40
+    ],
+    "depot": [
+     20,
+     2
+    ],
+    "warnings": [
+     "structure S1: operations [excavate, compact] recovered from malformed keys ('operations_expected'); check them against the brief",
+     "structure S2: operations [haul, compact] recovered from malformed keys ('operations_expected'); check them against the brief",
+     "structure S1: lifts 3 -> 1: the brief's entry for S1 states 1 compaction lift"
+    ]
+   }
+  },
+  {
+   "stage": "taskgraph",
+   "attempt": 1,
+   "ok": true,
+   "failure": null,
+   "duration_s": 43.096384290838614,
+   "usage": {
+    "model": "nvidia/Nemotron-3-Ultra-550b-a55b",
+    "input_tokens": 3310,
+    "output_tokens": 9608,
+    "latency_s": 43.092584665864706
+   },
+   "message": "13 tasks",
+   "payload": {
+    "advisories": [],
+    "rate_model": true,
+    "grounded": 8
+   }
+  },
+  {
+   "stage": "validate",
+   "attempt": 1,
+   "ok": false,
+   "failure": {
+    "kind": "validation",
+    "conflicts": [
+     "supply:T11"
+    ],
+    "hint": "A haul cannot start before its material is dug: make T11 wait for the digs that supply it (S1 cable trench: T1); a haul part may wait for only the dig parts that remove what it moves, so split hauls to keep both chains short.",
+    "details": [
+     "T11 hauls 20 m3 for S2 (earth bridge) but waits for no excavation, so it could start before any material is dug"
+    ]
+   },
+   "duration_s": 0.0008791249711066484,
+   "usage": null,
+   "message": null,
+   "payload": null
+  },
+  {
+   "stage": "repair",
+   "attempt": 2,
+   "ok": true,
+   "failure": null,
+   "duration_s": 129.52409729198553,
+   "usage": {
+    "model": "nvidia/Nemotron-3-Ultra-550b-a55b",
+    "input_tokens": 5235,
+    "output_tokens": 22744,
+    "latency_s": 129.51785404188558
+   },
+   "message": "13 tasks",
+   "payload": {
+    "advisories": [],
+    "rate_model": true,
+    "grounded": 8,
+    "diff": {
+     "added": [],
+     "removed": [],
+     "changed": [
+      {
+       "task": "T3",
+       "field": "after",
+       "before": [
+        "T2"
+       ],
+       "after": [
+        "T12",
+        "T2"
+       ]
+      },
+      {
+       "task": "T4",
+       "field": "after",
+       "before": [
+        "T12",
+        "T3"
+       ],
+       "after": [
+        "T3"
+       ]
+      }
+     ],
+     "renumbered": [],
+     "per_type_energy_before": {
+      "compactor": 400.0,
+      "excavator": 576.0,
+      "hauler": 140.0,
+      "surveyor": 375.0
+     },
+     "per_type_energy_after": {
+      "compactor": 400.0,
+      "excavator": 576.0,
+      "hauler": 140.0,
+      "surveyor": 375.0
+     },
+     "scope_drift_pct": 0.0,
+     "total_energy_wh_before": 1491.0,
+     "total_energy_wh_after": 1491.0,
+     "total_duration_h_before": 18,
+     "total_duration_h_after": 18
+    }
+   }
+  },
+  {
+   "stage": "validate",
+   "attempt": 2,
+   "ok": false,
+   "failure": {
+    "kind": "validation",
+    "conflicts": [
+     "supply:T11"
+    ],
+    "hint": "A haul cannot start before its material is dug: make T11 wait for the digs that supply it (S1 cable trench: T1); a haul part may wait for only the dig parts that remove what it moves, so split hauls to keep both chains short.",
+    "details": [
+     "T11 hauls 20 m3 for S2 (earth bridge) but waits for no excavation, so it could start before any material is dug"
+    ]
+   },
+   "duration_s": 0.0012883339077234268,
+   "usage": null,
+   "message": null,
+   "payload": null
+  },
+  {
+   "stage": "repair",
+   "attempt": 3,
+   "ok": true,
+   "failure": null,
+   "duration_s": 38.690376166952774,
+   "usage": {
+    "model": "nvidia/Nemotron-3-Ultra-550b-a55b",
+    "input_tokens": 5297,
+    "output_tokens": 8163,
+    "latency_s": 38.68649895885028
+   },
+   "message": "13 tasks",
+   "payload": {
+    "advisories": [],
+    "rate_model": true,
+    "grounded": 8,
+    "diff": {
+     "added": [],
+     "removed": [],
+     "changed": [
+      {
+       "task": "T4",
+       "field": "after",
+       "before": [
+        "T3"
+       ],
+       "after": [
+        "T12",
+        "T3"
+       ]
+      }
+     ],
+     "renumbered": [],
+     "per_type_energy_before": {
+      "compactor": 400.0,
+      "excavator": 576.0,
+      "hauler": 140.0,
+      "surveyor": 375.0
+     },
+     "per_type_energy_after": {
+      "compactor": 400.0,
+      "excavator": 576.0,
+      "hauler": 140.0,
+      "surveyor": 375.0
+     },
+     "scope_drift_pct": 0.0,
+     "total_energy_wh_before": 1491.0,
+     "total_energy_wh_after": 1491.0,
+     "total_duration_h_before": 18,
+     "total_duration_h_after": 18
+    }
+   }
+  },
+  {
+   "stage": "validate",
+   "attempt": 3,
+   "ok": false,
+   "failure": {
+    "kind": "validation",
+    "conflicts": [
+     "supply:T11"
+    ],
+    "hint": "A haul cannot start before its material is dug: make T11 wait for the digs that supply it (S1 cable trench: T1); a haul part may wait for only the dig parts that remove what it moves, so split hauls to keep both chains short.",
+    "details": [
+     "T11 hauls 20 m3 for S2 (earth bridge) but waits for no excavation, so it could start before any material is dug"
+    ]
+   },
+   "duration_s": 0.0009159580804407597,
+   "usage": null,
+   "message": null,
+   "payload": null
+  },
+  {
+   "stage": "repair",
+   "attempt": 4,
+   "ok": true,
+   "failure": null,
+   "duration_s": 63.86441674991511,
+   "usage": {
+    "model": "nvidia/Nemotron-3-Ultra-550b-a55b",
+    "input_tokens": 5205,
+    "output_tokens": 14688,
+    "latency_s": 63.86113108298741
+   },
+   "message": "13 tasks",
+   "payload": {
+    "advisories": [],
+    "rate_model": true,
+    "grounded": 8,
+    "diff": {
+     "added": [],
+     "removed": [],
+     "changed": [],
+     "renumbered": [],
+     "per_type_energy_before": {
+      "compactor": 400.0,
+      "excavator": 576.0,
+      "hauler": 140.0,
+      "surveyor": 375.0
+     },
+     "per_type_energy_after": {
+      "compactor": 400.0,
+      "excavator": 576.0,
+      "hauler": 140.0,
+      "surveyor": 375.0
+     },
+     "scope_drift_pct": 0.0,
+     "total_energy_wh_before": 1491.0,
+     "total_energy_wh_after": 1491.0,
+     "total_duration_h_before": 18,
+     "total_duration_h_after": 18
+    }
+   }
+  },
+  {
+   "stage": "validate",
+   "attempt": 4,
+   "ok": false,
+   "failure": {
+    "kind": "validation",
+    "conflicts": [
+     "supply:T11"
+    ],
+    "hint": "A haul cannot start before its material is dug: make T11 wait for the digs that supply it (S1 cable trench: T1); a haul part may wait for only the dig parts that remove what it moves, so split hauls to keep both chains short.",
+    "details": [
+     "T11 hauls 20 m3 for S2 (earth bridge) but waits for no excavation, so it could start before any material is dug"
+    ]
+   },
+   "duration_s": 0.0007477079052478075,
+   "usage": null,
+   "message": null,
+   "payload": null
+  }
+ ],
+ "repairs": 3,
+ "success": false,
+ "failure": {
+  "kind": "validation",
+  "conflicts": [
+   "supply:T11"
+  ],
+  "hint": "A haul cannot start before its material is dug: make T11 wait for the digs that supply it (S1 cable trench: T1); a haul part may wait for only the dig parts that remove what it moves, so split hauls to keep both chains short.",
+  "details": [
+   "T11 hauls 20 m3 for S2 (earth bridge) but waits for no excavation, so it could start before any material is dug"
+  ]
+ },
+ "suggestions": []
+}

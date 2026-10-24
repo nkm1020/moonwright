@@ -1,0 +1,853 @@
+{
+ "requirements": {
+  "site": {
+   "name": "LS-1",
+   "grid": [
+    40,
+    40
+   ],
+   "zones": [
+    {
+     "id": "Z1",
+     "center": [
+      20,
+      2
+     ],
+     "radius": 3
+    },
+    {
+     "id": "Z2",
+     "center": [
+      38,
+      2
+     ],
+     "radius": 3
+    },
+    {
+     "id": "Z3",
+     "center": [
+      2,
+      38
+     ],
+     "radius": 3
+    },
+    {
+     "id": "Z4",
+     "center": [
+      38,
+      38
+     ],
+     "radius": 3
+    }
+   ],
+   "depot": [
+    20,
+    20
+   ]
+  },
+  "structures": [
+   {
+    "id": "M1",
+    "type": "mast_pad",
+    "zone": "Z1",
+    "operations": [
+     "survey",
+     "grade",
+     "excavate",
+     "compact"
+    ],
+    "length_m": 8,
+    "width_m": 8,
+    "depth_m": 1
+   },
+   {
+    "id": "M2",
+    "type": "mast_pad",
+    "zone": "Z2",
+    "operations": [
+     "survey",
+     "grade",
+     "excavate",
+     "compact"
+    ],
+    "length_m": 8,
+    "width_m": 8,
+    "depth_m": 1
+   },
+   {
+    "id": "M3",
+    "type": "mast_pad",
+    "zone": "Z3",
+    "operations": [
+     "survey",
+     "grade",
+     "excavate",
+     "compact"
+    ],
+    "length_m": 8,
+    "width_m": 8,
+    "depth_m": 1
+   },
+   {
+    "id": "M4",
+    "type": "mast_pad",
+    "zone": "Z4",
+    "operations": [
+     "survey",
+     "grade",
+     "excavate",
+     "compact"
+    ],
+    "length_m": 8,
+    "width_m": 8,
+    "depth_m": 1
+   }
+  ],
+  "robots": [
+   {
+    "id": "EX1",
+    "type": "excavator",
+    "battery_wh": 5000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "EX2",
+    "type": "excavator",
+    "battery_wh": 5000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "HL1",
+    "type": "hauler",
+    "battery_wh": 3000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "CP1",
+    "type": "compactor",
+    "battery_wh": 3500.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "CP2",
+    "type": "compactor",
+    "battery_wh": 3500.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "SV1",
+    "type": "surveyor",
+    "battery_wh": 1500.0,
+    "speed_cells_per_h": 12.0
+   }
+  ],
+  "horizon_h": 144,
+  "constraints": [
+   "The four pads are independent and should proceed in parallel wherever the fleet allows.",
+   "Each pad is staked before stripping and inspected after the anchor backfill.",
+   "Only one robot may work inside a pad at a time."
+  ],
+  "source_brief": "# Four Communication Mast Pads\n\n**Site.** Four corners of a 100 m square around the habitat area, each on firm regolith with 20 cm of fines. The depot is at the centre of the square; no recharging.\n\n**Structures.**\n\n1. Mast pad NE, 2. mast pad NW, 3. mast pad SE, 4. mast pad SW: each 8 m by 8 m, stripped of fines, levelled, compacted, with a 1 m deep central anchor hole excavated and backfilled with compacted regolith around the anchor.\n\n**Fleet.** EX1 and EX2 (excavators, 5000 Wh each), HL1 (hauler, 3000 Wh), CP1 and CP2 (compactors, 3500 Wh each) and SV1 (surveyor, 1500 Wh). Batteries are the whole budget.\n\n**Deadline.** 6 days.\n\n**Operational constraints.**\n\n- The four pads are independent and should proceed in parallel wherever the fleet allows.\n- Each pad is staked before stripping and inspected after the anchor backfill.\n- Only one robot may work inside a pad at a time.\n"
+ },
+ "task_graph": {
+  "tasks": [
+   {
+    "id": "T1",
+    "name": "survey M1",
+    "robot_type": "surveyor",
+    "duration_h": 1,
+    "energy_wh": 32.0,
+    "zone": "Z1",
+    "after": [],
+    "structure": "M1",
+    "quantity": 64.0,
+    "unit": "m2",
+    "basis": "8 m x 8 m = 64 m2",
+    "estimated_duration_h": 1.0,
+    "estimated_energy_wh": 32.0
+   },
+   {
+    "id": "T2",
+    "name": "grade M1",
+    "robot_type": "excavator",
+    "duration_h": 3,
+    "energy_wh": 307.2,
+    "zone": "Z1",
+    "after": [
+     "T1"
+    ],
+    "structure": "M1",
+    "quantity": 64.0,
+    "unit": "m2",
+    "basis": "8 m x 8 m = 64 m2",
+    "estimated_duration_h": 3.0,
+    "estimated_energy_wh": 307.2
+   },
+   {
+    "id": "T3",
+    "name": "excavate M1 part1",
+    "robot_type": "excavator",
+    "duration_h": 5,
+    "energy_wh": 512.0,
+    "zone": "Z1",
+    "after": [
+     "T2"
+    ],
+    "structure": "M1",
+    "quantity": 32.0,
+    "unit": "m3",
+    "basis": "8 m x 8 m x 1 m / 2 = 32 m3",
+    "estimated_duration_h": 5.0,
+    "estimated_energy_wh": 512.0
+   },
+   {
+    "id": "T4",
+    "name": "excavate M1 part2",
+    "robot_type": "excavator",
+    "duration_h": 5,
+    "energy_wh": 512.0,
+    "zone": "Z1",
+    "after": [
+     "T3"
+    ],
+    "structure": "M1",
+    "quantity": 32.0,
+    "unit": "m3",
+    "basis": "8 m x 8 m x 1 m / 2 = 32 m3",
+    "estimated_duration_h": 5.0,
+    "estimated_energy_wh": 512.0
+   },
+   {
+    "id": "T5",
+    "name": "compact M1",
+    "robot_type": "compactor",
+    "duration_h": 3,
+    "energy_wh": 256.0,
+    "zone": "Z1",
+    "after": [
+     "T4"
+    ],
+    "structure": "M1",
+    "quantity": 64.0,
+    "unit": "m2",
+    "basis": "8 m x 8 m = 64 m2",
+    "estimated_duration_h": 3.0,
+    "estimated_energy_wh": 256.0
+   },
+   {
+    "id": "T6",
+    "name": "inspect M1",
+    "robot_type": "surveyor",
+    "duration_h": 1,
+    "energy_wh": 75.0,
+    "zone": "Z1",
+    "after": [
+     "T5"
+    ],
+    "structure": "M1",
+    "quantity": null,
+    "unit": null,
+    "basis": null,
+    "estimated_duration_h": null,
+    "estimated_energy_wh": null
+   },
+   {
+    "id": "T7",
+    "name": "survey M2",
+    "robot_type": "surveyor",
+    "duration_h": 1,
+    "energy_wh": 32.0,
+    "zone": "Z2",
+    "after": [],
+    "structure": "M2",
+    "quantity": 64.0,
+    "unit": "m2",
+    "basis": "8 m x 8 m = 64 m2",
+    "estimated_duration_h": 1.0,
+    "estimated_energy_wh": 32.0
+   },
+   {
+    "id": "T8",
+    "name": "grade M2",
+    "robot_type": "excavator",
+    "duration_h": 3,
+    "energy_wh": 307.2,
+    "zone": "Z2",
+    "after": [
+     "T7"
+    ],
+    "structure": "M2",
+    "quantity": 64.0,
+    "unit": "m2",
+    "basis": "8 m x 8 m = 64 m2",
+    "estimated_duration_h": 3.0,
+    "estimated_energy_wh": 307.2
+   },
+   {
+    "id": "T9",
+    "name": "excavate M2 part1",
+    "robot_type": "excavator",
+    "duration_h": 5,
+    "energy_wh": 512.0,
+    "zone": "Z2",
+    "after": [
+     "T8"
+    ],
+    "structure": "M2",
+    "quantity": 32.0,
+    "unit": "m3",
+    "basis": "8 m x 8 m x 1 m / 2 = 32 m3",
+    "estimated_duration_h": 5.0,
+    "estimated_energy_wh": 512.0
+   },
+   {
+    "id": "T10",
+    "name": "excavate M2 part2",
+    "robot_type": "excavator",
+    "duration_h": 5,
+    "energy_wh": 512.0,
+    "zone": "Z2",
+    "after": [
+     "T9"
+    ],
+    "structure": "M2",
+    "quantity": 32.0,
+    "unit": "m3",
+    "basis": "8 m x 8 m x 1 m / 2 = 32 m3",
+    "estimated_duration_h": 5.0,
+    "estimated_energy_wh": 512.0
+   },
+   {
+    "id": "T11",
+    "name": "compact M2",
+    "robot_type": "compactor",
+    "duration_h": 3,
+    "energy_wh": 256.0,
+    "zone": "Z2",
+    "after": [
+     "T10"
+    ],
+    "structure": "M2",
+    "quantity": 64.0,
+    "unit": "m2",
+    "basis": "8 m x 8 m = 64 m2",
+    "estimated_duration_h": 3.0,
+    "estimated_energy_wh": 256.0
+   },
+   {
+    "id": "T12",
+    "name": "inspect M2",
+    "robot_type": "surveyor",
+    "duration_h": 1,
+    "energy_wh": 75.0,
+    "zone": "Z2",
+    "after": [
+     "T11"
+    ],
+    "structure": "M2",
+    "quantity": null,
+    "unit": null,
+    "basis": null,
+    "estimated_duration_h": null,
+    "estimated_energy_wh": null
+   },
+   {
+    "id": "T13",
+    "name": "survey M3",
+    "robot_type": "surveyor",
+    "duration_h": 1,
+    "energy_wh": 32.0,
+    "zone": "Z3",
+    "after": [],
+    "structure": "M3",
+    "quantity": 64.0,
+    "unit": "m2",
+    "basis": "8 m x 8 m = 64 m2",
+    "estimated_duration_h": 1.0,
+    "estimated_energy_wh": 32.0
+   },
+   {
+    "id": "T14",
+    "name": "grade M3",
+    "robot_type": "excavator",
+    "duration_h": 3,
+    "energy_wh": 307.2,
+    "zone": "Z3",
+    "after": [
+     "T13"
+    ],
+    "structure": "M3",
+    "quantity": 64.0,
+    "unit": "m2",
+    "basis": "8 m x 8 m = 64 m2",
+    "estimated_duration_h": 3.0,
+    "estimated_energy_wh": 307.2
+   },
+   {
+    "id": "T15",
+    "name": "excavate M3 part1",
+    "robot_type": "excavator",
+    "duration_h": 5,
+    "energy_wh": 512.0,
+    "zone": "Z3",
+    "after": [
+     "T14"
+    ],
+    "structure": "M3",
+    "quantity": 32.0,
+    "unit": "m3",
+    "basis": "8 m x 8 m x 1 m / 2 = 32 m3",
+    "estimated_duration_h": 5.0,
+    "estimated_energy_wh": 512.0
+   },
+   {
+    "id": "T16",
+    "name": "excavate M3 part2",
+    "robot_type": "excavator",
+    "duration_h": 5,
+    "energy_wh": 512.0,
+    "zone": "Z3",
+    "after": [
+     "T15"
+    ],
+    "structure": "M3",
+    "quantity": 32.0,
+    "unit": "m3",
+    "basis": "8 m x 8 m x 1 m / 2 = 32 m3",
+    "estimated_duration_h": 5.0,
+    "estimated_energy_wh": 512.0
+   },
+   {
+    "id": "T17",
+    "name": "compact M3",
+    "robot_type": "compactor",
+    "duration_h": 3,
+    "energy_wh": 256.0,
+    "zone": "Z3",
+    "after": [
+     "T16"
+    ],
+    "structure": "M3",
+    "quantity": 64.0,
+    "unit": "m2",
+    "basis": "8 m x 8 m = 64 m2",
+    "estimated_duration_h": 3.0,
+    "estimated_energy_wh": 256.0
+   },
+   {
+    "id": "T18",
+    "name": "inspect M3",
+    "robot_type": "surveyor",
+    "duration_h": 1,
+    "energy_wh": 75.0,
+    "zone": "Z3",
+    "after": [
+     "T17"
+    ],
+    "structure": "M3",
+    "quantity": null,
+    "unit": null,
+    "basis": null,
+    "estimated_duration_h": null,
+    "estimated_energy_wh": null
+   },
+   {
+    "id": "T19",
+    "name": "survey M4",
+    "robot_type": "surveyor",
+    "duration_h": 1,
+    "energy_wh": 32.0,
+    "zone": "Z4",
+    "after": [],
+    "structure": "M4",
+    "quantity": 64.0,
+    "unit": "m2",
+    "basis": "8 m x 8 m = 64 m2",
+    "estimated_duration_h": 1.0,
+    "estimated_energy_wh": 32.0
+   },
+   {
+    "id": "T20",
+    "name": "grade M4",
+    "robot_type": "excavator",
+    "duration_h": 3,
+    "energy_wh": 307.2,
+    "zone": "Z4",
+    "after": [
+     "T19"
+    ],
+    "structure": "M4",
+    "quantity": 64.0,
+    "unit": "m2",
+    "basis": "8 m x 8 m = 64 m2",
+    "estimated_duration_h": 3.0,
+    "estimated_energy_wh": 307.2
+   },
+   {
+    "id": "T21",
+    "name": "excavate M4 part1",
+    "robot_type": "excavator",
+    "duration_h": 5,
+    "energy_wh": 512.0,
+    "zone": "Z4",
+    "after": [
+     "T20"
+    ],
+    "structure": "M4",
+    "quantity": 32.0,
+    "unit": "m3",
+    "basis": "8 m x 8 m x 1 m / 2 = 32 m3",
+    "estimated_duration_h": 5.0,
+    "estimated_energy_wh": 512.0
+   },
+   {
+    "id": "T22",
+    "name": "excavate M4 part2",
+    "robot_type": "excavator",
+    "duration_h": 5,
+    "energy_wh": 512.0,
+    "zone": "Z4",
+    "after": [
+     "T21"
+    ],
+    "structure": "M4",
+    "quantity": 32.0,
+    "unit": "m3",
+    "basis": "8 m x 8 m x 1 m / 2 = 32 m3",
+    "estimated_duration_h": 5.0,
+    "estimated_energy_wh": 512.0
+   },
+   {
+    "id": "T23",
+    "name": "compact M4",
+    "robot_type": "compactor",
+    "duration_h": 3,
+    "energy_wh": 256.0,
+    "zone": "Z4",
+    "after": [
+     "T22"
+    ],
+    "structure": "M4",
+    "quantity": 64.0,
+    "unit": "m2",
+    "basis": "8 m x 8 m = 64 m2",
+    "estimated_duration_h": 3.0,
+    "estimated_energy_wh": 256.0
+   },
+   {
+    "id": "T24",
+    "name": "inspect M4",
+    "robot_type": "surveyor",
+    "duration_h": 1,
+    "energy_wh": 75.0,
+    "zone": "Z4",
+    "after": [
+     "T23"
+    ],
+    "structure": "M4",
+    "quantity": null,
+    "unit": null,
+    "basis": null,
+    "estimated_duration_h": null,
+    "estimated_energy_wh": null
+   }
+  ],
+  "notes": "Each mast pad (8x8x1 m) requires 64 m3 excavation, split into two 32 m3 tasks per pad because total >60 m3 and two excavators are available. Grading, compaction, and survey are single tasks per pad. Inspection tasks are pure-time surveyor tasks. All pads are independent; the graph contains no cross-pad dependencies to allow parallel execution where robot availability permits."
+ },
+ "schedule": {
+  "entries": [
+   {
+    "task": "T1",
+    "robot": "SV1",
+    "start_h": 2,
+    "end_h": 3
+   },
+   {
+    "task": "T2",
+    "robot": "EX2",
+    "start_h": 3,
+    "end_h": 6
+   },
+   {
+    "task": "T3",
+    "robot": "EX2",
+    "start_h": 6,
+    "end_h": 11
+   },
+   {
+    "task": "T4",
+    "robot": "EX2",
+    "start_h": 11,
+    "end_h": 16
+   },
+   {
+    "task": "T5",
+    "robot": "CP2",
+    "start_h": 16,
+    "end_h": 19
+   },
+   {
+    "task": "T6",
+    "robot": "SV1",
+    "start_h": 19,
+    "end_h": 20
+   },
+   {
+    "task": "T7",
+    "robot": "SV1",
+    "start_h": 5,
+    "end_h": 6
+   },
+   {
+    "task": "T8",
+    "robot": "EX1",
+    "start_h": 6,
+    "end_h": 9
+   },
+   {
+    "task": "T9",
+    "robot": "EX1",
+    "start_h": 9,
+    "end_h": 14
+   },
+   {
+    "task": "T10",
+    "robot": "EX1",
+    "start_h": 14,
+    "end_h": 19
+   },
+   {
+    "task": "T11",
+    "robot": "CP1",
+    "start_h": 19,
+    "end_h": 22
+   },
+   {
+    "task": "T12",
+    "robot": "SV1",
+    "start_h": 22,
+    "end_h": 23
+   },
+   {
+    "task": "T13",
+    "robot": "SV1",
+    "start_h": 13,
+    "end_h": 14
+   },
+   {
+    "task": "T14",
+    "robot": "EX2",
+    "start_h": 20,
+    "end_h": 23
+   },
+   {
+    "task": "T15",
+    "robot": "EX2",
+    "start_h": 23,
+    "end_h": 28
+   },
+   {
+    "task": "T16",
+    "robot": "EX2",
+    "start_h": 28,
+    "end_h": 33
+   },
+   {
+    "task": "T17",
+    "robot": "CP2",
+    "start_h": 33,
+    "end_h": 36
+   },
+   {
+    "task": "T18",
+    "robot": "SV1",
+    "start_h": 36,
+    "end_h": 37
+   },
+   {
+    "task": "T19",
+    "robot": "SV1",
+    "start_h": 9,
+    "end_h": 10
+   },
+   {
+    "task": "T20",
+    "robot": "EX1",
+    "start_h": 22,
+    "end_h": 25
+   },
+   {
+    "task": "T21",
+    "robot": "EX1",
+    "start_h": 25,
+    "end_h": 30
+   },
+   {
+    "task": "T22",
+    "robot": "EX1",
+    "start_h": 30,
+    "end_h": 35
+   },
+   {
+    "task": "T23",
+    "robot": "CP1",
+    "start_h": 35,
+    "end_h": 38
+   },
+   {
+    "task": "T24",
+    "robot": "SV1",
+    "start_h": 40,
+    "end_h": 41
+   }
+  ],
+  "makespan_h": 41,
+  "status": "optimal",
+  "objective_bound_h": 41,
+  "solve_time_s": 1.627219
+ },
+ "explanation": null,
+ "steps": [
+  {
+   "stage": "structure",
+   "attempt": 1,
+   "ok": true,
+   "failure": null,
+   "duration_s": 4.744684917153791,
+   "usage": {
+    "model": "nvidia/Nemotron-3_5-Lightning",
+    "input_tokens": 3063,
+    "output_tokens": 629,
+    "latency_s": 4.738650167128071
+   },
+   "message": "4 structures, 6 robots, horizon 144h",
+   "payload": {
+    "zones": 4,
+    "grid": [
+     40,
+     40
+    ],
+    "depot": [
+     20,
+     20
+    ],
+    "warnings": [
+     "structure M1: operations sinter dropped: the fleet has no printer, so no sinter task will be required of it (add a printer and the operation again to plan it)",
+     "structure M2: operations sinter dropped: the fleet has no printer, so no sinter task will be required of it (add a printer and the operation again to plan it)",
+     "structure M3: operations sinter dropped: the fleet has no printer, so no sinter task will be required of it (add a printer and the operation again to plan it)",
+     "structure M4: operations sinter dropped: the fleet has no printer, so no sinter task will be required of it (add a printer and the operation again to plan it)"
+    ]
+   }
+  },
+  {
+   "stage": "taskgraph",
+   "attempt": 1,
+   "ok": true,
+   "failure": null,
+   "duration_s": 18.585672916844487,
+   "usage": {
+    "model": "nvidia/Nemotron-3-Ultra-550b-a55b",
+    "input_tokens": 3599,
+    "output_tokens": 6574,
+    "latency_s": 18.581605582963675
+   },
+   "message": "24 tasks",
+   "payload": {
+    "advisories": [],
+    "rate_model": true,
+    "grounded": 20
+   }
+  },
+  {
+   "stage": "validate",
+   "attempt": 1,
+   "ok": true,
+   "failure": null,
+   "duration_s": 0.003035124856978655,
+   "usage": null,
+   "message": "24 tasks valid",
+   "payload": null
+  },
+  {
+   "stage": "schedule",
+   "attempt": 1,
+   "ok": true,
+   "failure": null,
+   "duration_s": 1.6421932079829276,
+   "usage": null,
+   "message": "makespan 41h (optimal)",
+   "payload": {
+    "makespan_h": 41,
+    "status": "optimal",
+    "verified": true,
+    "verification": {
+     "precedence_edges": 20,
+     "robot_rows": 6,
+     "zone_groups": 4,
+     "battery": [
+      {
+       "robot": "EX1",
+       "used_wh": 2693.128,
+       "work_wh": 2662.4,
+       "travel_wh": 30.728,
+       "budget_wh": 5000.0,
+       "pct": 53.9
+      },
+      {
+       "robot": "EX2",
+       "used_wh": 2691.525,
+       "work_wh": 2662.4,
+       "travel_wh": 29.125,
+       "budget_wh": 5000.0,
+       "pct": 53.8
+      },
+      {
+       "robot": "HL1",
+       "used_wh": 0.0,
+       "work_wh": 0.0,
+       "travel_wh": 0.0,
+       "budget_wh": 3000.0,
+       "pct": 0.0
+      },
+      {
+       "robot": "CP1",
+       "used_wh": 542.728,
+       "work_wh": 512.0,
+       "travel_wh": 30.728,
+       "budget_wh": 3500.0,
+       "pct": 15.5
+      },
+      {
+       "robot": "CP2",
+       "used_wh": 541.125,
+       "work_wh": 512.0,
+       "travel_wh": 29.125,
+       "budget_wh": 3500.0,
+       "pct": 15.5
+      },
+      {
+       "robot": "SV1",
+       "used_wh": 554.581,
+       "work_wh": 428.0,
+       "travel_wh": 126.581,
+       "budget_wh": 1500.0,
+       "pct": 37.0
+      }
+     ],
+     "tightest_robot": "EX1",
+     "horizon_used_h": 41,
+     "horizon_h": 144,
+     "status": "optimal",
+     "objective_bound_h": 41,
+     "solve_time_s": 1.627,
+     "travel_allowance": true,
+     "recheck": "independent check_schedule passed"
+    }
+   }
+  }
+ ],
+ "repairs": 0,
+ "success": true,
+ "failure": null,
+ "suggestions": []
+}

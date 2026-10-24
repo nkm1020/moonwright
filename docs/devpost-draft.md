@@ -111,9 +111,16 @@ plan in the repository (`docs/eval/`).
   the case that goes back to Nemotron. Asked live for the first 10 of them ($1.13), Nemotron 3
   Ultra re-scoped the remaining work into a CP-SAT-verified replan 8 times; twice no repair
   verified and the previous plan stayed in force.
-- [MEASURE] Core-vs-verdict ablation: repairs fed the minimal core vs only the verdict.
-- [MEASURE] Monte Carlo on the landing-pad sortie (re-recorded on the final code): P(on time)
-  and the effect of one spare per single-robot type.
+- **What the proof is worth (ablation).** Same code, briefs and model, but repair prompts that
+  only say the graph was refused, with no core and no numbers: Ultra turned 9 of 28 refused first
+  graphs into verified plans (32 %, CI 18-51 %), against 21 of 30 (70 %, CI 52-83 %) when fed the
+  solver's minimal core and numeric hint (Fisher's exact test p = 0.008); 71 % of runs verified
+  instead of 86 %. The first graphs verify at the same rate (58 % and 55 %): the difference is
+  entirely in the repairs.
+- **Robustness (Monte Carlo).** The recorded landing-pad plan replayed 200 times with random robot
+  failures (0.002 per robot-hour) and duration jitter, every failure replanned by CP-SAT: 37 %
+  finish within the 336 h horizon (95 % CI 31-44 %). 118 of the 126 misses trace to the compactor,
+  the printer and the surveyor, which have no backup; with one spare of each, 86 % (81-90 %).
 
 ## Challenges
 
@@ -136,7 +143,8 @@ plan in the repository (`docs/eval/`).
 ## What we learned
 
 - The repair loop turned a refused first graph into a verified plan in 31 of every 100 runs of
-  the final pipeline.
+  the final pipeline, and it works because of the proof: without the core and its numbers, the
+  same model recovered 32 % of refused graphs instead of 70 %.
 - Nemotron sequences a verified graph validly; its failures are in the decomposition (45 % of
   Ultra's first graphs in run 4 were refused: energy, supply order, horizon, scope), which is
   exactly what the validator and the core can name.

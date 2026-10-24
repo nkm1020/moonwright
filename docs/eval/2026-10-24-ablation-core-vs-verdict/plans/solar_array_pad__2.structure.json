@@ -1,0 +1,123 @@
+{
+ "brief": "solar_array_pad",
+ "repeat": 2,
+ "requirements_sha": "fee11ac69b",
+ "requirements": {
+  "site": {
+   "name": "LS-1",
+   "grid": [
+    40,
+    40
+   ],
+   "zones": [
+    {
+     "id": "Z1",
+     "center": [
+      20,
+      2
+     ],
+     "radius": 3
+    },
+    {
+     "id": "Z2",
+     "center": [
+      20,
+      37
+     ],
+     "radius": 3
+    }
+   ],
+   "depot": [
+    20,
+    2
+   ]
+  },
+  "structures": [
+   {
+    "id": "S1",
+    "type": "pad",
+    "zone": "Z1",
+    "operations": [
+     "survey",
+     "excavate",
+     "grade",
+     "compact"
+    ],
+    "length_m": 30,
+    "width_m": 18,
+    "thickness_m": 0.3,
+    "lifts": 2
+   },
+   {
+    "id": "S2",
+    "type": "trench",
+    "zone": "Z2",
+    "operations": [
+     "excavate",
+     "survey"
+    ],
+    "length_m": 30,
+    "width_m": 0.5,
+    "depth_m": 0.5
+   }
+  ],
+  "robots": [
+   {
+    "id": "EX1",
+    "type": "excavator",
+    "battery_wh": 5000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "HL1",
+    "type": "hauler",
+    "battery_wh": 3000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "CP1",
+    "type": "compactor",
+    "battery_wh": 3500.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "SV1",
+    "type": "surveyor",
+    "battery_wh": 1500.0,
+    "speed_cells_per_h": 12.0
+   }
+  ],
+  "horizon_h": 240,
+  "constraints": [
+   "The array vendor requires both compaction lifts over the full pad area; neither the pad size nor the number of lifts may be reduced.",
+   "Only one robot may work inside a zone at a time.",
+   "The surveyor stakes the pad corners before any excavation and checks the level before the second compaction lift.",
+   "Cut spoil goes to the fill side first; only the surplus is hauled to the stockpile."
+  ],
+  "source_brief": "# LS-1 Solar Array Pad\n\n**Site.** LS-1 plateau, 300 m west of the landing pad, on a gentle 2 degree slope of loose regolith 30 cm deep over compacted material. The depot is at the south edge of the work area and there is no recharging.\n\n**Structures.**\n\n1. Solar array pad: a level rectangle 30 m by 18 m. Strip the loose regolith (30 cm of fines, about 162 cubic metres), cut the uphill side and fill the downhill side to within plus or minus 5 cm, then compact the whole 540 square metre surface in two full lifts.\n2. Anchor trench: a 30 m long, 0.5 m wide, 0.5 m deep trench along the north edge for the array anchor rail, backfilled and compacted after the rail bed is inspected.\n\n**Fleet.** EX1 (excavator, 5000 Wh), HL1 (hauler, 3000 Wh), CP1 (compactor, 3500 Wh) and SV1 (surveyor, 1500 Wh). Each battery is the budget for the whole job.\n\n**Deadline.** 10 days.\n\n**Operational constraints.**\n\n- The array vendor requires both compaction lifts over the full pad area; neither the pad size nor the number of lifts may be reduced, and no second compactor is available.\n- Only one robot may work inside a zone at a time.\n- The surveyor stakes the pad corners before any excavation and checks the level before the second compaction lift.\n- Cut spoil goes to the fill side first; only the surplus is hauled to the stockpile.\n"
+ },
+ "ok": true,
+ "message": "2 structures, 4 robots, horizon 240h",
+ "payload": {
+  "zones": 2,
+  "grid": [
+   40,
+   40
+  ],
+  "depot": [
+   20,
+   2
+  ],
+  "warnings": [
+   "structure S1: operations sinter dropped: the fleet has no printer, so no sinter task will be required of it (add a printer and the operation again to plan it)"
+  ]
+ },
+ "failure": null,
+ "usage": {
+  "model": "nvidia/Nemotron-3_5-Lightning",
+  "input_tokens": 3176,
+  "output_tokens": 439,
+  "latency_s": 4.499941125046462
+ },
+ "latency_s": 4.505
+}

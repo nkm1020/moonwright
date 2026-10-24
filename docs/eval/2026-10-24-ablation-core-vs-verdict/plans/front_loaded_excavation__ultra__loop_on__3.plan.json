@@ -1,0 +1,763 @@
+{
+ "requirements": {
+  "site": {
+   "name": "LS-1",
+   "grid": [
+    40,
+    40
+   ],
+   "zones": [
+    {
+     "id": "Z1",
+     "center": [
+      20,
+      38
+     ],
+     "radius": 4
+    },
+    {
+     "id": "Z2",
+     "center": [
+      20,
+      2
+     ],
+     "radius": 3
+    }
+   ],
+   "depot": [
+    20,
+    2
+   ]
+  },
+  "structures": [
+   {
+    "id": "S1",
+    "type": "pad",
+    "zone": "Z1",
+    "operations": [
+     "excavate",
+     "survey"
+    ],
+    "diameter_m": 30,
+    "depth_m": 0.4
+   },
+   {
+    "id": "S2",
+    "type": "spoil_berm",
+    "zone": "Z2",
+    "operations": [
+     "haul",
+     "compact"
+    ],
+    "length_m": 70,
+    "height_m": 2,
+    "width_m": 4
+   }
+  ],
+  "robots": [
+   {
+    "id": "EX1",
+    "type": "excavator",
+    "battery_wh": 5000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "EX2",
+    "type": "excavator",
+    "battery_wh": 5000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "HL1",
+    "type": "hauler",
+    "battery_wh": 3000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "HL2",
+    "type": "hauler",
+    "battery_wh": 3000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "CP1",
+    "type": "compactor",
+    "battery_wh": 3500.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "CP2",
+    "type": "compactor",
+    "battery_wh": 3500.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "SV1",
+    "type": "surveyor",
+    "battery_wh": 1500.0,
+    "speed_cells_per_h": 12.0
+   }
+  ],
+  "horizon_h": 60,
+  "constraints": [
+   "Only one robot may work inside a zone at a time",
+   "Berm hauling cannot start before bowl excavation is complete"
+  ],
+  "source_brief": "# Heavy-Lander Pad in a 60-Hour Window\n\n**Site.** LS-1 plateau, loose regolith 40 cm deep over firm material, depot on the south edge, no recharging. A heavy cargo lander is committed to this site and its landing window opens 60 hours after mobilisation.\n\n**Structures.**\n\n1. Heavy-lander pad: circular, 30 m diameter, excavated 0.4 m to firm regolith across the full footprint (about 283 cubic metres), subgrade compacted and inspected. Sintering is deferred to a later sortie; no printer is on site.\n2. Spoil berm: a 70 m arc on the north side, 2 m high and 4 m wide at the base, built from the pad spoil and compacted.\n\n**Fleet.** EX1 and EX2 (excavators, 5000 Wh each), HL1 and HL2 (haulers, 3000 Wh each), CP1 and CP2 (compactors, 3500 Wh each) and SV1 (surveyor, 1500 Wh). Batteries are the whole budget; energy is not the problem here, time is.\n\n**Deadline.** 60 hours. The lander cannot be delayed and the pad cannot be made smaller: the full 30 m bowl, compacted and inspected, must be ready when the window opens.\n\n**Operational constraints.**\n\n- The pad is one work zone: plume and dust safety allows only one robot inside it at a time, so the bowl cannot be excavated as parallel sectors.\n- Only one robot may work inside a zone at a time.\n- The berm is built from the pad spoil, so hauling to the berm line cannot start before the bowl excavation.\n"
+ },
+ "task_graph": {
+  "tasks": [
+   {
+    "id": "T1",
+    "name": "survey S1 pad",
+    "robot_type": "surveyor",
+    "duration_h": 5,
+    "energy_wh": 353.4,
+    "zone": "Z1",
+    "after": [],
+    "structure": "S1",
+    "quantity": 706.86,
+    "unit": "m2",
+    "basis": "pi*(15 m)^2 = 706.86 m2",
+    "estimated_duration_h": 5.0,
+    "estimated_energy_wh": 353.43
+   },
+   {
+    "id": "T2",
+    "name": "excavate S1 pad part 1",
+    "robot_type": "excavator",
+    "duration_h": 21,
+    "energy_wh": 2261.9,
+    "zone": "Z1",
+    "after": [
+     "T1"
+    ],
+    "structure": "S1",
+    "quantity": 141.37,
+    "unit": "m3",
+    "basis": "282.74 m3 / 2 = 141.37 m3 (part 1)",
+    "estimated_duration_h": 21.0,
+    "estimated_energy_wh": 2261.92
+   },
+   {
+    "id": "T3",
+    "name": "excavate S1 pad part 2",
+    "robot_type": "excavator",
+    "duration_h": 21,
+    "energy_wh": 2261.9,
+    "zone": "Z1",
+    "after": [
+     "T1"
+    ],
+    "structure": "S1",
+    "quantity": 141.37,
+    "unit": "m3",
+    "basis": "282.74 m3 / 2 = 141.37 m3 (part 2)",
+    "estimated_duration_h": 21.0,
+    "estimated_energy_wh": 2261.92
+   },
+   {
+    "id": "T4",
+    "name": "compact S1 pad part 1",
+    "robot_type": "compactor",
+    "duration_h": 14,
+    "energy_wh": 1413.7,
+    "zone": "Z1",
+    "after": [
+     "T2",
+     "T3"
+    ],
+    "structure": "S1",
+    "quantity": 353.43,
+    "unit": "m2",
+    "basis": "706.86 m2 / 2 = 353.43 m2",
+    "estimated_duration_h": 14.0,
+    "estimated_energy_wh": 1413.72
+   },
+   {
+    "id": "T5",
+    "name": "compact S1 pad part 2",
+    "robot_type": "compactor",
+    "duration_h": 14,
+    "energy_wh": 1413.7,
+    "zone": "Z1",
+    "after": [
+     "T2",
+     "T3"
+    ],
+    "structure": "S1",
+    "quantity": 353.43,
+    "unit": "m2",
+    "basis": "706.86 m2 / 2 = 353.43 m2",
+    "estimated_duration_h": 14.0,
+    "estimated_energy_wh": 1413.72
+   },
+   {
+    "id": "T6",
+    "name": "haul S2 spoil_berm part 1",
+    "robot_type": "hauler",
+    "duration_h": 12,
+    "energy_wh": 980.0,
+    "zone": "Z2",
+    "after": [
+     "T2",
+     "T3"
+    ],
+    "structure": "S2",
+    "quantity": 140.0,
+    "unit": "m3",
+    "basis": "70 m * 2 m * 4 m / 2 = 280 m3 split as 140 m3 (part 1)",
+    "estimated_duration_h": null,
+    "estimated_energy_wh": null
+   },
+   {
+    "id": "T7",
+    "name": "haul S2 spoil_berm part 2",
+    "robot_type": "hauler",
+    "duration_h": 12,
+    "energy_wh": 980.0,
+    "zone": "Z2",
+    "after": [
+     "T2",
+     "T3"
+    ],
+    "structure": "S2",
+    "quantity": 140.0,
+    "unit": "m3",
+    "basis": "280 m3 split as 140 m3 (part 2)",
+    "estimated_duration_h": null,
+    "estimated_energy_wh": null
+   },
+   {
+    "id": "T8",
+    "name": "compact S2 spoil_berm",
+    "robot_type": "compactor",
+    "duration_h": 11,
+    "energy_wh": 1120.0,
+    "zone": "Z2",
+    "after": [
+     "T6",
+     "T7"
+    ],
+    "structure": "S2",
+    "quantity": 280.0,
+    "unit": "m2",
+    "basis": "70 m * 4 m = 280 m2",
+    "estimated_duration_h": null,
+    "estimated_energy_wh": null
+   }
+  ],
+  "notes": "Removed zone-sequencing after-edges (T3 after T2, T4 after T3, T5 after T4, T7 after T6) that over-constrained the graph. Only structural dependencies (survey before excavate, compaction after excavation, haul after bowl excavation complete, berm compaction after haul) and the cross-zone constraint (haul after T2,T3) remain. Critical path based on dependencies is 49h (T1->T2->T6->T8), within 60h horizon. Zone constraint 'only one robot per zone at a time' will be enforced by the scheduler; the task graph no longer encodes it via after-edges."
+ },
+ "schedule": null,
+ "explanation": null,
+ "steps": [
+  {
+   "stage": "structure",
+   "attempt": 1,
+   "ok": true,
+   "failure": null,
+   "duration_s": 4.744743667077273,
+   "usage": {
+    "model": "nvidia/Nemotron-3_5-Lightning",
+    "input_tokens": 3186,
+    "output_tokens": 430,
+    "latency_s": 4.7419376249890774
+   },
+   "message": "2 structures, 7 robots, horizon 60h",
+   "payload": {
+    "zones": 2,
+    "grid": [
+     40,
+     40
+    ],
+    "depot": [
+     20,
+     2
+    ],
+    "warnings": []
+   }
+  },
+  {
+   "stage": "taskgraph",
+   "attempt": 1,
+   "ok": true,
+   "failure": null,
+   "duration_s": 67.91566729196347,
+   "usage": {
+    "model": "nvidia/Nemotron-3-Ultra-550b-a55b",
+    "input_tokens": 3373,
+    "output_tokens": 16699,
+    "latency_s": 67.91146054095589
+   },
+   "message": "8 tasks",
+   "payload": {
+    "advisories": [],
+    "rate_model": true,
+    "grounded": 8
+   }
+  },
+  {
+   "stage": "validate",
+   "attempt": 1,
+   "ok": false,
+   "failure": {
+    "kind": "validation",
+    "conflicts": [
+     "horizon_path:T1->T2->T3->T6->T7->T8"
+    ],
+    "hint": "The critical path T1->T2->T3->T6->T7->T8 alone takes 81 h, longer than the 60 h horizon; shorten or split tasks on this chain, or drop unnecessary 'after' edges so more work runs in parallel (never a dig-to-haul edge: split the hauls per dig part instead).",
+    "details": [
+     "T1->T2->T3->T6->T7->T8 takes 81 h in sequence; horizon is 60 h"
+    ]
+   },
+   "duration_s": 0.0038469580467790365,
+   "usage": null,
+   "message": null,
+   "payload": null
+  },
+  {
+   "stage": "repair",
+   "attempt": 2,
+   "ok": true,
+   "failure": null,
+   "duration_s": 376.6756663331762,
+   "usage": {
+    "model": "nvidia/Nemotron-3-Ultra-550b-a55b",
+    "input_tokens": 9444,
+    "output_tokens": 60461,
+    "latency_s": 376.6622788752429
+   },
+   "message": "8 tasks",
+   "payload": {
+    "advisories": [],
+    "rate_model": true,
+    "grounded": 5,
+    "diff": {
+     "added": [],
+     "removed": [],
+     "changed": [
+      {
+       "task": "T2",
+       "field": "duration_h",
+       "before": 20,
+       "after": 21
+      },
+      {
+       "task": "T2",
+       "field": "energy_wh",
+       "before": 2240.0,
+       "after": 2261.9
+      },
+      {
+       "task": "T2",
+       "field": "quantity",
+       "before": 140.0,
+       "after": 141.37
+      },
+      {
+       "task": "T3",
+       "field": "energy_wh",
+       "before": 2283.8,
+       "after": 2261.9
+      },
+      {
+       "task": "T3",
+       "field": "quantity",
+       "before": 142.74,
+       "after": 141.37
+      },
+      {
+       "task": "T3",
+       "field": "after",
+       "before": [
+        "T2"
+       ],
+       "after": [
+        "T1"
+       ]
+      },
+      {
+       "task": "T4",
+       "field": "after",
+       "before": [
+        "T3"
+       ],
+       "after": [
+        "T2",
+        "T3"
+       ]
+      },
+      {
+       "task": "T5",
+       "field": "after",
+       "before": [
+        "T4"
+       ],
+       "after": [
+        "T2",
+        "T3"
+       ]
+      },
+      {
+       "task": "T6",
+       "field": "after",
+       "before": [
+        "T3"
+       ],
+       "after": [
+        "T2",
+        "T3"
+       ]
+      },
+      {
+       "task": "T7",
+       "field": "after",
+       "before": [
+        "T6"
+       ],
+       "after": [
+        "T2",
+        "T3"
+       ]
+      },
+      {
+       "task": "T8",
+       "field": "after",
+       "before": [
+        "T7"
+       ],
+       "after": [
+        "T6",
+        "T7"
+       ]
+      }
+     ],
+     "renumbered": [],
+     "per_type_energy_before": {
+      "compactor": 3947.4,
+      "excavator": 4523.8,
+      "hauler": 1960.0,
+      "surveyor": 353.4
+     },
+     "per_type_energy_after": {
+      "compactor": 3947.4,
+      "excavator": 4523.8,
+      "hauler": 1960.0,
+      "surveyor": 353.4
+     },
+     "scope_drift_pct": 0.0,
+     "total_energy_wh_before": 10784.6,
+     "total_energy_wh_after": 10784.6,
+     "total_duration_h_before": 109,
+     "total_duration_h_after": 110
+    }
+   }
+  },
+  {
+   "stage": "validate",
+   "attempt": 2,
+   "ok": true,
+   "failure": null,
+   "duration_s": 0.001191499875858426,
+   "usage": null,
+   "message": "8 tasks valid",
+   "payload": null
+  },
+  {
+   "stage": "schedule",
+   "attempt": 2,
+   "ok": false,
+   "failure": {
+    "kind": "infeasible",
+    "conflicts": [
+     "horizon",
+     "zone:Z1"
+    ],
+    "hint": "The plan cannot finish within the 60 h horizon: the longest precedence chain alone needs 52 h including the transit to its first zone; the busiest robot type (excavator) needs at least 21 h. Zone Z1 admits one robot at a time, so its 5 tasks (75 h in total) cannot overlap.",
+    "details": []
+   },
+   "duration_s": 0.03172441711649299,
+   "usage": null,
+   "message": null,
+   "payload": null
+  },
+  {
+   "stage": "repair",
+   "attempt": 3,
+   "ok": true,
+   "failure": null,
+   "duration_s": 69.42830720893107,
+   "usage": {
+    "model": "nvidia/Nemotron-3-Ultra-550b-a55b",
+    "input_tokens": 4813,
+    "output_tokens": 15372,
+    "latency_s": 69.4228532500565
+   },
+   "message": "8 tasks",
+   "payload": {
+    "advisories": [],
+    "rate_model": true,
+    "grounded": 5,
+    "diff": {
+     "added": [],
+     "removed": [],
+     "changed": [
+      {
+       "task": "T3",
+       "field": "after",
+       "before": [
+        "T1"
+       ],
+       "after": [
+        "T2"
+       ]
+      },
+      {
+       "task": "T4",
+       "field": "after",
+       "before": [
+        "T2",
+        "T3"
+       ],
+       "after": [
+        "T3"
+       ]
+      },
+      {
+       "task": "T5",
+       "field": "after",
+       "before": [
+        "T2",
+        "T3"
+       ],
+       "after": [
+        "T4"
+       ]
+      },
+      {
+       "task": "T7",
+       "field": "after",
+       "before": [
+        "T2",
+        "T3"
+       ],
+       "after": [
+        "T6"
+       ]
+      },
+      {
+       "task": "T8",
+       "field": "after",
+       "before": [
+        "T6",
+        "T7"
+       ],
+       "after": [
+        "T7"
+       ]
+      }
+     ],
+     "renumbered": [],
+     "per_type_energy_before": {
+      "compactor": 3947.4,
+      "excavator": 4523.8,
+      "hauler": 1960.0,
+      "surveyor": 353.4
+     },
+     "per_type_energy_after": {
+      "compactor": 3947.4,
+      "excavator": 4523.8,
+      "hauler": 1960.0,
+      "surveyor": 353.4
+     },
+     "scope_drift_pct": 0.0,
+     "total_energy_wh_before": 10784.6,
+     "total_energy_wh_after": 10784.6,
+     "total_duration_h_before": 110,
+     "total_duration_h_after": 110
+    }
+   }
+  },
+  {
+   "stage": "validate",
+   "attempt": 3,
+   "ok": false,
+   "failure": {
+    "kind": "validation",
+    "conflicts": [
+     "horizon_path:T1->T2->T3->T6->T7->T8"
+    ],
+    "hint": "The critical path T1->T2->T3->T6->T7->T8 alone takes 82 h, longer than the 60 h horizon; shorten or split tasks on this chain, or drop unnecessary 'after' edges so more work runs in parallel (never a dig-to-haul edge: split the hauls per dig part instead).",
+    "details": [
+     "T1->T2->T3->T6->T7->T8 takes 82 h in sequence; horizon is 60 h"
+    ]
+   },
+   "duration_s": 0.0012250831350684166,
+   "usage": null,
+   "message": null,
+   "payload": null
+  },
+  {
+   "stage": "repair",
+   "attempt": 4,
+   "ok": true,
+   "failure": null,
+   "duration_s": 184.47432604199275,
+   "usage": {
+    "model": "nvidia/Nemotron-3-Ultra-550b-a55b",
+    "input_tokens": 4783,
+    "output_tokens": 32151,
+    "latency_s": 184.4676915409509
+   },
+   "message": "8 tasks",
+   "payload": {
+    "advisories": [],
+    "rate_model": true,
+    "grounded": 5,
+    "diff": {
+     "added": [],
+     "removed": [],
+     "changed": [
+      {
+       "task": "T3",
+       "field": "after",
+       "before": [
+        "T2"
+       ],
+       "after": [
+        "T1"
+       ]
+      },
+      {
+       "task": "T4",
+       "field": "after",
+       "before": [
+        "T3"
+       ],
+       "after": [
+        "T2",
+        "T3"
+       ]
+      },
+      {
+       "task": "T5",
+       "field": "after",
+       "before": [
+        "T4"
+       ],
+       "after": [
+        "T2",
+        "T3"
+       ]
+      },
+      {
+       "task": "T7",
+       "field": "after",
+       "before": [
+        "T6"
+       ],
+       "after": [
+        "T2",
+        "T3"
+       ]
+      },
+      {
+       "task": "T8",
+       "field": "after",
+       "before": [
+        "T7"
+       ],
+       "after": [
+        "T6",
+        "T7"
+       ]
+      }
+     ],
+     "renumbered": [],
+     "per_type_energy_before": {
+      "compactor": 3947.4,
+      "excavator": 4523.8,
+      "hauler": 1960.0,
+      "surveyor": 353.4
+     },
+     "per_type_energy_after": {
+      "compactor": 3947.4,
+      "excavator": 4523.8,
+      "hauler": 1960.0,
+      "surveyor": 353.4
+     },
+     "scope_drift_pct": 0.0,
+     "total_energy_wh_before": 10784.6,
+     "total_energy_wh_after": 10784.6,
+     "total_duration_h_before": 110,
+     "total_duration_h_after": 110
+    }
+   }
+  },
+  {
+   "stage": "validate",
+   "attempt": 4,
+   "ok": true,
+   "failure": null,
+   "duration_s": 0.0013349999208003283,
+   "usage": null,
+   "message": "8 tasks valid",
+   "payload": null
+  },
+  {
+   "stage": "schedule",
+   "attempt": 4,
+   "ok": false,
+   "failure": {
+    "kind": "infeasible",
+    "conflicts": [
+     "horizon",
+     "zone:Z1"
+    ],
+    "hint": "The plan cannot finish within the 60 h horizon: the longest precedence chain alone needs 52 h including the transit to its first zone; the busiest robot type (excavator) needs at least 21 h. Zone Z1 admits one robot at a time, so its 5 tasks (75 h in total) cannot overlap.",
+    "details": []
+   },
+   "duration_s": 0.0360407498665154,
+   "usage": null,
+   "message": null,
+   "payload": {
+    "suggestions": [
+     {
+      "kind": "extend_horizon",
+      "detail": "finishing needs 85 h, 25 h past the 60 h deadline (CP-SAT optimal)",
+      "makespan_h": 85,
+      "robot_type": null,
+      "robot_id": null,
+      "battery_wh": null,
+      "horizon_h": 85,
+      "verified": true
+     }
+    ]
+   }
+  }
+ ],
+ "repairs": 3,
+ "success": false,
+ "failure": {
+  "kind": "infeasible",
+  "conflicts": [
+   "horizon",
+   "zone:Z1"
+  ],
+  "hint": "The plan cannot finish within the 60 h horizon: the longest precedence chain alone needs 52 h including the transit to its first zone; the busiest robot type (excavator) needs at least 21 h. Zone Z1 admits one robot at a time, so its 5 tasks (75 h in total) cannot overlap.",
+  "details": []
+ },
+ "suggestions": [
+  {
+   "kind": "extend_horizon",
+   "detail": "finishing needs 85 h, 25 h past the 60 h deadline (CP-SAT optimal)",
+   "makespan_h": 85,
+   "robot_type": null,
+   "robot_id": null,
+   "battery_wh": null,
+   "horizon_h": 85,
+   "verified": true
+  }
+ ]
+}

@@ -1,0 +1,149 @@
+{
+ "brief": "one_surveyor_three_structures",
+ "repeat": 3,
+ "requirements_sha": "939df27490",
+ "requirements": {
+  "site": {
+   "name": "LS-1",
+   "grid": [
+    40,
+    40
+   ],
+   "zones": [
+    {
+     "id": "Z1",
+     "center": [
+      2,
+      2
+     ],
+     "radius": 3
+    },
+    {
+     "id": "Z2",
+     "center": [
+      2,
+      37
+     ],
+     "radius": 3
+    },
+    {
+     "id": "Z3",
+     "center": [
+      38,
+      2
+     ],
+     "radius": 3
+    }
+   ],
+   "depot": [
+    20,
+    2
+   ]
+  },
+  "structures": [
+   {
+    "id": "S1",
+    "type": "hardstand",
+    "zone": "Z1",
+    "operations": [
+     "survey",
+     "grade",
+     "compact"
+    ],
+    "length_m": 12,
+    "width_m": 12
+   },
+   {
+    "id": "S2",
+    "type": "spool_berm",
+    "zone": "Z2",
+    "operations": [
+     "haul",
+     "compact"
+    ],
+    "length_m": 40,
+    "height_m": 1.5
+   },
+   {
+    "id": "S3",
+    "type": "apron",
+    "zone": "Z3",
+    "operations": [
+     "survey",
+     "grade",
+     "compact",
+     "sinter"
+    ],
+    "length_m": 20,
+    "width_m": 10
+   }
+  ],
+  "robots": [
+   {
+    "id": "EX1",
+    "type": "excavator",
+    "battery_wh": 5000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "EX2",
+    "type": "excavator",
+    "battery_wh": 5000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "HL1",
+    "type": "hauler",
+    "battery_wh": 3000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "CP1",
+    "type": "compactor",
+    "battery_wh": 3500.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "PR1",
+    "type": "printer",
+    "battery_wh": 4000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "SV1",
+    "type": "surveyor",
+    "battery_wh": 1200.0,
+    "speed_cells_per_h": 12.0
+   }
+  ],
+  "horizon_h": 216,
+  "constraints": [
+   "Surveyor stakes and inspects each structure (6 visits total); single surveyor battery must cover all visits",
+   "Only one robot per zone at any time",
+   "Printer may work only after apron compacted and inspected"
+  ],
+  "source_brief": "# Three Structures, One Surveyor\n\n**Site.** The LS-1 plateau south area: firm regolith with 25 cm of fines across a 100 m by 60 m strip. Depot at the centre of the south edge; no recharging.\n\n**Structures.**\n\n1. Equipment hardstand: 12 m by 12 m, stripped of its 25 cm of fines, levelled and compacted (not sintered).\n2. Spoil containment berm: 40 m long, 1.5 m high, built from the hardstand's strip spoil and compacted.\n3. Rover charging apron: 10 m by 20 m, stripped, compacted and sintered 15 cm.\n\n**Fleet.** EX1 and EX2 (excavators, 5000 Wh each), HL1 (hauler, 3000 Wh), CP1 (compactor, 3500 Wh), PR1 (printer, 4000 Wh) and SV1 (surveyor, 1200 Wh). Batteries are the whole budget.\n\n**Deadline.** 9 days.\n\n**Operational constraints.**\n\n- Every structure is staked by the surveyor before earthwork starts and inspected by the surveyor after its last task; the single surveyor's battery must cover all six visits.\n- Only one robot may work inside a zone at a time.\n- The printer works only after the apron has been compacted and inspected.\n"
+ },
+ "ok": true,
+ "message": "3 structures, 6 robots, horizon 216h",
+ "payload": {
+  "zones": 3,
+  "grid": [
+   40,
+   40
+  ],
+  "depot": [
+   20,
+   2
+  ],
+  "warnings": []
+ },
+ "failure": null,
+ "usage": {
+  "model": "nvidia/Nemotron-3_5-Lightning",
+  "input_tokens": 3127,
+  "output_tokens": 494,
+  "latency_s": 2.462916500167921
+ },
+ "latency_s": 2.467
+}

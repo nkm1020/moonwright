@@ -1,0 +1,990 @@
+{
+ "requirements": {
+  "site": {
+   "name": "LS-1",
+   "grid": [
+    40,
+    40
+   ],
+   "zones": [
+    {
+     "id": "Z1",
+     "center": [
+      20,
+      2
+     ],
+     "radius": 3
+    },
+    {
+     "id": "Z2",
+     "center": [
+      20,
+      37
+     ],
+     "radius": 3
+    }
+   ],
+   "depot": [
+    20,
+    2
+   ]
+  },
+  "structures": [
+   {
+    "id": "S1",
+    "type": "landing_pad",
+    "zone": "Z1",
+    "operations": [
+     "excavate",
+     "grade",
+     "compact",
+     "sinter"
+    ],
+    "diameter_m": 20,
+    "depth_m": 0.4,
+    "thickness_m": 0.3
+   },
+   {
+    "id": "S2",
+    "type": "blast_berm",
+    "zone": "Z2",
+    "operations": [
+     "haul",
+     "compact",
+     "sinter"
+    ],
+    "length_m": 60,
+    "height_m": 2.5,
+    "width_m": 4
+   }
+  ],
+  "robots": [
+   {
+    "id": "EX1",
+    "type": "excavator",
+    "battery_wh": 5000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "EX2",
+    "type": "excavator",
+    "battery_wh": 5000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "HL1",
+    "type": "hauler",
+    "battery_wh": 3000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "HL2",
+    "type": "hauler",
+    "battery_wh": 3000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "CP1",
+    "type": "compactor",
+    "battery_wh": 3500.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "PR1",
+    "type": "printer",
+    "battery_wh": 4000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "SV1",
+    "type": "surveyor",
+    "battery_wh": 1500.0,
+    "speed_cells_per_h": 12.0
+   }
+  ],
+  "horizon_h": 336,
+  "constraints": [
+   "Only one robot may work inside a zone at a time (plume and dust safety).",
+   "No sintering starts until the surveyor has staked the site and the compactor has finished the pad subgrade.",
+   "The surveyor must inspect both structures before the pad is signed off."
+  ],
+  "source_brief": "# LS-1 Landing Pad and Blast Berm\n\n**Site.** LS-1 is a graded plateau 1.8 km east of the Shackleton crater rim near the lunar south pole. The work area is roughly 80 m by 80 m of loose regolith to 40 cm over firmer material. The robot depot sits on the south edge of the site; there is no recharging infrastructure.\n\n**Structures.**\n\n1. Landing pad: circular, 20 m diameter. Excavate a bowl 0.4 m deep to firm regolith, level to plus or minus 5 cm, compact the subgrade, then sinter a 30 cm regolith surface.\n2. Blast berm: a 60 m arc on the north side of the pad, 2.5 m high and 4 m wide at the base, built from pad spoil, compacted, with a sintered crest to resist plume erosion.\n\n**Fleet.** EX1 and EX2 (excavators, 5000 Wh each), HL1 and HL2 (haulers, 3000 Wh each), CP1 (compactor, 3500 Wh), PR1 (printer, 4000 Wh) and SV1 (surveyor, 1500 Wh). Each battery is the robot's budget for the whole job.\n\n**Deadline.** Both structures complete and inspected within 14 days of mobilisation.\n\n**Operational constraints.**\n\n- Only one robot may work inside a zone at a time (plume and dust safety).\n- No sintering starts until the surveyor has staked the site and the compactor has finished the pad subgrade.\n- The surveyor must inspect both structures before the pad is signed off.\n"
+ },
+ "task_graph": {
+  "tasks": [
+   {
+    "id": "T1",
+    "name": "survey stake landing pad S1",
+    "robot_type": "surveyor",
+    "duration_h": 3,
+    "energy_wh": 157.1,
+    "zone": "Z1",
+    "after": [],
+    "structure": "S1",
+    "quantity": 314.16,
+    "unit": "m2",
+    "basis": "pi*(10 m)^2 = 314.16 m2",
+    "estimated_duration_h": 3.0,
+    "estimated_energy_wh": 157.08
+   },
+   {
+    "id": "T2",
+    "name": "excavate landing pad S1 part 1",
+    "robot_type": "excavator",
+    "duration_h": 9,
+    "energy_wh": 1005.3,
+    "zone": "Z1",
+    "after": [
+     "T1"
+    ],
+    "structure": "S1",
+    "quantity": 62.832,
+    "unit": "m3",
+    "basis": "pi*(10 m)^2*0.4 m / 2 = 62.832 m3",
+    "estimated_duration_h": 9.0,
+    "estimated_energy_wh": 1005.312
+   },
+   {
+    "id": "T3",
+    "name": "excavate landing pad S1 part 2",
+    "robot_type": "excavator",
+    "duration_h": 9,
+    "energy_wh": 1005.3,
+    "zone": "Z1",
+    "after": [
+     "T2"
+    ],
+    "structure": "S1",
+    "quantity": 62.832,
+    "unit": "m3",
+    "basis": "pi*(10 m)^2*0.4 m / 2 = 62.832 m3",
+    "estimated_duration_h": 9.0,
+    "estimated_energy_wh": 1005.312
+   },
+   {
+    "id": "T4",
+    "name": "grade landing pad S1 part 1",
+    "robot_type": "excavator",
+    "duration_h": 7,
+    "energy_wh": 754.0,
+    "zone": "Z1",
+    "after": [
+     "T3"
+    ],
+    "structure": "S1",
+    "quantity": 157.08,
+    "unit": "m2",
+    "basis": "pi*(10 m)^2 / 2 = 157.08 m2",
+    "estimated_duration_h": 7.0,
+    "estimated_energy_wh": 753.984
+   },
+   {
+    "id": "T5",
+    "name": "grade landing pad S1 part 2",
+    "robot_type": "excavator",
+    "duration_h": 7,
+    "energy_wh": 754.0,
+    "zone": "Z1",
+    "after": [
+     "T4"
+    ],
+    "structure": "S1",
+    "quantity": 157.08,
+    "unit": "m2",
+    "basis": "pi*(10 m)^2 / 2 = 157.08 m2",
+    "estimated_duration_h": 7.0,
+    "estimated_energy_wh": 753.984
+   },
+   {
+    "id": "T6",
+    "name": "excavate borrow fill for S2 part 1",
+    "robot_type": "excavator",
+    "duration_h": 13,
+    "energy_wh": 1394.7,
+    "zone": "Z1",
+    "after": [
+     "T5"
+    ],
+    "structure": "S2",
+    "quantity": 87.168,
+    "unit": "m3",
+    "basis": "(300 m3 - 125.664 m3) / 2 = 87.168 m3",
+    "estimated_duration_h": 13.0,
+    "estimated_energy_wh": 1394.688
+   },
+   {
+    "id": "T7",
+    "name": "excavate borrow fill for S2 part 2",
+    "robot_type": "excavator",
+    "duration_h": 13,
+    "energy_wh": 1394.7,
+    "zone": "Z1",
+    "after": [
+     "T6"
+    ],
+    "structure": "S2",
+    "quantity": 87.168,
+    "unit": "m3",
+    "basis": "(300 m3 - 125.664 m3) / 2 = 87.168 m3",
+    "estimated_duration_h": 13.0,
+    "estimated_energy_wh": 1394.688
+   },
+   {
+    "id": "T8",
+    "name": "compact landing pad S1",
+    "robot_type": "compactor",
+    "duration_h": 13,
+    "energy_wh": 1256.6,
+    "zone": "Z1",
+    "after": [
+     "T7"
+    ],
+    "structure": "S1",
+    "quantity": 314.16,
+    "unit": "m2",
+    "basis": "pi*(10 m)^2 = 314.16 m2",
+    "estimated_duration_h": 13.0,
+    "estimated_energy_wh": 1256.64
+   },
+   {
+    "id": "T9",
+    "name": "sinter landing pad S1",
+    "robot_type": "printer",
+    "duration_h": 23,
+    "energy_wh": 2701.8,
+    "zone": "Z1",
+    "after": [
+     "T8",
+     "T1"
+    ],
+    "structure": "S1",
+    "quantity": 314.16,
+    "unit": "m2",
+    "basis": "pi*(10 m)^2 = 314.16 m2",
+    "estimated_duration_h": 23.0,
+    "estimated_energy_wh": 2701.776
+   },
+   {
+    "id": "T10",
+    "name": "inspect landing pad S1",
+    "robot_type": "surveyor",
+    "duration_h": 1,
+    "energy_wh": 75.0,
+    "zone": "Z1",
+    "after": [
+     "T9"
+    ],
+    "structure": "S1",
+    "quantity": null,
+    "unit": null,
+    "basis": null,
+    "estimated_duration_h": null,
+    "estimated_energy_wh": null
+   },
+   {
+    "id": "T11",
+    "name": "survey stake blast berm S2",
+    "robot_type": "surveyor",
+    "duration_h": 2,
+    "energy_wh": 120.0,
+    "zone": "Z2",
+    "after": [
+     "T1"
+    ],
+    "structure": "S2",
+    "quantity": 240.0,
+    "unit": "m2",
+    "basis": "60 m * 4 m = 240 m2",
+    "estimated_duration_h": 2.0,
+    "estimated_energy_wh": 120.0
+   },
+   {
+    "id": "T12",
+    "name": "haul blast berm S2 part 1",
+    "robot_type": "hauler",
+    "duration_h": 13,
+    "energy_wh": 1050.0,
+    "zone": "Z2",
+    "after": [
+     "T2",
+     "T6",
+     "T11"
+    ],
+    "structure": "S2",
+    "quantity": 150.0,
+    "unit": "m3",
+    "basis": "300 m3 / 2 = 150 m3 (from T2 62.832 m3 + T6 87.168 m3)",
+    "estimated_duration_h": 13.0,
+    "estimated_energy_wh": 1050.0
+   },
+   {
+    "id": "T13",
+    "name": "haul blast berm S2 part 2",
+    "robot_type": "hauler",
+    "duration_h": 13,
+    "energy_wh": 1050.0,
+    "zone": "Z2",
+    "after": [
+     "T3",
+     "T7",
+     "T11",
+     "T12"
+    ],
+    "structure": "S2",
+    "quantity": 150.0,
+    "unit": "m3",
+    "basis": "300 m3 / 2 = 150 m3 (from T3 62.832 m3 + T7 87.168 m3)",
+    "estimated_duration_h": 13.0,
+    "estimated_energy_wh": 1050.0
+   },
+   {
+    "id": "T14",
+    "name": "compact blast berm S2",
+    "robot_type": "compactor",
+    "duration_h": 10,
+    "energy_wh": 960.0,
+    "zone": "Z2",
+    "after": [
+     "T13",
+     "T8"
+    ],
+    "structure": "S2",
+    "quantity": 240.0,
+    "unit": "m2",
+    "basis": "60 m * 4 m = 240 m2",
+    "estimated_duration_h": 10.0,
+    "estimated_energy_wh": 960.0
+   },
+   {
+    "id": "T15",
+    "name": "sinter blast berm S2",
+    "robot_type": "printer",
+    "duration_h": 18,
+    "energy_wh": 2064.0,
+    "zone": "Z2",
+    "after": [
+     "T14",
+     "T11",
+     "T8",
+     "T9"
+    ],
+    "structure": "S2",
+    "quantity": 240.0,
+    "unit": "m2",
+    "basis": "60 m * 4 m = 240 m2",
+    "estimated_duration_h": 18.0,
+    "estimated_energy_wh": 2064.0
+   },
+   {
+    "id": "T16",
+    "name": "inspect blast berm S2",
+    "robot_type": "surveyor",
+    "duration_h": 1,
+    "energy_wh": 75.0,
+    "zone": "Z2",
+    "after": [
+     "T15",
+     "T10"
+    ],
+    "structure": "S2",
+    "quantity": null,
+    "unit": null,
+    "basis": null,
+    "estimated_duration_h": null,
+    "estimated_energy_wh": null
+   },
+   {
+    "id": "T17",
+    "name": "sign-off landing pad S1",
+    "robot_type": "surveyor",
+    "duration_h": 1,
+    "energy_wh": 75.0,
+    "zone": "Z1",
+    "after": [
+     "T10",
+     "T16"
+    ],
+    "structure": "S1",
+    "quantity": null,
+    "unit": null,
+    "basis": null,
+    "estimated_duration_h": null,
+    "estimated_energy_wh": null
+   }
+  ],
+  "notes": "Fixed supply edges for haul tasks: T12 now waits for its supply excavations T2 and T6 plus survey stake T11; T13 waits for T3, T7, T11 and T12 (zone sequencing). All structure phases present. Printer total energy 4765.8 Wh exceeds single printer battery 4000 Wh; type cannot carry full work, kept whole per rules (solver will propose fix). Single-robot-per-zone respected by linear sequencing in each zone. Excavation and grade for S1 split across two excavators (6 tasks total). Borrow excavation in Z1 supplies missing fill for S2. Haul split across two haulers. All quantities derived from structure dimensions; durations and energies computed from rate table."
+ },
+ "schedule": null,
+ "explanation": null,
+ "steps": [
+  {
+   "stage": "structure",
+   "attempt": 1,
+   "ok": true,
+   "failure": null,
+   "duration_s": 2.3972949171438813,
+   "usage": {
+    "model": "nvidia/Nemotron-3_5-Lightning",
+    "input_tokens": 3177,
+    "output_tokens": 487,
+    "latency_s": 2.389982584165409
+   },
+   "message": "2 structures, 7 robots, horizon 336h",
+   "payload": {
+    "zones": 2,
+    "grid": [
+     40,
+     40
+    ],
+    "depot": [
+     20,
+     2
+    ],
+    "warnings": []
+   }
+  },
+  {
+   "stage": "taskgraph",
+   "attempt": 1,
+   "ok": true,
+   "failure": null,
+   "duration_s": 64.84001704212278,
+   "usage": {
+    "model": "nvidia/Nemotron-3-Ultra-550b-a55b",
+    "input_tokens": 3435,
+    "output_tokens": 9995,
+    "latency_s": 64.82340041687712
+   },
+   "message": "13 tasks",
+   "payload": {
+    "advisories": [
+     "supply:S2: its hauls (T6 150 m3, T7 150 m3) move 300 m3, more than the 125.7 m3 the digs before them remove (S1 landing pad: T3, T4)"
+    ],
+    "rate_model": true,
+    "grounded": 11
+   }
+  },
+  {
+   "stage": "validate",
+   "attempt": 1,
+   "ok": false,
+   "failure": {
+    "kind": "validation",
+    "conflicts": [
+     "energy:printer"
+    ],
+    "hint": "Battery budgets are exceeded per robot type: printer tasks need at least 4,783 Wh, 4,766 Wh of work and 18 Wh of travel, but its 1 robot carries only 4,000 Wh combined; reduce the quantities if the brief allows it or move work to other robot types.",
+    "details": [
+     "printer tasks need at least 4,783 Wh, 18 Wh of it travel; its 1 robot carries 4,000 Wh"
+    ]
+   },
+   "duration_s": 0.0023584580048918724,
+   "usage": null,
+   "message": null,
+   "payload": {
+    "advisories": [
+     "supply:S2: its hauls (T6 150 m3, T7 150 m3) move 300 m3, more than the 125.7 m3 the digs before them remove (S1 landing pad: T3, T4)"
+    ]
+   }
+  },
+  {
+   "stage": "repair",
+   "attempt": 2,
+   "ok": true,
+   "failure": null,
+   "duration_s": 98.09087416599505,
+   "usage": {
+    "model": "nvidia/Nemotron-3-Ultra-550b-a55b",
+    "input_tokens": 5527,
+    "output_tokens": 17478,
+    "latency_s": 98.07280287495814
+   },
+   "message": "15 tasks",
+   "payload": {
+    "advisories": [],
+    "rate_model": true,
+    "grounded": 8,
+    "diff": {
+     "added": [
+      "T14",
+      "T15"
+     ],
+     "removed": [],
+     "changed": [
+      {
+       "task": "T2",
+       "field": "after",
+       "before": [],
+       "after": [
+        "T1"
+       ]
+      },
+      {
+       "task": "T4",
+       "field": "after",
+       "before": [
+        "T1"
+       ],
+       "after": [
+        "T3"
+       ]
+      },
+      {
+       "task": "T5",
+       "field": "after",
+       "before": [
+        "T3",
+        "T4"
+       ],
+       "after": [
+        "T4"
+       ]
+      },
+      {
+       "task": "T8",
+       "field": "after",
+       "before": [
+        "T5"
+       ],
+       "after": [
+        "T15"
+       ]
+      },
+      {
+       "task": "T12",
+       "field": "after",
+       "before": [
+        "T10"
+       ],
+       "after": [
+        "T10",
+        "T13"
+       ]
+      },
+      {
+       "task": "T6",
+       "field": "after",
+       "before": [
+        "T2",
+        "T3",
+        "T4"
+       ],
+       "after": [
+        "T14",
+        "T2",
+        "T3"
+       ]
+      },
+      {
+       "task": "T7",
+       "field": "after",
+       "before": [
+        "T2",
+        "T3",
+        "T4"
+       ],
+       "after": [
+        "T15",
+        "T2",
+        "T4"
+       ]
+      }
+     ],
+     "renumbered": [],
+     "per_type_energy_before": {
+      "compactor": 2216.6,
+      "excavator": 3518.6,
+      "hauler": 2100.0,
+      "printer": 4765.8,
+      "surveyor": 427.1
+     },
+     "per_type_energy_after": {
+      "compactor": 2216.6,
+      "excavator": 6308.0,
+      "hauler": 2100.0,
+      "printer": 4765.8,
+      "surveyor": 427.1
+     },
+     "scope_drift_pct": 21.4,
+     "total_energy_wh_before": 13028.1,
+     "total_energy_wh_after": 15817.5,
+     "total_duration_h_before": 128,
+     "total_duration_h_after": 154
+    }
+   }
+  },
+  {
+   "stage": "validate",
+   "attempt": 2,
+   "ok": false,
+   "failure": {
+    "kind": "validation",
+    "conflicts": [
+     "energy:printer"
+    ],
+    "hint": "Battery budgets are exceeded per robot type: printer tasks need at least 4,783 Wh, 4,766 Wh of work and 18 Wh of travel, but its 1 robot carries only 4,000 Wh combined; reduce the quantities if the brief allows it or move work to other robot types.",
+    "details": [
+     "printer tasks need at least 4,783 Wh, 18 Wh of it travel; its 1 robot carries 4,000 Wh"
+    ]
+   },
+   "duration_s": 0.008353124838322401,
+   "usage": null,
+   "message": null,
+   "payload": null
+  },
+  {
+   "stage": "repair",
+   "attempt": 3,
+   "ok": true,
+   "failure": null,
+   "duration_s": 68.63285958301276,
+   "usage": {
+    "model": "nvidia/Nemotron-3-Ultra-550b-a55b",
+    "input_tokens": 5903,
+    "output_tokens": 18384,
+    "latency_s": 68.62507849978283
+   },
+   "message": "17 tasks",
+   "payload": {
+    "advisories": [],
+    "rate_model": true,
+    "grounded": 14,
+    "diff": {
+     "added": [
+      "T4",
+      "T5",
+      "T6",
+      "T7",
+      "T17"
+     ],
+     "removed": [
+      "T5",
+      "T14",
+      "T15"
+     ],
+     "changed": [
+      {
+       "task": "T1",
+       "field": "name",
+       "before": "survey landing pad S1",
+       "after": "survey stake landing pad S1"
+      },
+      {
+       "task": "T10",
+       "from": "T12",
+       "field": "after",
+       "before": [
+        "T16",
+        "T9"
+       ],
+       "after": [
+        "T9"
+       ]
+      },
+      {
+       "task": "T11",
+       "from": "T2",
+       "field": "name",
+       "before": "survey blast berm S2",
+       "after": "survey stake blast berm S2"
+      },
+      {
+       "task": "T12",
+       "from": "T6",
+       "field": "after",
+       "before": [
+        "T11",
+        "T14 (removed)",
+        "T2"
+       ],
+       "after": [
+        "T11",
+        "T7"
+       ]
+      },
+      {
+       "task": "T13",
+       "from": "T7",
+       "field": "after",
+       "before": [
+        "T11",
+        "T15 (removed)",
+        "T3"
+       ],
+       "after": [
+        "T12"
+       ]
+      },
+      {
+       "task": "T14",
+       "from": "T9",
+       "field": "after",
+       "before": [
+        "T12",
+        "T13"
+       ],
+       "after": [
+        "T13",
+        "T8"
+       ]
+      },
+      {
+       "task": "T15",
+       "from": "T11",
+       "field": "after",
+       "before": [
+        "T11",
+        "T14"
+       ],
+       "after": [
+        "T11",
+        "T14",
+        "T8",
+        "T9"
+       ]
+      },
+      {
+       "task": "T16",
+       "from": "T13",
+       "field": "after",
+       "before": [
+        "T15"
+       ],
+       "after": [
+        "T10",
+        "T15"
+       ]
+      }
+     ],
+     "renumbered": [
+      {
+       "from": "T3",
+       "to": "T2"
+      },
+      {
+       "from": "T4",
+       "to": "T3"
+      },
+      {
+       "from": "T10",
+       "to": "T9"
+      },
+      {
+       "from": "T12",
+       "to": "T10"
+      },
+      {
+       "from": "T2",
+       "to": "T11"
+      },
+      {
+       "from": "T6",
+       "to": "T12"
+      },
+      {
+       "from": "T7",
+       "to": "T13"
+      },
+      {
+       "from": "T9",
+       "to": "T14"
+      },
+      {
+       "from": "T11",
+       "to": "T15"
+      },
+      {
+       "from": "T13",
+       "to": "T16"
+      }
+     ],
+     "per_type_energy_before": {
+      "compactor": 2216.6,
+      "excavator": 6308.0,
+      "hauler": 2100.0,
+      "printer": 4765.8,
+      "surveyor": 427.1
+     },
+     "per_type_energy_after": {
+      "compactor": 2216.6,
+      "excavator": 6308.0,
+      "hauler": 2100.0,
+      "printer": 4765.8,
+      "surveyor": 502.1
+     },
+     "scope_drift_pct": 0.5,
+     "total_energy_wh_before": 15817.5,
+     "total_energy_wh_after": 15892.5,
+     "total_duration_h_before": 154,
+     "total_duration_h_after": 156
+    }
+   }
+  },
+  {
+   "stage": "validate",
+   "attempt": 3,
+   "ok": false,
+   "failure": {
+    "kind": "validation",
+    "conflicts": [
+     "energy:printer"
+    ],
+    "hint": "Battery budgets are exceeded per robot type: printer tasks need at least 4,783 Wh, 4,766 Wh of work and 18 Wh of travel, but its 1 robot carries only 4,000 Wh combined; reduce the quantities if the brief allows it or move work to other robot types.",
+    "details": [
+     "printer tasks need at least 4,783 Wh, 18 Wh of it travel; its 1 robot carries 4,000 Wh"
+    ]
+   },
+   "duration_s": 0.0028230829630047083,
+   "usage": null,
+   "message": null,
+   "payload": null
+  },
+  {
+   "stage": "repair",
+   "attempt": 4,
+   "ok": true,
+   "failure": null,
+   "duration_s": 139.6861430001445,
+   "usage": {
+    "model": "nvidia/Nemotron-3-Ultra-550b-a55b",
+    "input_tokens": 6292,
+    "output_tokens": 24371,
+    "latency_s": 139.67434433405288
+   },
+   "message": "17 tasks",
+   "payload": {
+    "advisories": [],
+    "rate_model": true,
+    "grounded": 14,
+    "diff": {
+     "added": [],
+     "removed": [],
+     "changed": [
+      {
+       "task": "T12",
+       "field": "after",
+       "before": [
+        "T11",
+        "T7"
+       ],
+       "after": [
+        "T11",
+        "T2",
+        "T6"
+       ]
+      },
+      {
+       "task": "T13",
+       "field": "after",
+       "before": [
+        "T12"
+       ],
+       "after": [
+        "T11",
+        "T12",
+        "T3",
+        "T7"
+       ]
+      }
+     ],
+     "renumbered": [],
+     "per_type_energy_before": {
+      "compactor": 2216.6,
+      "excavator": 6308.0,
+      "hauler": 2100.0,
+      "printer": 4765.8,
+      "surveyor": 502.1
+     },
+     "per_type_energy_after": {
+      "compactor": 2216.6,
+      "excavator": 6308.0,
+      "hauler": 2100.0,
+      "printer": 4765.8,
+      "surveyor": 502.1
+     },
+     "scope_drift_pct": 0.0,
+     "total_energy_wh_before": 15892.5,
+     "total_energy_wh_after": 15892.5,
+     "total_duration_h_before": 156,
+     "total_duration_h_after": 156
+    }
+   }
+  },
+  {
+   "stage": "validate",
+   "attempt": 4,
+   "ok": false,
+   "failure": {
+    "kind": "validation",
+    "conflicts": [
+     "energy:printer"
+    ],
+    "hint": "Battery budgets are exceeded per robot type: printer tasks need at least 4,783 Wh, 4,766 Wh of work and 18 Wh of travel, but its 1 robot carries only 4,000 Wh combined; reduce the quantities if the brief allows it or move work to other robot types.",
+    "details": [
+     "printer tasks need at least 4,783 Wh, 18 Wh of it travel; its 1 robot carries 4,000 Wh"
+    ]
+   },
+   "duration_s": 0.002911458956077695,
+   "usage": null,
+   "message": null,
+   "payload": {
+    "suggestions": [
+     {
+      "kind": "raise_battery",
+      "detail": "PR1 needs 4,800 Wh (has 4,000 Wh): feasible at 123 h",
+      "makespan_h": 123,
+      "robot_type": "printer",
+      "robot_id": "PR1",
+      "battery_wh": 4800.0,
+      "horizon_h": null,
+      "verified": true
+     },
+     {
+      "kind": "add_robot",
+      "detail": "one more printer (PR2, 4,000 Wh like PR1): feasible at 120 h",
+      "makespan_h": 120,
+      "robot_type": "printer",
+      "robot_id": "PR2",
+      "battery_wh": 4000.0,
+      "horizon_h": null,
+      "verified": true
+     }
+    ]
+   }
+  }
+ ],
+ "repairs": 3,
+ "success": false,
+ "failure": {
+  "kind": "validation",
+  "conflicts": [
+   "energy:printer"
+  ],
+  "hint": "Battery budgets are exceeded per robot type: printer tasks need at least 4,783 Wh, 4,766 Wh of work and 18 Wh of travel, but its 1 robot carries only 4,000 Wh combined; reduce the quantities if the brief allows it or move work to other robot types.",
+  "details": [
+   "printer tasks need at least 4,783 Wh, 18 Wh of it travel; its 1 robot carries 4,000 Wh"
+  ]
+ },
+ "suggestions": [
+  {
+   "kind": "raise_battery",
+   "detail": "PR1 needs 4,800 Wh (has 4,000 Wh): feasible at 123 h",
+   "makespan_h": 123,
+   "robot_type": "printer",
+   "robot_id": "PR1",
+   "battery_wh": 4800.0,
+   "horizon_h": null,
+   "verified": true
+  },
+  {
+   "kind": "add_robot",
+   "detail": "one more printer (PR2, 4,000 Wh like PR1): feasible at 120 h",
+   "makespan_h": 120,
+   "robot_type": "printer",
+   "robot_id": "PR2",
+   "battery_wh": 4000.0,
+   "horizon_h": null,
+   "verified": true
+  }
+ ]
+}

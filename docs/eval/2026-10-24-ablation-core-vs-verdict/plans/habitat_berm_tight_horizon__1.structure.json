@@ -1,0 +1,171 @@
+{
+ "brief": "habitat_berm_tight_horizon",
+ "repeat": 1,
+ "requirements_sha": "94d155e047",
+ "requirements": {
+  "site": {
+   "name": "LS-1",
+   "grid": [
+    40,
+    40
+   ],
+   "zones": [
+    {
+     "id": "Z1",
+     "center": [
+      2,
+      2
+     ],
+     "radius": 3
+    },
+    {
+     "id": "Z2",
+     "center": [
+      2,
+      8
+     ],
+     "radius": 3
+    },
+    {
+     "id": "Z3",
+     "center": [
+      2,
+      14
+     ],
+     "radius": 3
+    },
+    {
+     "id": "Z4",
+     "center": [
+      2,
+      20
+     ],
+     "radius": 3
+    }
+   ],
+   "depot": [
+    38,
+    20
+   ]
+  },
+  "structures": [
+   {
+    "id": "S1",
+    "type": "excavate",
+    "zone": "Z1",
+    "operations": [
+     "survey",
+     "excavate",
+     "compact"
+    ],
+    "depth_m": 1.0,
+    "min_depth_m": 1.0,
+    "lifts": 1,
+    "length_m": 12,
+    "width_m": 12
+   },
+   {
+    "id": "S2",
+    "type": "spoil_berm",
+    "zone": "Z2",
+    "operations": [
+     "haul",
+     "compact",
+     "survey"
+    ],
+    "length_m": 70,
+    "height_m": 2,
+    "width_m": 4,
+    "lifts": 1
+   },
+   {
+    "id": "S3",
+    "type": "borrow_strip",
+    "zone": "Z3",
+    "operations": [
+     "excavate",
+     "haul"
+    ],
+    "length_m": 40,
+    "width_m": 6,
+    "depth_m": 0.5,
+    "min_depth_m": 0.5
+   }
+  ],
+  "robots": [
+   {
+    "id": "EX1",
+    "type": "excavator",
+    "battery_wh": 5000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "EX2",
+    "type": "excavator",
+    "battery_wh": 5000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "HL1",
+    "type": "hauler",
+    "battery_wh": 3000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "HL2",
+    "type": "hauler",
+    "battery_wh": 3000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "CP1",
+    "type": "compactor",
+    "battery_wh": 3500.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "CP2",
+    "type": "compactor",
+    "battery_wh": 3500.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "SV1",
+    "type": "surveyor",
+    "battery_wh": 1500.0,
+    "speed_cells_per_h": 12.0
+   }
+  ],
+  "horizon_h": 72,
+  "constraints": [
+   "Only one robot per zone at a time",
+   "Pit and borrow strip may excavate simultaneously on separate zones",
+   "Surveyor stakes pit and berm line before excavation, inspects berm at end"
+  ],
+  "source_brief": "# Habitat Berm and Foundation Pit in Three Days\n\n**Site.** Firm regolith 400 m north of the landing pad with 25 cm of fines; the berm line is 20 m south of the pit and the borrow strip lies along the berm line. The depot is on the east edge; no recharging.\n\n**Structures.**\n\n1. Foundation pit: 12 m by 12 m, 1.0 m deep (about 144 cubic metres), base levelled and compacted.\n2. Plume berm: 70 m straight berm, 2 m high and 4 m wide at the base (about 280 cubic metres of fill), built from the pit spoil plus the borrow strip, compacted in one lift and inspected.\n3. Borrow strip: 40 m by 6 m, 0.5 m deep (about 120 cubic metres), next to the berm line.\n\n**Fleet.** EX1 and EX2 (excavators, 5000 Wh each), HL1 and HL2 (haulers, 3000 Wh each), CP1 and CP2 (compactors, 3500 Wh each) and SV1 (surveyor, 1500 Wh). Batteries are the whole budget.\n\n**Deadline.** 3 days. A crew lander arrives on day four and the berm must be complete.\n\n**Operational constraints.**\n\n- The site lead would prefer one structure at a time (pit, then borrow strip, then berm) so that a single zone is active; this preference yields to the deadline, and the pit and the borrow strip are independent, so both excavators may dig at once on separate zones.\n- Only one robot may work inside a zone at a time.\n- The surveyor stakes the pit and the berm line before excavation and inspects the berm at the end.\n"
+ },
+ "ok": true,
+ "message": "3 structures, 7 robots, horizon 72h",
+ "payload": {
+  "zones": 4,
+  "grid": [
+   40,
+   40
+  ],
+  "depot": [
+   38,
+   20
+  ],
+  "warnings": [
+   "structure S1: diameter_m 12 -> 12 m x 12 m: the brief's entry for S1 states a 12 m by 12 m footprint"
+  ]
+ },
+ "failure": null,
+ "usage": {
+  "model": "nvidia/Nemotron-3_5-Lightning",
+  "input_tokens": 3206,
+  "output_tokens": 590,
+  "latency_s": 5.665001749992371
+ },
+ "latency_s": 5.669
+}

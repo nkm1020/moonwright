@@ -1,0 +1,147 @@
+{
+ "brief": "three_pads_in_order",
+ "repeat": 2,
+ "requirements_sha": "1e0cc9d178",
+ "requirements": {
+  "site": {
+   "name": "LS-1",
+   "grid": [
+    40,
+    40
+   ],
+   "zones": [
+    {
+     "id": "Z1",
+     "center": [
+      20,
+      2
+     ],
+     "radius": 3
+    },
+    {
+     "id": "Z2",
+     "center": [
+      20,
+      10
+     ],
+     "radius": 3
+    },
+    {
+     "id": "Z3",
+     "center": [
+      20,
+      18
+     ],
+     "radius": 3
+    },
+    {
+     "id": "Z4",
+     "center": [
+      37,
+      30
+     ],
+     "radius": 3
+    }
+   ],
+   "depot": null
+  },
+  "structures": [
+   {
+    "id": "S1",
+    "type": "Cargo pad",
+    "zone": "Z1",
+    "operations": [
+     "survey",
+     "excavate",
+     "compact"
+    ],
+    "diameter_m": 14,
+    "depth_m": 0.4
+   },
+   {
+    "id": "S2",
+    "type": "Cargo pad",
+    "zone": "Z2",
+    "operations": [
+     "survey",
+     "excavate",
+     "compact"
+    ],
+    "diameter_m": 14,
+    "depth_m": 0.4
+   },
+   {
+    "id": "S3",
+    "type": "Cargo pad",
+    "zone": "Z3",
+    "operations": [
+     "survey",
+     "excavate",
+     "compact"
+    ],
+    "diameter_m": 14,
+    "depth_m": 0.4
+   }
+  ],
+  "robots": [
+   {
+    "id": "EX1",
+    "type": "excavator",
+    "battery_wh": 5000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "EX2",
+    "type": "excavator",
+    "battery_wh": 5000.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "CP1",
+    "type": "compactor",
+    "battery_wh": 3500.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "CP2",
+    "type": "compactor",
+    "battery_wh": 3500.0,
+    "speed_cells_per_h": 12.0
+   },
+   {
+    "id": "SV1",
+    "type": "surveyor",
+    "battery_wh": 1500.0,
+    "speed_cells_per_h": 12.0
+   }
+  ],
+  "horizon_h": 48,
+  "constraints": [
+   "Only one robot may work inside a zone at a time",
+   "Surveyor stakes before excavation and inspects after compaction",
+   "Pad team prefers to finish each pad completely before the next one is opened (pad A, then B, then C), but may work in parallel if the deadline requires it"
+  ],
+  "source_brief": "# Three Cargo Pads Before the First Lander\n\n**Site.** A flat 120 m by 60 m area of loose regolith 40 cm deep over firm material, 500 m south of the main landing pad. The three pads are 40 m apart along an east-west line. The depot is on the south edge, midway; no recharging.\n\n**Structures.**\n\n1. Cargo pad A, 2. cargo pad B, 3. cargo pad C: each a circular bowl 14 m in diameter excavated 0.4 m to firm regolith (about 62 cubic metres each), subgrade compacted, staked before excavation and inspected after compaction. The spoil of each pad is bladed into a low windrow on its north side by the excavator; nothing is hauled and nothing is sintered this campaign.\n\n**Fleet.** EX1 and EX2 (excavators, 5000 Wh each), CP1 and CP2 (compactors, 3500 Wh each) and SV1 (surveyor, 1500 Wh). Batteries are the whole budget.\n\n**Deadline.** 2 days. The first cargo lander arrives at the start of day three and all three pads must be inspected by then.\n\n**Operational constraints.**\n\n- The pad team prefers to finish each pad completely before the next one is opened (pad A, then B, then C), so that only one zone is active at a time; this preference yields to the deadline, and the three pads are independent, so they may be worked in parallel on separate zones if the deadline requires it.\n- Only one robot may work inside a zone at a time.\n- The surveyor stakes a pad before its excavation and inspects it after its compaction.\n"
+ },
+ "ok": true,
+ "message": "3 structures, 5 robots, horizon 48h",
+ "payload": {
+  "zones": 4,
+  "grid": [
+   40,
+   40
+  ],
+  "depot": null,
+  "warnings": [
+   "no depot given; robots start at the bottom centre of the grid"
+  ]
+ },
+ "failure": null,
+ "usage": {
+  "model": "nvidia/Nemotron-3_5-Lightning",
+  "input_tokens": 3186,
+  "output_tokens": 510,
+  "latency_s": 2.4131464581005275
+ },
+ "latency_s": 2.422
+}

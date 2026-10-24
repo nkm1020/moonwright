@@ -114,6 +114,11 @@ final checks, so the columns are judged alike.
 
 * **The repair loop is worth 31 points**: in run 4, 55 % of runs verify on the first graph and 86 %
   after at most three repairs fed the solver's core.
+* **The proof is what makes the repair work.** Rerun with the same code and briefs but repair
+  prompts that only say "refused" (no core, no numbers), Ultra turned 9 of 28 refused first graphs
+  into verified plans (32 %); with the solver's minimal core and its numeric hint, 21 of 30 (70 %;
+  Fisher's exact test p = 0.008). Verified overall: 71 % against 86 %
+  ([ablation](docs/eval/2026-10-24-ablation-core-vs-verdict/README.md)).
 * **Impossible briefs fail honestly.** On the three designed-impossible briefs, 7 of 9 Ultra runs
   ended without a plan rather than shrink the work, 5 of them with CP-SAT-proven advice; the other
   two verified only by cutting 10-40 % of the work, which the scope row counts as out of scope.
@@ -137,7 +142,8 @@ final checks, so the columns are judged alike.
 
 Runs: [run 1](docs/eval/2026-10-23-live-eval-run1.md) (before the volume check),
 [run 2](docs/eval/2026-10-23-live-eval-run2/README.md), [run 3](docs/eval/2026-10-23-live-eval-run3/README.md),
-[run 4](docs/eval/2026-10-24-live-eval-run4/README.md), each with its saved plans. Method:
+[run 4](docs/eval/2026-10-24-live-eval-run4/README.md), the
+[core-vs-verdict ablation](docs/eval/2026-10-24-ablation-core-vs-verdict/README.md), each with its saved plans. Method:
 [docs/design.md#evaluation](docs/design.md#evaluation).
 
 ## Run it
