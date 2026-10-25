@@ -11,7 +11,10 @@ deadline. When the solver says no, it returns a minimal infeasibility core with 
 it, and Nemotron repairs the plan from that proof. When a brief is impossible, Moonwright does not
 shrink the work to pass: it says so, and the solver finds what would make it feasible
 (`finishing needs 85 h, 25 h past the 60 h deadline`). A 2D simulator then breaks robots mid-mission,
-CP-SAT replans the remaining work in milliseconds, and Monte Carlo puts a number on robustness.
+CP-SAT replans the remaining work in milliseconds, and Monte Carlo puts a number on robustness. In
+**NVIDIA Isaac Sim**, PhysX rovers drive a verified plan on the rim of Shackleton crater, on NASA's
+measured terrain; when one breaks down, Moonwright replans from their telemetry and the rovers carry
+out the new verified plan.
 
 <!-- TODO(video): hero GIF docs/img/hero.gif + links: demo video, live demo -->
 
@@ -50,6 +53,8 @@ flowchart LR
   X -- "verified schedule" --> E
   X -- "verified schedule" --> SIM["2D simulator<br/>failures, replans, Monte Carlo"]
   SIM -. "robot failure" .-> X
+  X -- "verified schedule" --> ISAAC["NVIDIA Isaac Sim<br/>PhysX rovers on Shackleton's rim"]
+  ISAAC -. "telemetry: robot failure" .-> X
   X -. "no plan in 3 repairs" .-> A["CP-SAT-proven advice<br/>deadline, battery, spare robot"]
 ```
 
@@ -77,6 +82,11 @@ flowchart LR
    Nemotron is asked only when the remaining fleet provably cannot finish. Monte Carlo replays the
    plan 200 times with random failures and reports the probability of finishing on time, with a
    95 % interval, and the robots the plan cannot afford to lose.
+8. **Run it on rovers.** In NVIDIA Isaac Sim 5.1, every robot of the plan is a four-wheeled PhysX
+   rover (a chassis and four driven wheels) at 1.62 m/s² on Shackleton's rim (NASA LOLA's 5 m/px
+   map of the south pole), steered to its work spots by the plan's schedule. When a rover breaks down, the frame the rovers report (positions,
+   batteries, progress) goes to the same replanner as in step 7, and the surviving rovers carry out
+   the verified schedule that comes back ([tools/isaac](tools/isaac/README.md)).
 
 Details, edge cases and the reasoning behind each rule: [docs/design.md](docs/design.md).
 
@@ -139,6 +149,14 @@ final checks, so the columns are judged alike.
   batteries, which is when Nemotron is asked to re-scope. Asked live for the first 10 of those,
   Nemotron 3 Ultra returned a CP-SAT-verified replan 8 times; twice the previous plan stayed in
   force.
+* **The plan holds on PhysX rovers, and physics shows what the travel model misses.** In Isaac Sim,
+  on Shackleton's rim, with excavator EX1 lost at 10 h, the rovers' telemetry went to Moonwright, CP-SAT rescheduled the
+  remaining 10 tasks in 0.01 s (72 h to 79 h), and the rovers finished every task at 79 h, the same
+  as the 2D simulator; none of the 6 completed drives reached its zone after the planned start. Straight
+  drives matched the planner's travel time (median -0.1 %), but a rover that first had to turn
+  around in place took 9.7 % longer, time the travel model does not count. That leg had 9.9 h to
+  spare, but the tightest straight drive arrived with 0.025 h left, so a turn there would have made
+  it late ([run](docs/eval/2026-10-25-isaac-closed-loop/README.md)).
 
 Runs: [run 1](docs/eval/2026-10-23-live-eval-run1.md) (before the volume check),
 [run 2](docs/eval/2026-10-23-live-eval-run2/README.md), [run 3](docs/eval/2026-10-23-live-eval-run3/README.md),
@@ -169,8 +187,10 @@ recorded runs without a backend. Commands, endpoints and settings: [docs/referen
 
 * **Verified means verified against the planning model**: precedence, robots, zones, battery budgets
   with the legs each robot drives, supply order and the deadline. Travel is exact for that model
-  (straight lines between zone centres in whole hours, the order chosen by CP-SAT), not terrain;
-  the simulator is 2D and kinematic; failures are injected, not modelled.
+  (straight lines between zone centres in whole hours, the order chosen by CP-SAT), not terrain or
+  turning in place, which Isaac Sim shows can add 10 % to a leg; the 2D simulator is kinematic; in
+  Isaac Sim the driving is PhysX but the work (digging, hauling, sintering) is not simulated
+  physically; failures are injected, not modelled.
 * **The rates are assumptions.** The rate table (`backend/moonwright/pipeline/rates.py`) uses
   illustrative low-power figures; replace them with measured ones before trusting an hour.
 * **Checks only judge what the brief states.** A structure recorded without dimensions has no volume
@@ -185,6 +205,8 @@ recorded runs without a backend. Commands, endpoints and settings: [docs/referen
 backend/    Python 3.13 + uv: pipeline (structure, task graph, rates, validator, CP-SAT, repair loop,
             advice), simulator, replanning, Monte Carlo, CLI, FastAPI, Token Factory client, tests
 frontend/   Next.js 16 UI: brief, editable requirements, streamed trace, Gantt, 2D replay, Monte Carlo
+tools/isaac NVIDIA Isaac Sim 5.1: PhysX rover mission, replan bridge to the backend, RTX render
+tools/video the demo video pipeline: Playwright capture, narration, facts checked against the runs
 docs/       design notes, reference, evaluation runs with saved plans, eval brief arithmetic
 ```
 
@@ -192,7 +214,7 @@ docs/       design notes, reference, evaluation runs with saved plans, eval brie
 
 The [Nebius × NVIDIA Global AI Hackathon](https://nebiusglobalaihackathon.devpost.com/), Physical AI
 track (simulation-based). Runtime calls go to Nebius Token Factory with NVIDIA Nemotron open models
-(`backend/moonwright/llm/tokenfactory.py`).
+(`backend/moonwright/llm/tokenfactory.py`); the rovers run in NVIDIA Isaac Sim 5.1 (PhysX, RTX).
 
 ## License
 

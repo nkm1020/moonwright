@@ -24,6 +24,7 @@ const MIME = {
   ".jpg": "image/jpeg",
   ".woff2": "font/woff2",
   ".json": "application/json",
+  ".webm": "video/webm",
 };
 
 export async function launchBrowser() {

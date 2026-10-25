@@ -1,0 +1,120 @@
+{
+ "ground": "LOLA Site04_surf.tif px (1238,1502) stereo (-2810,-6510) m lat -89.766 z 1729.5 m",
+ "finish_h": 78.99916666666667,
+ "sec_per_h": 120.0,
+ "gravity": 1.62,
+ "physics_dt": 0.03333333333333333,
+ "physics_steps": 284397,
+ "wall_s": 649.1,
+ "legs": [
+  {
+   "robot": "HL2",
+   "task": "T5",
+   "to": "Z2",
+   "depart_h": 0.0,
+   "straight_m": 70.0,
+   "driven_m": 69.61,
+   "planned_start_h": 21,
+   "arrive_h": 2.905,
+   "ideal_h": 2.9167,
+   "slack_h": 18.095
+  },
+  {
+   "robot": "SV1",
+   "task": "T2",
+   "to": "Z2",
+   "depart_h": 3.0,
+   "straight_m": 70.08,
+   "driven_m": 69.69,
+   "planned_start_h": 6,
+   "arrive_h": 5.9208,
+   "ideal_h": 2.92,
+   "slack_h": 0.0792
+  },
+  {
+   "robot": "SV1",
+   "task": "T11",
+   "to": "Z1",
+   "depart_h": 8.0,
+   "straight_m": 69.55,
+   "driven_m": 39.14,
+   "planned_start_h": 57,
+   "rerouted_h": 10.0
+  },
+  {
+   "robot": "SV1",
+   "task": "T11",
+   "to": "Z1",
+   "depart_h": 10.0,
+   "straight_m": 30.42,
+   "driven_m": 30.03,
+   "planned_start_h": 64,
+   "arrive_h": 11.2933,
+   "ideal_h": 1.2675,
+   "slack_h": 52.7067
+  },
+  {
+   "robot": "CP1",
+   "task": "T8",
+   "to": "Z2",
+   "depart_h": 41.0,
+   "straight_m": 71.07,
+   "driven_m": 70.68,
+   "planned_start_h": 44,
+   "arrive_h": 43.9558,
+   "ideal_h": 2.9612,
+   "slack_h": 0.0442
+  },
+  {
+   "robot": "PR1",
+   "task": "T10",
+   "to": "Z2",
+   "depart_h": 64.0,
+   "straight_m": 71.67,
+   "driven_m": 71.28,
+   "planned_start_h": 67,
+   "arrive_h": 66.975,
+   "ideal_h": 2.9863,
+   "slack_h": 0.025
+  },
+  {
+   "robot": "SV1",
+   "task": "T12",
+   "to": "Z2",
+   "depart_h": 65.0,
+   "straight_m": 68.21,
+   "driven_m": 67.85,
+   "planned_start_h": 78,
+   "arrive_h": 68.1192,
+   "ideal_h": 2.8421,
+   "slack_h": 9.8808
+  }
+ ],
+ "events": [
+  {
+   "t_h": 10.0,
+   "kind": "robot_failure",
+   "robot": "EX1",
+   "task": "T3",
+   "detail": "EX1 drive fault at 10.00 h in Isaac Sim while working on T3 (78% done)"
+  }
+ ],
+ "replans": [
+  {
+   "t_h": 10.0,
+   "ok": true,
+   "message": "CP-SAT rescheduled 10 tasks in 0.01 s, Nemotron not needed; makespan 72 h -> 79 h",
+   "solver_wall_s": 0.01,
+   "roundtrip_s": 3.91,
+   "makespan_before_h": 72,
+   "makespan_after_h": 79
+  }
+ ],
+ "leg_overhead_pct": {
+  "median": -0.1,
+  "max": 9.7
+ },
+ "legs_arrived": 6,
+ "legs_late": 0,
+ "late_legs": []
+}

@@ -1097,6 +1097,20 @@
       ]
     },
     {
+      "id": "isaac",
+      "kind": "slide",
+      "slide": "isaac.html",
+      "transition": {
+        "type": "dip",
+        "duration": 0.5
+      },
+      "voDelay": 0.6,
+      "minDuration": 21.2,
+      "note": "media/isaac.webm and media/isaac_clock.js come from tools/isaac (mission.py drove it on the LOLA ground, render_replay.py drew it; tools/isaac/README.md). The clip plays from the start of the scene; its cards follow the clip's own mission clock: the fault and the replan at 10 h (5.75 s into the clip, where the voice says 'drive faults'), the finish at the end.",
+      "narration": "In NVIDIA Isaac Sim, PhysX rovers drive the plan on Shackleton's rim, on terrain NASA measured. When excavator {{isaac_fail_robot_no|words}}'s drive faults, their telemetry goes back to Moonwright, CP-SAT replans the fleet, and the rovers finish every task at hour {{isaac_finish_h|words}}, none of them late.",
+      "actions": []
+    },
+    {
       "id": "evidence",
       "kind": "slide",
       "slide": "evidence.html",

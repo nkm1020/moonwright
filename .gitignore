@@ -35,3 +35,4 @@ next-env.d.ts
 # design skill working files
 .taste-skill/
 tools/isaac/out/
+tools/video/slides/media/
