@@ -19,7 +19,13 @@ size so they read in a wide shot.
 What changes on screen: the pad darkens as it is dug, compacted and sintered; the berm grows with the
 hauled volume; survey stakes appear once a zone is surveyed; a failed robot turns red with a beacon and
 is pulled aside while its replacement works. Idle robots wait in parking slots west of the pad (the
-depot shares its cell with the pad, so the simulator stacks them there).
+depot shares its cell with the pad, so the simulator stacks them there); a wait shorter than 1.5 h is
+spent in place rather than as a round trip to the slot.
+
+Motion: every drive follows the recorded path but is re-timed as an S-curve (still at both ends,
+fastest in the middle), the robot faces along its path (RASSOR rolls along its long axis, drums
+front and back) and turns gradually, and the clip spends more of its 18 s where robots drive, so a
+drive reads as a drive rather than a jump; the hour around the failure is slowed down too.
 
 ## Run it
 

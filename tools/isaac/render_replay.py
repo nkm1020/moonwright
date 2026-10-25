@@ -212,8 +212,11 @@ def asset_fit(name):
         length = max(mx[0] - mn[0], mx[1] - mn[1]); height = mx[2] - mn[2]
         offset = Gf.Vec3d(-(mn[0] + mx[0]) / 2, -(mn[1] + mx[1]) / 2, -mn[2])
     sc = TARGET_LEN[name] / length
-    FIT[name] = (path, up, sc, offset, height * sc)
-    print(f"asset {name}: up {up}, size {length:.2f} x {height:.2f}, scale {sc:.3f}", flush=True)
+    # the wheels roll along the model's long axis: asset X stays world X, asset Z turns into world Y
+    # under the rotation about X, so a model long in Z needs -90 deg of yaw to face its heading
+    long_z = up == "Y" and (mx[2] - mn[2]) > (mx[0] - mn[0])
+    FIT[name] = (path, up, sc, offset, height * sc, -90.0 if long_z else 0.0)
+    print(f"asset {name}: up {up}, size {length:.2f} x {height:.2f}, scale {sc:.3f}, yaw {FIT[name][5]}", flush=True)
     return FIT[name]
 
 robots = {}
@@ -222,7 +225,7 @@ for rid, typ in track["types"].items():
     x = xform(root)
     parts = []
     if typ in ASSET:
-        path, up, sc, offset, top = asset_fit(ASSET[typ])
+        path, up, sc, offset, top, yaw = asset_fit(ASSET[typ])
         m = UsdGeom.Xform.Define(stage, root + "/Model")
         if up == "Y": m.AddRotateXOp().Set(ROT_X[ASSET[typ]])
         k = sc * SIZE[typ]
@@ -237,6 +240,7 @@ for rid, typ in track["types"].items():
         model = m.GetPrim()
     else:  # printer: a gantry truss (thin members, not blocks)
         model = None
+        yaw = 0.0
         body = M["body_pr"][0]
         for sx in (-1.8, 1.8):
             for sy in (-2.2, 2.2):
@@ -255,7 +259,7 @@ for rid, typ in track["types"].items():
     beacon.AddTranslateOp().Set(Gf.Vec3d(0, 0, top + 0.6))
     bind(beacon.GetPrim(), M["beacon"][0])
     UsdGeom.Imageable(beacon).MakeInvisible()
-    robots[rid] = {"x": x, "type": typ, "parts": parts, "model": model, "beacon": beacon, "failed": False}
+    robots[rid] = {"x": x, "type": typ, "parts": parts, "model": model, "beacon": beacon, "failed": False, "yaw": yaw}
 
 # ---------------------------------------------------------------- light and sky: low south-polar sun, near-black sky
 sun = UsdLux.DistantLight.Define(stage, "/World/Sun")
@@ -301,7 +305,7 @@ def apply(frame):
         r = robots[rid]
         ops = r["x"].GetOrderedXformOps()
         ops[0].Set(Gf.Vec3d(row["x"], row["y"], 0.0))
-        ops[1].Set(math.degrees(row["h"]))
+        ops[1].Set(math.degrees(row["h"]) + r["yaw"])
         failed = row["status"] == "failed"
         if failed != r["failed"]:
             r["failed"] = failed
