@@ -11,6 +11,7 @@ ap.add_argument("--frames", default=None, help="a:b slice of render frames")
 ap.add_argument("--width", type=int, default=1920); ap.add_argument("--height", type=int, default=1080)
 ap.add_argument("--subframes", type=int, default=6)
 ap.add_argument("--pick", default=None, help="comma-separated frame indices (test stills)")
+ap.add_argument("--assets", default=".", help="folder holding rassor.usd and opportunity.usd (NASA 3D Resources)")
 args = ap.parse_args()
 
 os.environ.setdefault("OMNI_KIT_ACCEPT_EULA", "YES")
@@ -73,10 +74,10 @@ berm_mat, berm_shader = material("berm", (0.21, 0.205, 0.2), 0.95)
 
 def smooth(u): return u * u * (3 - 2 * u)
 SHOTS = [  # (clip fraction, eye, target)
-    (0.00, (30.0, -78.0, 16.0), (0.0, -38.0, 1.5)),
-    (0.28, (24.0, -66.0, 12.0), (0.0, -38.0, 1.5)),
-    (0.62, (78.0, -64.0, 46.0), (0.0, -6.0, 0.0)),
-    (1.00, (96.0, -14.0, 58.0), (0.0, -2.0, 0.0)),
+    (0.00, (20.0, -60.0, 7.5), (-4.0, -36.0, 1.5)),
+    (0.28, (15.0, -54.0, 6.0), (-4.0, -36.0, 1.5)),
+    (0.62, (56.0, -58.0, 30.0), (0.0, -10.0, 0.0)),
+    (1.00, (76.0, -22.0, 40.0), (0.0, -2.0, 0.0)),
 ]
 # ---------------------------------------------------------------- terrain: gentle noise + a few craters
 def terrain():
@@ -127,7 +128,7 @@ def xform(path, t=(0, 0, 0), rz=0.0):
     x = UsdGeom.Xform.Define(stage, path)
     x.AddTranslateOp().Set(Gf.Vec3d(*t))
     x.AddRotateZOp().Set(rz)
-    x.AddScaleOp().Set(Gf.Vec3f(1.6, 1.6, 1.6))
+    x.AddScaleOp().Set(Gf.Vec3f(1.0, 1.0, 1.0))
     return x
 
 def cube(path, size, t, mat, rz=0.0):
@@ -161,7 +162,22 @@ def disc(path, r, t, mat, seg=72):
     bind(m.GetPrim(), mat)
     return m
 pad = disc("/World/Pad", 10.0, (z1[0], z1[1], 0.06), pad_mat)
-berm = cube("/World/Berm", (24.0, 4.0, 0.05), (z2[0], z2[1], 0.0), berm_mat)
+def prism(path, length, width, t, mat):
+    """A berm: triangular section of unit height, scaled in z as fill arrives."""
+    m = UsdGeom.Mesh.Define(stage, path)
+    L, W = length / 2, width / 2
+    pts = [(-L, -W, 0), (L, -W, 0), (L, W, 0), (-L, W, 0), (-L, 0, 1), (L, 0, 1)]
+    m.CreatePointsAttr(Vt.Vec3fArray([Gf.Vec3f(*p) for p in pts]))
+    faces = [(0, 1, 5, 4), (1, 2, 5), (2, 3, 4, 5), (3, 0, 4)]
+    m.CreateFaceVertexCountsAttr(Vt.IntArray([len(f) for f in faces]))
+    m.CreateFaceVertexIndicesAttr(Vt.IntArray([v for f in faces for v in f]))
+    m.CreateSubdivisionSchemeAttr(UsdGeom.Tokens.none)
+    m.AddTranslateOp().Set(Gf.Vec3d(*t))
+    m.AddRotateZOp().Set(0.0)
+    m.AddScaleOp().Set(Gf.Vec3f(1.0, 1.0, 0.05))
+    bind(m.GetPrim(), mat)
+    return m
+berm = prism("/World/Berm", 24.0, 8.0, (z2[0], z2[1], 0.0), berm_mat)
 stakes = {}
 for zid, z in zones.items():
     for k in range(4):
@@ -170,48 +186,64 @@ for zid, z in zones.items():
         s = cyl(f"/World/Stake_{zid}_{k}", 0.08, 1.2, p, M["stake"][0])
         stakes.setdefault(zid, []).append(s)
 
-# ---------------------------------------------------------------- robots (proxies by type, ~2x scale for legibility)
-TYPE_BODY = {"excavator": "body_ex", "hauler": "body_hl", "compactor": "body_cp", "printer": "body_pr", "surveyor": "body_sv"}
+# ---------------------------------------------------------------- robots: NASA models (public domain), a truss for the printer
+ASSET = {"excavator": "rassor.usd", "hauler": "rassor.usd", "compactor": "rassor.usd", "surveyor": "opportunity.usd"}
+TARGET_LEN = {"rassor.usd": 6.5, "opportunity.usd": 5.0}       # metres on screen, ~2x real for legibility
+ROLE = {"excavator": (1.0, 0.62, 0.12), "hauler": (0.55, 0.75, 1.0), "compactor": (0.45, 0.9, 0.45),
+        "printer": (0.95, 0.95, 0.95), "surveyor": (0.95, 0.95, 0.95)}
+FIT = {}
+def asset_fit(name):
+    if name in FIT: return FIT[name]
+    path = os.path.join(os.path.abspath(args.assets), name)
+    st = Usd.Stage.Open(path)
+    up = UsdGeom.GetStageUpAxis(st)
+    rng = UsdGeom.BBoxCache(Usd.TimeCode.Default(), ["default", "render"]).ComputeWorldBound(st.GetPseudoRoot()).ComputeAlignedRange()
+    mn, mx = rng.GetMin(), rng.GetMax()
+    if up == "Y":
+        length = max(mx[0] - mn[0], mx[2] - mn[2]); height = mx[1] - mn[1]
+        offset = Gf.Vec3d(-(mn[0] + mx[0]) / 2, -mn[1], -(mn[2] + mx[2]) / 2)
+    else:
+        length = max(mx[0] - mn[0], mx[1] - mn[1]); height = mx[2] - mn[2]
+        offset = Gf.Vec3d(-(mn[0] + mx[0]) / 2, -(mn[1] + mx[1]) / 2, -mn[2])
+    sc = TARGET_LEN[name] / length
+    FIT[name] = (path, up, sc, offset, height * sc)
+    print(f"asset {name}: up {up}, size {length:.2f} x {height:.2f}, scale {sc:.3f}", flush=True)
+    return FIT[name]
+
 robots = {}
 for rid, typ in track["types"].items():
     root = f"/World/Robots/{rid}"
     x = xform(root)
-    body = M[TYPE_BODY[typ]][0]
     parts = []
-    if typ == "excavator":
-        parts.append(cube(root + "/TrackL", (5.0, 1.0, 1.0), (0, 1.4, 0.5), M["dark"][0]))
-        parts.append(cube(root + "/TrackR", (5.0, 1.0, 1.0), (0, -1.4, 0.5), M["dark"][0]))
-        parts.append(cube(root + "/Body", (3.6, 3.0, 1.6), (-0.3, 0, 1.8), body))
-        parts.append(cube(root + "/Cab", (1.4, 1.4, 1.4), (0.8, 0.7, 3.2), M["glass"][0]))
-        parts.append(cube(root + "/Boom", (4.0, 0.5, 0.5), (2.6, -0.6, 3.0), body, 0))
-        parts.append(cube(root + "/Bucket", (0.9, 1.2, 1.0), (4.6, -0.6, 2.0), M["dark"][0]))
-    elif typ == "hauler":
-        for sx in (-1.6, 1.6):
-            for sy in (-1.4, 1.4):
-                parts.append(cyl(root + f"/W{sx}{sy}".replace(".", "").replace("-", "m"), 0.7, 0.5, (sx, sy, 0.7), M["dark"][0], "Y"))
-        parts.append(cube(root + "/Chassis", (5.0, 2.6, 0.6), (0, 0, 1.2), body))
-        parts.append(cube(root + "/Cab", (1.2, 2.2, 1.4), (2.0, 0, 2.2), M["glass"][0]))
-        parts.append(cube(root + "/Bed", (3.2, 2.6, 1.3), (-0.8, 0, 2.15), body))
-    elif typ == "compactor":
-        parts.append(cyl(root + "/Drum", 1.0, 2.8, (2.0, 0, 1.0), M["dark"][0], "Y"))
-        parts.append(cube(root + "/Body", (3.0, 2.2, 1.4), (-0.6, 0, 1.4), body))
-        parts.append(cube(root + "/Cab", (1.2, 1.4, 1.2), (-0.6, 0, 2.7), M["glass"][0]))
-    elif typ == "printer":
-        for sy in (-1.6, 1.6):
-            parts.append(cube(root + f"/Leg{'L' if sy > 0 else 'R'}", (0.4, 0.4, 3.0), (0, sy, 1.5), body))
-        parts.append(cube(root + "/Gantry", (0.6, 3.8, 0.5), (0, 0, 3.1), body))
-        parts.append(cube(root + "/Head", (0.8, 0.8, 0.9), (0, 0, 2.5), M["dark"][0]))
-        parts.append(cube(root + "/Base", (3.0, 3.6, 0.5), (0, 0, 0.25), M["dark"][0]))
-    else:  # surveyor
-        parts.append(cube(root + "/Body", (2.2, 1.6, 0.8), (0, 0, 0.8), body))
-        parts.append(cyl(root + "/Mast", 0.08, 2.0, (0, 0, 2.2), M["dark"][0]))
-        parts.append(cube(root + "/Scanner", (0.5, 0.5, 0.35), (0, 0, 3.3), M["glass"][0]))
+    if typ in ASSET:
+        path, up, sc, offset, top = asset_fit(ASSET[typ])
+        m = UsdGeom.Xform.Define(stage, root + "/Model")
+        if up == "Y": m.AddRotateXOp().Set(90.0)
+        m.AddScaleOp().Set(Gf.Vec3f(sc, sc, sc))
+        m.AddTranslateOp(opSuffix="center").Set(offset)
+        m.GetPrim().GetReferences().AddReference(path)
+        model = m.GetPrim()
+    else:  # printer: a gantry truss (thin members, not blocks)
+        model = None
+        body = M["body_pr"][0]
+        for sx in (-1.8, 1.8):
+            for sy in (-2.2, 2.2):
+                parts.append(cube(root + f"/Leg{'p' if sx > 0 else 'm'}{'p' if sy > 0 else 'm'}", (0.18, 0.18, 4.2), (sx, sy, 2.1), body))
+        for sy in (-2.2, 2.2):
+            parts.append(cube(root + f"/Rail{'p' if sy > 0 else 'm'}", (3.8, 0.16, 0.16), (0, sy, 4.2), body))
+        parts.append(cube(root + "/Bridge", (0.2, 4.6, 0.2), (0.6, 0, 4.2), body))
+        parts.append(cube(root + "/Head", (0.5, 0.5, 0.7), (0.6, 0, 3.7), M["dark"][0]))
+        for sx in (-1.8, 1.8):
+            parts.append(cyl(root + f"/Wheel{'p' if sx > 0 else 'm'}", 0.35, 4.6, (sx, 0, 0.35), M["dark"][0], "Y"))
+        top = 4.4
+    mark_mat = material(f"role_{rid}", (0.1, 0.1, 0.1), 0.4, 0.0, tuple(10.0 * c for c in ROLE[typ]))[0]
+    marker = cube(root + "/Marker", (0.9, 0.25, 0.12), (0, 0, top + 0.12), mark_mat)
     beacon = UsdGeom.Sphere.Define(stage, root + "/Beacon")
     beacon.CreateRadiusAttr(0.45)
-    beacon.AddTranslateOp().Set(Gf.Vec3d(0, 0, 4.6))
+    beacon.AddTranslateOp().Set(Gf.Vec3d(0, 0, top + 0.6))
     bind(beacon.GetPrim(), M["beacon"][0])
     UsdGeom.Imageable(beacon).MakeInvisible()
-    robots[rid] = {"x": x, "type": typ, "parts": parts, "beacon": beacon, "failed": False}
+    robots[rid] = {"x": x, "type": typ, "parts": parts, "model": model, "beacon": beacon, "failed": False}
 
 # ---------------------------------------------------------------- light and sky: low south-polar sun, near-black sky
 sun = UsdLux.DistantLight.Define(stage, "/World/Sun")
@@ -263,10 +295,15 @@ def apply(frame):
             r["failed"] = failed
             img = UsdGeom.Imageable(r["beacon"])
             img.MakeVisible() if failed else img.MakeInvisible()
+            if r["model"] is not None:
+                api = UsdShade.MaterialBindingAPI.Apply(r["model"])
+                if failed:
+                    api.Bind(M["failed"][0], bindingStrength=UsdShade.Tokens.strongerThanDescendants)
+                else:
+                    api.UnbindDirectBinding()
             for p in r["parts"]:
-                name = p.GetPrim().GetName()
-                if name in ("Body", "Chassis", "Bed"):
-                    bind(p.GetPrim(), M["failed"][0] if failed else M[TYPE_BODY[r["type"]]][0])
+                if p.GetPrim().GetName() in ("Legpp", "Legpm", "Legmp", "Legmm", "Railp", "Railm", "Bridge"):
+                    bind(p.GetPrim(), M["failed"][0] if failed else M["body_pr"][0])
     prog = frame["progress"]
     dig = zone_progress(prog, "Z1", "excavator")
     comp = zone_progress(prog, "Z1", "compactor")
@@ -281,7 +318,7 @@ def apply(frame):
     bsint = zone_progress(prog, "Z2", "printer")
     h = max(0.05, 1.5 * haul)
     ops = berm.GetOrderedXformOps()
-    ops[0].Set(Gf.Vec3d(z2[0], z2[1], h / 2)); ops[2].Set(Gf.Vec3f(24.0, 4.0 + 2.0 * haul, h))
+    ops[0].Set(Gf.Vec3d(z2[0], z2[1], 0.0)); ops[2].Set(Gf.Vec3f(1.0, 0.6 + 0.4 * haul, h))
     bc = lerp((0.21, 0.205, 0.2), (0.15, 0.147, 0.144), bcomp)
     set_color(berm_shader, lerp(bc, (0.06, 0.06, 0.065), bsint), 0.95 - 0.5 * bsint)
     for zid, ss in stakes.items():
