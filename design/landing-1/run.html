@@ -1,0 +1,1078 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Runs · Moonwright</title>
+<meta name="description" content="Replay Moonwright's three recorded runs: what the solver refused, how Nemotron repaired it, and where each run ended.">
+<script>document.documentElement.classList.add('js')</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Albert+Sans:wght@400;500&family=Imbue:opsz,wght@10..100,400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="site.css">
+<style>
+/* The runs page of the one Moonwright site (colours, type and pills from site.css, shared with the overview).
+   The three recorded runs, each replayed like a film in the overview's dark room.
+   One screen on a laptop: the run's name and verdict on top, a scene in the middle, the scrubber at the foot.
+   A scene is a poster: one figure set huge in Imbue on the left, one lit stage on the right that runs to the
+   screen's edge. Colours are the landing's: a #111 ground, #1c1c1c surfaces a step lighter, bronze for the
+   action, the current selection and the one thing each run argues about; red and green only on data. */
+:root {
+  --well: #262626;
+  --off: #2c2c2c;
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --pad: 40px;
+}
+*, *::before, *::after { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 400 15px/1.5 var(--text); -webkit-font-smoothing: antialiased; }
+a { color: inherit; }
+h1, h2, h3, p { margin: 0; }
+code { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 0.9em; color: var(--ink); }
+.num { font-variant-numeric: tabular-nums; }
+.display { letter-spacing: -0.005em; line-height: 0.95; }
+.is-neg-text { color: var(--neg); }
+.is-pos-text { color: var(--pos); }
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 42px; padding: 0 18px; border: 1px solid var(--line); background: none; color: var(--ink); font: 500 14px/1 var(--text); text-decoration: none; white-space: nowrap; cursor: pointer; transition: border-color 180ms ease, background-color 180ms ease, transform 140ms var(--ease); }
+.btn:active { transform: scale(0.97); }
+.btn--primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+@media (hover: hover) and (pointer: fine) {
+  .btn:hover { border-color: #5a5a5a; }
+  .btn--primary:hover { background: var(--accent-strong); border-color: var(--accent-strong); }
+}
+
+/* ---------- shell: the runs on the left, the open run on the right ---------- */
+.app { display: grid; grid-template-columns: 236px minmax(0, 1fr); min-height: 100svh; }
+.side { position: sticky; top: 0; height: 100vh; height: 100svh; display: flex; flex-direction: column; gap: 32px; padding: 28px 14px 24px; border-right: 1px solid var(--rule); }
+.side__brand { font-size: 26px; text-decoration: none; padding: 0 10px; }
+.side__group { padding: 0 10px; font-size: 12px; color: var(--muted); }
+.side__list { display: flex; flex-direction: column; gap: 4px; margin-top: 10px; }
+.run { display: block; padding: 12px 10px 14px; text-decoration: none; color: var(--muted); transition: color 180ms ease, background-color 180ms ease; }
+.run__name { display: block; font-family: var(--display); text-transform: uppercase; font-size: 22px; line-height: 0.95; }
+.run__meta { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 10px; font-size: 12px; }
+.run.is-active { color: var(--ink); background: var(--surface); }
+@media (hover: hover) and (pointer: fine) { .run:not(.is-active):hover { color: var(--soft); } }
+.side__foot { margin-top: auto; padding: 0 10px; display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--soft); }
+.side__foot a { text-decoration: none; }
+.side__foot p { color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+.topbar { display: none; }
+
+.main { min-width: 0; display: flex; flex-direction: column; }
+.js .main { height: 100vh; height: 100svh; min-height: 660px; }
+.runview { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.runview[hidden] { display: none; }
+
+/* the answer, small and first */
+.head { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 24px var(--pad) 8px; }
+.head h1 { font-size: 30px; }
+.head__verdict { margin-top: 10px; display: flex; align-items: center; flex-wrap: wrap; gap: 10px; color: var(--soft); }
+.head .btn--primary { min-width: 164px; }
+
+/* ---------- a scene: the figure on the left, the stage to the edge on the right ---------- */
+.scenes { flex: 1; min-height: 0; padding-top: 16px; }
+.scene { height: 100%; display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); }
+.scene[hidden] { display: none; }
+.scene__text { min-height: 0; display: flex; flex-direction: column; gap: 28px; padding: 8px var(--pad) 28px; }
+.fig__n { display: flex; align-items: baseline; gap: 0.14em; font-family: var(--display); font-weight: 400; font-size: clamp(96px, 9.4vw, 184px); line-height: 0.8; letter-spacing: -0.01em; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.fig__unit { font-size: 0.3em; color: var(--soft); text-transform: uppercase; }
+.fig__sub { margin-top: 22px; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; color: var(--soft); max-width: 40ch; text-wrap: pretty; }
+.scene__body { margin-top: auto; display: flex; flex-direction: column; gap: 14px; }
+.scene__body h2 { font-size: 34px; }
+.scene__say { font-size: 18px; line-height: 1.5; color: var(--soft); max-width: 40ch; text-wrap: pretty; }
+.scene__say b { font-weight: 500; color: var(--ink); }
+.scene__nav { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+
+.stage { position: relative; min-height: 0; background: var(--surface); overflow: clip; }
+.face { position: absolute; inset: 0; margin: 0; }
+.face--num { display: none; overflow: auto; padding: 80px 40px 32px; }
+.numbers .face--pic { display: none; }
+.numbers .face--num { display: block; }
+.chart { display: flex; flex-direction: column; justify-content: center; padding: 72px clamp(28px, 4vw, 64px) 56px; }
+.stage__cap { position: absolute; left: clamp(28px, 4vw, 64px); right: clamp(28px, 4vw, 64px); bottom: 24px; font-size: 13px; color: var(--muted); max-width: 70ch; }
+
+/* picture or numbers: one switch for every scene */
+.view { position: absolute; z-index: 3; top: 16px; right: 16px; display: flex; padding: 3px; background: rgba(17, 17, 17, 0.9); border: 1px solid var(--line); }
+.view button { position: relative; border: 0; background: none; color: var(--muted); font: 500 13px/1 var(--text); padding: 9px 12px; cursor: pointer; }
+.view button[aria-pressed="true"] { color: var(--ink); }
+.view button[aria-pressed="true"]::after { content: ""; position: absolute; left: 12px; right: 12px; bottom: 3px; height: 1px; background: var(--accent); }
+@media (hover: hover) and (pointer: fine) { .view button:hover { color: var(--ink); } }
+
+/* numbers face */
+.boxes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.box { background: var(--bg); padding: 18px 20px; min-width: 0; }
+.box__title { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; font-weight: 500; font-size: 14px; }
+.box p { color: var(--soft); font-size: 14px; }
+.tbl { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+.tbl td { padding: 9px 16px 9px 0; border-top: 1px solid var(--rule); text-align: left; vertical-align: top; color: var(--soft); }
+.tbl td:first-child { color: var(--ink); }
+.tbl .r { text-align: right; }
+.tbl tr > :last-child { padding-right: 0; }
+
+/* briefs: the real crater, with the site marked */
+.photo { position: absolute; inset: 0; }
+.photo svg { display: block; width: 100%; height: 100%; }
+.inset { position: absolute; left: 16px; top: 16px; width: min(300px, 46%); padding: 18px 18px 14px; background: rgba(17, 17, 17, 0.92); }
+.inset__title { display: flex; align-items: center; gap: 10px; font-weight: 500; }
+.inset__title i { width: 10px; height: 10px; background: var(--accent); }
+.inset svg { display: block; width: 100%; height: auto; margin-top: 12px; }
+.inset p { margin-top: 10px; font-size: 13px; color: var(--muted); }
+.credit { position: absolute; right: 16px; bottom: 16px; padding: 4px 8px; background: rgba(17, 17, 17, 0.84); font-size: 12px; color: var(--muted); }
+
+/* bars against one line */
+.hbar { display: grid; grid-template-columns: 136px minmax(0, 1fr); align-items: center; gap: 20px; margin: 18px 0; }
+.hbar__label { font-size: 15px; color: var(--soft); }
+.hbar__label small { display: block; font-size: 12px; color: var(--muted); }
+.hbar__track { position: relative; height: 76px; }
+.hbar--thin .hbar__track { height: 40px; }
+.hbar--thin { margin: 12px 0; }
+.hbar--thin .ref { top: -18px; bottom: -18px; }
+.hbar__fill { position: absolute; top: 0; bottom: 0; left: 0; background: var(--bar); transform-origin: left center; }
+.hbar__fill.is-ink { background: var(--ink); }
+.hbar__fill.is-neg { background: var(--neg); }
+.hbar__val { position: absolute; top: 50%; transform: translateY(-50%); font-size: 22px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.hbar--thin .hbar__val { font-size: 16px; }
+.hbar__val.is-in { color: var(--accent-ink); }
+.ref { position: absolute; top: -12px; bottom: -12px; width: 2px; margin-left: -1px; background: var(--ink); }
+.axis { position: relative; height: 18px; margin: 10px 0 0 156px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.axis span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
+.axis span:first-child { transform: none; }
+.axis span.is-end { transform: translateX(-100%); }
+.axis .is-ref { color: var(--ink); }
+.core { margin-bottom: 26px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--soft); }
+.core code { padding: 3px 7px; background: var(--neg-bg); color: var(--neg); border-radius: 4px; font-size: 12px; }
+.core--below { margin: 30px 0 0; }
+
+/* dot plots: each round against the line it must stay under */
+.dots .row { display: grid; grid-template-columns: 136px minmax(0, 1fr) 120px; align-items: center; gap: 20px; height: 84px; }
+.dots .track { position: relative; height: 100%; }
+.dots .seg { position: absolute; top: 50%; height: 2px; margin-top: -1px; transform-origin: left center; }
+.dots .seg.is-neg { background: var(--neg); }
+.dots .seg.is-pos { background: var(--pos); transform-origin: right center; }
+.dots .seg.is-gain { background: var(--muted); transform-origin: right center; }
+.dots .dot { position: absolute; top: 50%; width: 22px; height: 22px; margin: -11px 0 0 -11px; border-radius: 50%; }
+.dots .dot.is-neg { background: var(--surface); border: 2px solid var(--neg); }
+.dots .dot.is-pos { background: var(--pos); }
+.dots .dot.is-was { background: var(--surface); border: 2px solid var(--muted); }
+.dots .dot.is-now { background: var(--ink); }
+.dots .val { text-align: right; font-size: 18px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.dots .val small { display: block; font-size: 12px; }
+.dots .axis { margin-right: 140px; }
+.try { display: grid; grid-template-columns: 136px minmax(0, 1fr) 120px; align-items: center; gap: 20px; margin-top: 26px; padding-top: 20px; border-top: 1px solid var(--line); }
+.try input { width: 100%; accent-color: var(--accent); cursor: pointer; }
+.try output { text-align: right; font-size: 15px; font-variant-numeric: tabular-nums; }
+
+/* lanes: one zone's work end to end against the deadline */
+.lanes { display: flex; flex-direction: column; gap: 14px; }
+.lane { display: grid; grid-template-columns: 136px minmax(0, 1fr); align-items: center; gap: 20px; }
+.lane__track { position: relative; height: 60px; background: var(--well); }
+.blk { position: absolute; top: 0; bottom: 0; padding: 0 6px; display: flex; align-items: center; overflow: hidden; white-space: nowrap; background: var(--ink); color: var(--accent-ink); font-size: 12px; font-weight: 500; transform-origin: left center; }
+.blk.is-neg { background: var(--neg); }
+.lane__val { position: absolute; top: 50%; transform: translateY(-50%); font-size: 18px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* the proof: hours used inside the deadline, then the schedule */
+.span { display: grid; grid-template-columns: 52px minmax(0, 1fr); gap: 14px; align-items: center; margin-bottom: 30px; font-size: 13px; color: var(--soft); }
+.span__track { position: relative; height: 12px; background: var(--well); }
+.span__fill { position: absolute; inset: 0 auto 0 0; background: var(--ink); transform-origin: left center; }
+.span__note { grid-column: 2; display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 20px; margin-bottom: 18px; font-size: 13px; color: var(--soft); }
+.legend i { display: inline-block; width: 10px; height: 10px; margin-right: 8px; }
+.gantt { display: flex; flex-direction: column; gap: 10px; }
+.g-row { display: grid; grid-template-columns: 52px minmax(0, 1fr); align-items: center; gap: 14px; font-size: 13px; color: var(--soft); }
+.g-track { position: relative; height: 40px; background: var(--well); }
+.gantt--dense .g-track { height: 34px; }
+.g-bar { position: absolute; top: 0; bottom: 0; background: var(--bar); transform-origin: left center; }
+.g-bar.is-ink { background: var(--ink); }
+.g-bar.is-key { background: var(--accent); }
+.g-axis { position: relative; height: 18px; margin: 10px 0 0 66px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.g-axis span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
+.g-axis span:first-child { transform: none; }
+.g-axis span:last-child { transform: translateX(-100%); color: var(--ink); }
+
+/* the failure, on film */
+.film { position: absolute; inset: 0; background: #000000; }
+.film video { width: 100%; height: 100%; object-fit: cover; display: block; }
+.film__tag { position: absolute; left: 16px; top: 16px; padding: 5px 9px; background: rgba(17, 17, 17, 0.84); font-size: 12px; color: var(--soft); }
+.events { position: absolute; left: 16px; right: 16px; bottom: 16px; margin: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 2px; }
+.events div { padding: 12px 14px; background: rgba(17, 17, 17, 0.88); }
+.events dt { font-size: 22px; font-variant-numeric: tabular-nums; line-height: 1.1; }
+.events dd { margin: 4px 0 0; font-size: 12px; color: var(--soft); }
+
+/* two hundred runs, one square each */
+.odds__block + .odds__block { margin-top: 34px; }
+.odds__head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; margin-bottom: 12px; }
+.odds__name { font-size: 15px; color: var(--soft); }
+.odds__pct { font-family: var(--display); font-size: 44px; line-height: 0.8; }
+.waffle { display: grid; grid-template-columns: repeat(25, minmax(0, 1fr)); gap: 4px; }
+.waffle i { display: block; aspect-ratio: 1; background: var(--off); }
+.waffle i.on { background: var(--ink); }
+.odds__note { margin-top: 10px; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+/* the advice a run ends with when no plan can hold: a bronze field, as on the landing */
+.advice { margin-top: 36px; padding: 22px 24px; background: var(--accent); color: var(--accent-ink); }
+.advice__k { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; font-size: 13px; font-weight: 500; }
+.advice__k code { color: inherit; }
+.advice__q { margin-top: 10px; font-size: 22px; line-height: 1.3; max-width: 32ch; }
+
+/* ---------- the scrubber: the run, step by step, filled while it replays ---------- */
+.scrub { list-style: none; margin: 0; padding: 18px var(--pad) 22px; display: grid; grid-template-columns: repeat(var(--n, 6), minmax(0, 1fr)); gap: 6px; }
+.step { position: relative; width: 100%; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 14px 0 2px; border: 0; background: none; color: var(--muted); font: 500 14px/1.2 var(--text); text-align: left; cursor: pointer; }
+.step::before, .step::after { content: ""; position: absolute; left: 0; top: 0; height: 2px; }
+.step::before { right: 0; background: var(--line); }
+.step::after { width: 0; background: var(--accent); }
+.step.is-done::after { width: 100%; background: #6a6a6a; }
+.step[aria-current="step"] { color: var(--ink); }
+.step[aria-current="step"]::after { width: 100%; }
+.is-playing .step[aria-current="step"]::after { animation: fill 4.5s linear both; }
+@keyframes fill { from { width: 0; } to { width: 100%; } }
+.step span { font-weight: 400; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.step .is-neg-text { color: var(--neg); }
+.step .is-pos-text { color: var(--pos); }
+@media (hover: hover) and (pointer: fine) { .step:not([aria-current]):hover { color: var(--soft); } }
+
+/* ---------- motion: a scene arrives, its marks grow; without script nothing waits hidden ---------- */
+@media (prefers-reduced-motion: no-preference) {
+  .js .scene.is-in .fig, .js .scene.is-in .scene__body, .js .scene.is-in .scene__nav { animation: rise 560ms var(--ease) both; }
+  .js .scene.is-in .scene__body { animation-delay: 80ms; }
+  .js .scene.is-in .scene__nav { animation-delay: 140ms; }
+  .js .scene.is-in .stage { animation: appear 640ms ease both; }
+  .js .scene.is-in .hbar__fill, .js .scene.is-in .g-bar, .js .scene.is-in .span__fill, .js .scene.is-in .dots .seg, .js .scene.is-in .blk { animation: grow 760ms var(--ease) both; animation-delay: 260ms; }
+  .js .scene.is-in .waffle i.on { animation: lit 240ms ease both; animation-delay: calc(240ms + var(--i) * 4ms); }
+}
+@keyframes rise { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: none; } }
+@keyframes appear { from { opacity: 0; } to { opacity: 1; } }
+@keyframes grow { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+@keyframes lit { from { background: var(--off); } to { background: var(--ink); } }
+
+/* ---------- tablet and phone: the scene reads top to bottom, the scrubber stays under the thumb ---------- */
+@media (max-width: 1100px) {
+  :root { --pad: 20px; }
+  .app { display: flex; flex-direction: column; }
+  .side { display: none; }
+  .topbar { display: flex; position: sticky; top: 0; z-index: 4; align-items: center; justify-content: space-between; gap: 12px; height: 52px; padding: 0 20px; background: var(--bg); border-bottom: 1px solid var(--rule); }
+  .topbar__brand { font-size: 22px; text-decoration: none; }
+  .topbar details { position: relative; }
+  .topbar summary { list-style: none; cursor: pointer; padding: 12px 0; font-size: 14px; }
+  .topbar summary::-webkit-details-marker { display: none; }
+  .topbar .sheet { position: absolute; right: 0; top: 46px; width: 280px; padding: 8px; background: var(--bg); border: 1px solid var(--line); }
+  .js .main { height: auto; min-height: 0; flex: 1; }
+  .head { padding-top: 20px; flex-wrap: wrap; }
+  .scene { height: auto; grid-template-columns: minmax(0, 1fr); }
+  .scene__text { display: contents; }
+  .fig { order: 1; padding: 16px var(--pad) 0; }
+  .scene__body { order: 2; margin-top: 0; padding: 28px var(--pad) 24px; }
+  .stage { order: 3; }
+  .scene__nav { order: 4; padding: 0 var(--pad) 28px; margin-top: 20px; }
+  .face { position: relative; inset: auto; }
+  .chart { padding: 64px var(--pad) 24px; }
+  .stage__cap { position: static; margin-top: 20px; }
+  .face--num { padding: 72px var(--pad) 24px; }
+  .photo, .film { position: relative; aspect-ratio: 4 / 3; }
+  .inset { position: static; width: auto; margin: 16px var(--pad) 0; background: var(--bg); }
+  .credit { right: 12px; bottom: 12px; }
+  .face--pic.brief { padding-bottom: 20px; }
+  .events { position: static; margin: 2px 0 0; }
+  .events div { background: var(--surface); }
+  .film__tag { top: auto; bottom: 12px; left: 12px; }
+  .scrub { position: sticky; bottom: 0; z-index: 4; background: var(--bg); border-top: 1px solid var(--rule); padding: 0 16px calc(12px + env(safe-area-inset-bottom, 0px)); gap: 4px; }
+}
+@media (max-width: 640px) {
+  .head { flex-direction: column; align-items: flex-start; gap: 18px; }
+  .head h1 { font-size: 26px; }
+  .fig__n { font-size: clamp(76px, 24vw, 120px); }
+  .scene__body h2 { font-size: 28px; }
+  .scene__say { font-size: 17px; }
+  .boxes { grid-template-columns: minmax(0, 1fr); }
+  .hbar, .lane { grid-template-columns: 80px minmax(0, 1fr); gap: 12px; }
+  .hbar__label { font-size: 13px; }
+  .hbar__track { height: 52px; }
+  .hbar__val { font-size: 16px; }
+  .lane__track { height: 48px; }
+  .lane__val { font-size: 14px; }
+  .blk { padding: 0; }
+  .blk span { display: none; }
+  .axis { margin-left: 92px; }
+  .dots .row { grid-template-columns: 80px minmax(0, 1fr); height: auto; padding: 10px 0; gap: 4px 12px; }
+  .dots .track { height: 30px; }
+  .dots .val { grid-column: 2; text-align: left; font-size: 14px; }
+  .dots .val small { display: inline; margin-left: 6px; }
+  .dots .axis { margin-right: 0; }
+  .try { grid-template-columns: 80px minmax(0, 1fr); gap: 4px 12px; }
+  .try output { grid-column: 2; text-align: left; }
+  .events dt { font-size: 18px; }
+  .waffle { gap: 3px; }
+  .odds__pct { font-size: 36px; }
+  .advice__q { font-size: 18px; }
+  .step { font-size: 12px; padding-top: 12px; }
+  .step span { display: none; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <aside class="side" aria-label="Runs">
+    <a class="side__brand display" href="index.html">Moonwright</a>
+    <div>
+      <p class="side__group">Recorded runs</p>
+      <nav class="side__list">
+        <a class="run is-active" href="#landing_pad" data-run-link="landing_pad" aria-current="page"><span class="run__name">Landing pad</span><span class="run__meta"><span class="pill pill--pos">Verified</span>72 h of 336 h</span></a>
+        <a class="run" href="#front_loaded" data-run-link="front_loaded"><span class="run__name">Impossible deadline</span><span class="run__meta"><span class="pill pill--none">No plan</span>needs 85 h of 60 h</span></a>
+        <a class="run" href="#habitat_berm" data-run-link="habitat_berm"><span class="run__name">Tight deadline</span><span class="run__meta"><span class="pill pill--pos">Verified</span>52 h of 72 h</span></a>
+      </nav>
+    </div>
+    <div class="side__foot">
+      <p>Recorded live on Nebius Token Factory, Oct 24 2026. No backend needed.</p>
+      <a href="index.html">Overview</a>
+      <a href="index.html#how">How it works</a>
+      <a href="https://github.com/nkm1020/moonwright">GitHub</a>
+    </div>
+  </aside>
+
+  <header class="topbar">
+    <a class="topbar__brand display" href="index.html">Moonwright</a>
+    <details>
+      <summary>Runs ▾</summary>
+      <div class="sheet">
+        <a class="run is-active" href="#landing_pad" data-run-link="landing_pad"><span class="run__name">Landing pad</span><span class="run__meta"><span class="pill pill--pos">Verified</span>72 h of 336 h</span></a>
+        <a class="run" href="#front_loaded" data-run-link="front_loaded"><span class="run__name">Impossible deadline</span><span class="run__meta"><span class="pill pill--none">No plan</span>needs 85 h of 60 h</span></a>
+        <a class="run" href="#habitat_berm" data-run-link="habitat_berm"><span class="run__name">Tight deadline</span><span class="run__meta"><span class="pill pill--pos">Verified</span>52 h of 72 h</span></a>
+      </div>
+    </details>
+  </header>
+
+  <main class="main">
+
+    <!-- ===================== Run 1: Landing pad ===================== -->
+    <section class="runview" data-run="landing_pad" aria-labelledby="h-lp">
+      <div class="head">
+        <div>
+          <h1 class="display" id="h-lp">Landing pad</h1>
+          <p class="head__verdict"><span class="pill pill--pos">Verified</span><span class="num">Done at hour 72 of a 336-hour deadline, after 2 repairs</span></p>
+        </div>
+        <button class="btn btn--primary replay" type="button" aria-pressed="false">Replay the run</button>
+      </div>
+
+      <div class="scenes">
+
+        <section class="scene is-in" data-scene="brief" aria-labelledby="t-lp-brief">
+          <div class="scene__text">
+            <div class="fig">
+              <p class="fig__n"><span data-count="336">336</span><span class="fig__unit">H</span></p>
+              <p class="fig__sub">to build two structures with seven robots, and nothing to recharge from</p>
+            </div>
+            <div class="scene__body">
+              <h2 id="t-lp-brief" class="display">What was asked</h2>
+              <p class="scene__say">A <b>20 m landing pad</b> and a <b>40 m blast berm</b> near Shackleton crater, in 14 days. Every battery is the whole job’s budget.</p>
+            </div>
+            <div class="scene__nav"><button class="btn" type="button" data-go="graph">Next: the first plan</button></div>
+          </div>
+          <div class="stage">
+            <div class="view" role="group" aria-label="Show"><button type="button" data-view="pic" aria-pressed="true">Picture</button><button type="button" data-view="num" aria-pressed="false">Numbers</button></div>
+            <figure class="face face--pic brief">
+              <div class="photo">
+                <svg viewBox="0 0 3032 2637" preserveAspectRatio="xMidYMid slice" role="img" aria-label="Shackleton crater at the lunar south pole, seen from orbit, with the site LS-1 marked just outside the rim">
+                  <image href="assets/shackleton-crater.jpg" width="3032" height="2637"/>
+                  <rect width="3032" height="2637" fill="#000" opacity="0.14"/>
+                  <circle cx="2510" cy="1451" r="102" fill="none" stroke="#a08672" stroke-width="2" vector-effect="non-scaling-stroke"/>
+                  <rect x="2485" y="1426" width="50" height="50" fill="#a08672"/>
+                </svg>
+                <span class="credit">Shackleton crater · LROC and ShadowCam, NASA/KARI/ASU</span>
+              </div>
+              <figcaption class="inset">
+                <p class="inset__title"><i></i>LS-1, the site in the brief</p>
+                <svg viewBox="0 0 640 400" aria-hidden="true">
+                  <g fill="none" stroke="#4a4a4a" stroke-width="2" stroke-dasharray="5 7"><circle cx="200" cy="96" r="76"/><circle cx="200" cy="292" r="76"/></g>
+                  <path d="M128 114 A 92 92 0 0 1 272 114" fill="none" stroke="#f2f2f2" stroke-width="18"/>
+                  <path d="M128 114 A 92 92 0 0 1 272 114" fill="none" stroke="#a08672" stroke-width="6"/>
+                  <circle cx="200" cy="292" r="48" fill="#262626" stroke="#f2f2f2" stroke-width="3"/>
+                  <rect x="184" y="380" width="32" height="14" fill="#9a9a9a"/>
+                  <path d="M200 176 V 212" stroke="#9a9a9a" stroke-width="2" stroke-dasharray="4 6"/>
+                  <g stroke="#5c5c5c" stroke-width="2"><path d="M284 92 H 340"/><path d="M256 292 H 340"/><path d="M226 387 H 340"/></g>
+                  <g font-family="Albert Sans, sans-serif" font-size="32">
+                    <text x="356" y="103" fill="#f2f2f2">Blast berm</text>
+                    <text x="356" y="303" fill="#f2f2f2">Landing pad</text>
+                    <text x="356" y="398" fill="#c8c8c8">Depot</text>
+                    <text x="216" y="206" fill="#9a9a9a" font-size="26">70 m</text>
+                  </g>
+                </svg>
+                <p>About 1.8 km from the rim. Bronze is the berm’s sintered crest, the part the solver will push back on. Dashed rings: one robot at a time. Not to scale.</p>
+              </figcaption>
+            </figure>
+            <div class="face face--num">
+              <div class="boxes">
+                <div class="box"><p class="box__title">Brief</p><p>Landing pad: circular, 20 m across. Dig a bowl 0.4 m deep to firm regolith, compact the subgrade, then sinter a 30 cm regolith surface. Blast berm: a 40 m arc on the north side, 1.5 m high and 4 m wide at the base, built from the pad’s spoil, compacted, with a sintered crest. Both complete and inspected within 14 days. Read by Nemotron 3.5 Lightning in 7.3 s.</p></div>
+                <div class="box"><p class="box__title">Fleet, each battery the whole job’s budget</p><table class="tbl"><tbody><tr><td>EX1, EX2</td><td>excavators</td><td class="r">5,000 Wh each</td></tr><tr><td>HL1, HL2</td><td>haulers</td><td class="r">3,000 Wh each</td></tr><tr><td>CP1</td><td>compactor</td><td class="r">3,500 Wh</td></tr><tr><td>PR1</td><td>printer</td><td class="r">4,000 Wh</td></tr><tr><td>SV1</td><td>surveyor</td><td class="r">1,500 Wh</td></tr></tbody></table></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="scene" data-scene="graph" aria-labelledby="t-lp-graph">
+          <div class="scene__text">
+            <div class="fig">
+              <p class="fig__n"><span data-count="4095">4,095</span><span class="fig__unit">WH</span></p>
+              <p class="fig__sub"><span class="pill pill--neg">95 Wh over</span>needed for the printing. PR1, the only printer, carries 4,000.</p>
+            </div>
+            <div class="scene__body">
+              <h2 id="t-lp-graph" class="display">The first plan is refused</h2>
+              <p class="scene__say">Nemotron 3 Ultra proposes 12 tasks. CP-SAT checks every battery and sends back the proof: the printing needs <b>95&nbsp;Wh more</b> than PR1 carries.</p>
+            </div>
+            <div class="scene__nav"><button class="btn" type="button" data-go="brief">Back</button><button class="btn" type="button" data-go="repair">Next: the repairs</button></div>
+          </div>
+          <div class="stage">
+            <div class="view" role="group" aria-label="Show"><button type="button" data-view="pic" aria-pressed="true">Picture</button><button type="button" data-view="num" aria-pressed="false">Numbers</button></div>
+            <figure class="face face--pic chart">
+              <p class="core"><span class="pill pill--neg">Refused</span><code>energy:printer</code></p>
+              <div class="hbar"><span class="hbar__label">PR1 battery</span><div class="hbar__track"><span class="hbar__fill" style="width:93%"></span><span class="hbar__val" style="right:calc(7% + 16px)">4,000 Wh</span></div></div>
+              <div class="hbar"><span class="hbar__label">Printing needs</span><div class="hbar__track"><span class="hbar__fill is-ink" style="width:93%"></span><span class="hbar__fill is-neg" style="left:93%;width:2.2%"></span><span class="ref" style="left:93%"></span><span class="hbar__val is-in" style="right:calc(7% + 16px)">4,095 Wh</span></div></div>
+              <div class="axis"><span style="left:0">0</span><span style="left:46.5%">2,000</span><span class="is-ref" style="left:93%">4,000 Wh</span></div>
+              <figcaption class="stage__cap">The red end is the 95 Wh the battery does not have: 4,078 Wh of sintering and 18 Wh of driving.</figcaption>
+            </figure>
+            <div class="face face--num">
+              <div class="boxes">
+                <div class="box"><p class="box__title">Core sent back to Nemotron <span class="pill pill--neg">Refused</span></p><p><code>energy:printer</code> Printer tasks need at least 4,095 Wh: 4,078 Wh of work and 18 Wh of travel. PR1 carries 4,000 Wh.</p></div>
+                <div class="box"><p class="box__title">The printer’s tasks</p><table class="tbl"><tbody><tr><td>T9 Sinter the pad</td><td class="r">314 m²</td><td class="r">2,702 Wh</td></tr><tr><td>T10 Sinter the berm crest</td><td class="r">160 m²</td><td class="r">1,376 Wh</td></tr><tr><td>Travel</td><td class="r"></td><td class="r">18 Wh</td></tr></tbody></table></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="scene" data-scene="repair" aria-labelledby="t-lp-repair">
+          <div class="scene__text">
+            <div class="fig">
+              <p class="fig__n"><span data-count="145">145</span><span class="fig__unit">M²</span></p>
+              <p class="fig__sub"><span class="pill pill--pos">Fits</span>of berm crest, down from 160; the printing now needs 3,966 Wh</p>
+            </div>
+            <div class="scene__body">
+              <h2 id="t-lp-repair" class="display">Two repairs from the proof</h2>
+              <p class="scene__say">Nemotron reads the numbers and sinters less of the crest. 150&nbsp;m² is still 9&nbsp;Wh over; <b>145&nbsp;m² fits</b>. Drag the slider to try it.</p>
+            </div>
+            <div class="scene__nav"><button class="btn" type="button" data-go="graph">Back</button><button class="btn" type="button" data-go="verified">Next: the proof</button></div>
+          </div>
+          <div class="stage">
+            <div class="view" role="group" aria-label="Show"><button type="button" data-view="pic" aria-pressed="true">Picture</button><button type="button" data-view="num" aria-pressed="false">Numbers</button></div>
+            <figure class="face face--pic chart dots">
+              <div class="row"><span class="hbar__label">First plan<small>160 m²</small></span><div class="track"><span class="ref" style="left:45.45%"></span><span class="seg is-neg" style="left:45.45%;width:43.19%"></span><span class="dot is-neg" style="left:88.64%"></span></div><span class="val">4,095 Wh<small class="is-neg-text">95 over</small></span></div>
+              <div class="row"><span class="hbar__label">Repair 1<small>150 m²</small></span><div class="track"><span class="ref" style="left:45.45%"></span><span class="seg is-neg" style="left:45.45%;width:4.1%"></span><span class="dot is-neg" style="left:49.55%"></span></div><span class="val">4,009 Wh<small class="is-neg-text">9 over</small></span></div>
+              <div class="row"><span class="hbar__label">Repair 2<small>145 m²</small></span><div class="track"><span class="ref" style="left:45.45%"></span><span class="seg is-pos" style="left:30%;width:15.45%"></span><span class="dot is-pos" style="left:30%"></span></div><span class="val">3,966 Wh<small class="is-pos-text">34 spare</small></span></div>
+              <div class="axis"><span style="left:0">3,900</span><span class="is-ref" style="left:45.45%">4,000 Wh</span><span style="left:90.9%">4,100</span></div>
+              <div class="try"><label class="hbar__label" for="crest">Try a crest</label><input type="range" id="crest" min="100" max="170" value="160"><output id="crest-out" for="crest" class="is-neg-text">160 m² · 95 over</output></div>
+              <figcaption class="stage__cap">Red is over PR1’s 4,000 Wh, green fits. The slider runs the same energy check in your browser.</figcaption>
+            </figure>
+            <div class="face face--num">
+              <div class="boxes">
+                <div class="box"><p class="box__title">Repair 1 · 45 s <span class="pill pill--neg">Refused</span></p><p>T10 crest 160 → 150 m², 1,376 → 1,290 Wh. The printer still needs 4,009 Wh, 9 over.</p></div>
+                <div class="box"><p class="box__title">Repair 2 · 18 s <span class="pill pill--pos">Verified</span></p><p>T10 crest 150 → 145 m², 1,247 Wh. T12 now waits for T10 and T8. The model’s own note: “reduced to meet printer battery”.</p></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="scene" data-scene="verified" aria-labelledby="t-lp-verified">
+          <div class="scene__text">
+            <div class="fig">
+              <p class="fig__n"><span data-count="72">72</span><span class="fig__unit">H</span></p>
+              <p class="fig__sub"><span class="pill pill--pos">Verified</span>of a 336-hour deadline, proven optimal in 13 ms</p>
+            </div>
+            <div class="scene__body">
+              <h2 id="t-lp-verified" class="display">Proven: done at hour 72</h2>
+              <p class="scene__say">CP-SAT schedules all 12 tasks: every order, zone and battery holds, and <b>no schedule finishes sooner</b>.</p>
+            </div>
+            <div class="scene__nav"><button class="btn" type="button" data-go="repair">Back</button><button class="btn" type="button" data-go="failure">Next: a robot fails</button></div>
+          </div>
+          <div class="stage">
+            <div class="view" role="group" aria-label="Show"><button type="button" data-view="pic" aria-pressed="true">Picture</button><button type="button" data-view="num" aria-pressed="false">Numbers</button></div>
+            <figure class="face face--pic chart">
+              <div class="span"><span>Deadline</span><div class="span__track"><span class="span__fill" style="width:21.43%"></span></div><p class="span__note"><span>72 h used</span><span>336 h</span></p></div>
+              <p class="legend"><span><i style="background:var(--accent)"></i>T10, the crest refused twice</span><span><i style="background:var(--ink)"></i>T9, PR1’s other task</span><span><i style="background:var(--bar)"></i>other robots’ tasks</span></p>
+              <div class="gantt">
+                <div class="g-row"><span>SV1</span><div class="g-track"><span class="g-bar" style="left:0%;width:4.17%"></span><span class="g-bar" style="left:8.33%;width:2.78%"></span><span class="g-bar" style="left:79.17%;width:1.39%"></span><span class="g-bar" style="left:98.61%;width:1.39%"></span></div></div>
+                <div class="g-row"><span>EX1</span><div class="g-track"><span class="g-bar" style="left:4.17%;width:12.5%"></span><span class="g-bar" style="left:16.9%;width:12.27%"></span></div></div>
+                <div class="g-row"><span>HL2</span><div class="g-track"><span class="g-bar" style="left:29.17%;width:6.94%"></span><span class="g-bar" style="left:36.3%;width:6.75%"></span></div></div>
+                <div class="g-row"><span>CP1</span><div class="g-track"><span class="g-bar" style="left:29.17%;width:18.06%"></span><span class="g-bar" style="left:51.39%;width:9.72%"></span></div></div>
+                <div class="g-row"><span>PR1</span><div class="g-track"><span class="g-bar is-ink" style="left:47.22%;width:31.94%"></span><span class="g-bar is-key" style="left:83.33%;width:15.28%"></span></div></div>
+              </div>
+              <div class="g-axis"><span style="left:0%">0 h</span><span style="left:33.33%">24</span><span style="left:66.67%">48</span><span style="left:100%">72 h</span></div>
+              <figcaption class="stage__cap">EX2 and HL1 stay idle: one robot per zone at a time, so a second excavator would only wait.</figcaption>
+            </figure>
+            <div class="face face--num">
+              <div class="boxes">
+                <div class="box"><p class="box__title">CP-SAT’s receipt <span class="pill pill--pos">Verified</span></p><table class="tbl"><tbody><tr><td>Precedence</td><td class="r">18 edges hold</td></tr><tr><td>Robots</td><td class="r">7, no overlaps</td></tr><tr><td>Safety zones</td><td class="r">2, one robot each</td></tr><tr><td>Batteries, with travel</td><td class="r">PR1 3,966 of 4,000 Wh</td></tr><tr><td>Status</td><td class="r">optimal, re-checked independently</td></tr></tbody></table></div>
+                <div class="box"><p class="box__title">Tasks, in start order</p><table class="tbl"><tbody><tr><td>T1 Survey the pad</td><td>SV1</td><td class="r">0–3 h</td></tr><tr><td>T3 Dig the pad, part 1</td><td>EX1</td><td class="r">3–12 h</td></tr><tr><td>T9 Sinter the pad</td><td>PR1</td><td class="r">34–57 h</td></tr><tr><td>T10 Sinter the berm crest</td><td>PR1</td><td class="r">60–71 h</td></tr><tr><td colspan="3" style="color:var(--muted)">and 8 more</td></tr></tbody></table></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="scene" data-scene="failure" aria-labelledby="t-lp-failure">
+          <div class="scene__text">
+            <div class="fig">
+              <p class="fig__n"><span data-count="79">79</span><span class="fig__unit">H</span></p>
+              <p class="fig__sub">finished anyway, after excavator EX1 broke down at hour 10</p>
+            </div>
+            <div class="scene__body">
+              <h2 id="t-lp-failure" class="display">A robot fails at hour 10</h2>
+              <p class="scene__say">EX1 stops 78&nbsp;% through its first dig. CP-SAT replans the other 10 tasks in 0.01&nbsp;s and <b>EX2 takes over the digs</b>.</p>
+            </div>
+            <div class="scene__nav"><button class="btn" type="button" data-go="verified">Back</button><button class="btn" type="button" data-go="odds">Next: how often it holds</button></div>
+          </div>
+          <div class="stage">
+            <div class="view" role="group" aria-label="Show"><button type="button" data-view="pic" aria-pressed="true">Picture</button><button type="button" data-view="num" aria-pressed="false">Numbers</button></div>
+            <figure class="face face--pic failure">
+              <div class="film">
+                <video muted loop playsinline preload="none" poster="assets/isaac-closed-loop-poster.jpg" width="1920" height="1080" aria-label="Seven rovers carry out the verified schedule on NASA LOLA terrain of Shackleton's rim in NVIDIA Isaac Sim; EX1, in red, stops at hour 10"><source src="assets/isaac-closed-loop.webm" type="video/webm"></video>
+                <span class="film__tag">NVIDIA Isaac Sim, on NASA LOLA terrain of Shackleton’s rim</span>
+              </div>
+              <dl class="events">
+                <div><dt class="is-neg-text">10 h</dt><dd>EX1 fails on T3, 78 % done</dd></div>
+                <div><dt>0.01 s</dt><dd>CP-SAT replans 10 tasks</dd></div>
+                <div><dt>79 h</dt><dd>done, 257 h inside the deadline</dd></div>
+              </dl>
+            </figure>
+            <div class="face face--num">
+              <div class="boxes">
+                <div class="box"><p class="box__title">Events</p><table class="tbl"><tbody><tr><td class="num">10 h</td><td>EX1 fails on T3, 78 % done; that work is lost</td></tr><tr><td class="num">10 h</td><td>CP-SAT replans 10 tasks; EX2 takes over the digs; Nemotron not needed</td></tr><tr><td class="num">79 h</td><td>Done, 7 h later than planned, 257 h inside the deadline</td></tr></tbody></table></div>
+                <div class="box"><p class="box__title">2D replay</p><p>The same run in Moonwright’s own simulator, with a scrubber and the failure marked at hour 10.</p></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="scene" data-scene="odds" aria-labelledby="t-lp-odds">
+          <div class="scene__text">
+            <div class="fig">
+              <p class="fig__n"><span data-count="86">86</span><span class="fig__unit">%</span></p>
+              <p class="fig__sub">of runs on time with three spare robots, up from 37 %</p>
+            </div>
+            <div class="scene__body">
+              <h2 id="t-lp-odds" class="display">How often it holds</h2>
+              <p class="scene__say">200 simulated runs, each with random breakdowns. As planned, 74 finish on time. <b>With a spare printer, compactor and surveyor, 172 do.</b></p>
+            </div>
+            <div class="scene__nav"><button class="btn" type="button" data-go="failure">Back</button><a class="btn" href="#front_loaded" data-run-link="front_loaded">Next run: Impossible deadline</a></div>
+          </div>
+          <div class="stage">
+            <div class="view" role="group" aria-label="Show"><button type="button" data-view="pic" aria-pressed="true">Picture</button><button type="button" data-view="num" aria-pressed="false">Numbers</button></div>
+            <figure class="face face--pic chart">
+              <div class="odds__block">
+                <div class="odds__head"><span class="odds__name">As planned</span><span class="odds__pct">37 %</span></div>
+                <div class="waffle" data-n="200" data-lit="74" role="img" aria-label="74 of 200 runs on time"></div>
+                <p class="odds__note">74 of 200 on time · 95 % interval 31–44 %</p>
+              </div>
+              <div class="odds__block">
+                <div class="odds__head"><span class="odds__name">With CP2, PR2 and SV2</span><span class="odds__pct">86 %</span></div>
+                <div class="waffle" data-n="200" data-lit="172" role="img" aria-label="172 of 200 runs on time"></div>
+                <p class="odds__note">172 of 200 on time · 95 % interval 81–90 %</p>
+              </div>
+              <figcaption class="stage__cap">Each square is one simulated run; lit squares finished on time.</figcaption>
+            </figure>
+            <div class="face face--num">
+              <div class="boxes">
+                <div class="box"><p class="box__title">Outcomes of 200 runs, as planned</p><table class="tbl"><tbody><tr><td>Finished on time</td><td class="r">74</td></tr><tr><td>Lost every robot of a type</td><td class="r">119</td></tr><tr><td>Replan proved infeasible</td><td class="r">7</td></tr></tbody></table></div>
+                <div class="box"><p class="box__title">Robots the plan cannot lose</p><table class="tbl"><tbody><tr><td>PR1, the only printer</td><td class="r">in 88 misses</td></tr><tr><td>CP1, the only compactor</td><td class="r">in 21</td></tr><tr><td>SV1, the only surveyor</td><td class="r">in 24</td></tr></tbody></table></div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <ol class="scrub" style="--n:6" aria-label="The landing pad run, scene by scene">
+        <li><button class="step" type="button" data-go="brief" aria-current="step">Brief<span>336 h</span></button></li>
+        <li><button class="step" type="button" data-go="graph">Refused<span class="is-neg-text">4,095 Wh</span></button></li>
+        <li><button class="step" type="button" data-go="repair">Repairs<span>145 m²</span></button></li>
+        <li><button class="step" type="button" data-go="verified">Proven<span class="is-pos-text">72 h</span></button></li>
+        <li><button class="step" type="button" data-go="failure">Failure<span>79 h</span></button></li>
+        <li><button class="step" type="button" data-go="odds">Odds<span>86 %</span></button></li>
+      </ol>
+    </section>
+
+    <!-- ===================== Run 2: Impossible deadline ===================== -->
+    <section class="runview" data-run="front_loaded" aria-labelledby="h-fl" hidden>
+      <div class="head">
+        <div>
+          <h1 class="display" id="h-fl">Impossible deadline</h1>
+          <p class="head__verdict"><span class="pill pill--none">No plan</span><span class="num">Needs 85 h; the deadline is 60 h. Proven after 3 refused repairs</span></p>
+        </div>
+        <button class="btn btn--primary replay" type="button" aria-pressed="false">Replay the run</button>
+      </div>
+
+      <div class="scenes">
+
+        <section class="scene" data-scene="brief" aria-labelledby="t-fl-brief">
+          <div class="scene__text">
+            <div class="fig">
+              <p class="fig__n"><span data-count="60">60</span><span class="fig__unit">H</span></p>
+              <p class="fig__sub">until a heavy cargo lander’s window opens; it cannot be delayed</p>
+            </div>
+            <div class="scene__body">
+              <h2 id="t-fl-brief" class="display">What was asked</h2>
+              <p class="scene__say">A <b>30 m heavy-lander pad</b> and a <b>70 m spoil berm</b>. The brief forbids a smaller pad, and the pad is one zone: <b>one robot inside at a time</b>.</p>
+            </div>
+            <div class="scene__nav"><button class="btn" type="button" data-go="graph">Next: the first plan</button></div>
+          </div>
+          <div class="stage">
+            <div class="view" role="group" aria-label="Show"><button type="button" data-view="pic" aria-pressed="true">Picture</button><button type="button" data-view="num" aria-pressed="false">Numbers</button></div>
+            <figure class="face face--pic brief">
+              <div class="photo">
+                <svg viewBox="0 0 3032 2637" preserveAspectRatio="xMidYMid slice" role="img" aria-label="Shackleton crater at the lunar south pole, seen from orbit, with the site LS-1 marked just outside the rim">
+                  <image href="assets/shackleton-crater.jpg" width="3032" height="2637"/>
+                  <rect width="3032" height="2637" fill="#000" opacity="0.14"/>
+                  <circle cx="2510" cy="1451" r="102" fill="none" stroke="#a08672" stroke-width="2" vector-effect="non-scaling-stroke"/>
+                  <rect x="2485" y="1426" width="50" height="50" fill="#a08672"/>
+                </svg>
+                <span class="credit">Shackleton crater · LROC and ShadowCam, NASA/KARI/ASU</span>
+              </div>
+              <figcaption class="inset">
+                <p class="inset__title"><i></i>LS-1, the site in the brief</p>
+                <svg viewBox="0 0 640 400" aria-hidden="true">
+                  <g fill="none" stroke="#4a4a4a" stroke-width="2" stroke-dasharray="5 7"><circle cx="200" cy="96" r="80"/><circle cx="200" cy="292" r="80"/></g>
+                  <path d="M104 124 A 112 112 0 0 1 296 124" fill="none" stroke="#f2f2f2" stroke-width="18"/>
+                  <circle cx="200" cy="292" r="62" fill="#262626" stroke="#f2f2f2" stroke-width="3"/>
+                  <rect x="184" y="382" width="32" height="14" fill="#9a9a9a"/>
+                  <path d="M200 178 V 210" stroke="#9a9a9a" stroke-width="2" stroke-dasharray="4 6"/>
+                  <g stroke="#5c5c5c" stroke-width="2"><path d="M300 100 H 340"/><path d="M270 292 H 340"/><path d="M226 389 H 340"/></g>
+                  <g font-family="Albert Sans, sans-serif" font-size="32">
+                    <text x="356" y="111" fill="#f2f2f2">Spoil berm</text>
+                    <text x="356" y="303" fill="#f2f2f2">Heavy pad</text>
+                    <text x="356" y="400" fill="#c8c8c8">Depot</text>
+                  </g>
+                </svg>
+                <p>A 30 m bowl, 0.4 m deep, and a 70 m berm built from its spoil. No printer on site. Dashed rings: one robot at a time. Not to scale.</p>
+              </figcaption>
+            </figure>
+            <div class="face face--num">
+              <div class="boxes">
+                <div class="box"><p class="box__title">Brief</p><p>Heavy-lander pad: circular, 30 m across, dug 0.4 m to firm regolith across the full footprint (about 283 m³), subgrade compacted and inspected. Spoil berm: a 70 m arc on the north side, 2 m high and 4 m wide, built from the pad spoil and compacted. 60 hours. The lander cannot be delayed and the pad cannot be made smaller. Plume and dust safety allow one robot inside the pad at a time. Read by Nemotron 3.5 Lightning in 3.8 s.</p></div>
+                <div class="box"><p class="box__title">Fleet: energy is not the problem here, time is</p><table class="tbl"><tbody><tr><td>EX1, EX2</td><td>excavators</td><td class="r">5,000 Wh each</td></tr><tr><td>HL1, HL2</td><td>haulers</td><td class="r">3,000 Wh each</td></tr><tr><td>CP1, CP2</td><td>compactors</td><td class="r">3,500 Wh each</td></tr><tr><td>SV1</td><td>surveyor</td><td class="r">1,500 Wh</td></tr></tbody></table></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="scene" data-scene="graph" aria-labelledby="t-fl-graph">
+          <div class="scene__text">
+            <div class="fig">
+              <p class="fig__n"><span data-count="75">75</span><span class="fig__unit">H</span></p>
+              <p class="fig__sub"><span class="pill pill--neg">15 h over</span>of work in the pad zone, where only one robot may work at a time</p>
+            </div>
+            <div class="scene__body">
+              <h2 id="t-fl-graph" class="display">The first plan is refused</h2>
+              <p class="scene__say">Nemotron 3 Ultra proposes 8 tasks. CP-SAT proves they cannot fit: the five pad tasks need <b>75&nbsp;h in one zone</b>, and the berm cannot start until the digging ends.</p>
+            </div>
+            <div class="scene__nav"><button class="btn" type="button" data-go="brief">Back</button><button class="btn" type="button" data-go="repair">Next: the repairs</button></div>
+          </div>
+          <div class="stage">
+            <div class="view" role="group" aria-label="Show"><button type="button" data-view="pic" aria-pressed="true">Picture</button><button type="button" data-view="num" aria-pressed="false">Numbers</button></div>
+            <figure class="face face--pic chart">
+              <p class="core"><span class="pill pill--neg">Refused</span><code>horizon</code><code>zone:Z1</code></p>
+              <div class="lanes">
+                <div class="lane"><span class="hbar__label">Pad zone Z1<small>5 tasks, end to end</small></span><div class="lane__track">
+                  <span class="blk" style="left:0;width:calc(5% - 2px)" title="T1 Survey the pad, 5 h"></span>
+                  <span class="blk" style="left:5%;width:calc(21% - 2px)"><span>Dig</span></span>
+                  <span class="blk" style="left:26%;width:calc(21% - 2px)"><span>Dig</span></span>
+                  <span class="blk" style="left:47%;width:13%"><span>Compact</span></span>
+                  <span class="blk is-neg" style="left:60%;width:calc(1% - 2px)"></span>
+                  <span class="blk is-neg" style="left:61%;width:14%"><span>Compact</span></span>
+                  <span class="ref" style="left:60%"></span>
+                  <span class="lane__val" style="left:calc(75% + 10px)">75 h</span>
+                </div></div>
+                <div class="lane"><span class="hbar__label">Berm zone Z2<small>after the second dig</small></span><div class="lane__track">
+                  <span class="blk" style="left:47%;width:calc(12% - 2px)"><span>Haul</span></span>
+                  <span class="blk" style="left:59%;width:1%"></span>
+                  <span class="blk is-neg" style="left:60%;width:calc(11% - 2px)"><span>Haul</span></span>
+                  <span class="blk is-neg" style="left:71%;width:11%" title="T8 Compact the berm, 11 h"></span>
+                  <span class="ref" style="left:60%"></span>
+                  <span class="lane__val" style="left:calc(82% + 10px)">82 h</span>
+                </div></div>
+              </div>
+              <div class="axis"><span style="left:0">0 h</span><span style="left:30%">30</span><span class="is-ref" style="left:60%">60 h deadline</span><span style="left:90%">90</span></div>
+              <figcaption class="stage__cap">One robot at a time in the pad zone, so its tasks run end to end. Red is past hour 60.</figcaption>
+            </figure>
+            <div class="face face--num">
+              <div class="boxes">
+                <div class="box"><p class="box__title">Core sent back to Nemotron <span class="pill pill--neg">Refused</span></p><p><code>horizon</code> <code>zone:Z1</code> The plan cannot finish within 60 h: the longest chain alone needs 52 h with the drive to its first zone. Zone Z1 admits one robot at a time, so its 5 tasks, 75 h in total, cannot overlap.</p></div>
+                <div class="box"><p class="box__title">The 8 tasks</p><table class="tbl"><tbody><tr><td>T1 Survey the pad</td><td>Z1</td><td class="r">5 h</td></tr><tr><td>T2, T3 Dig the pad</td><td>Z1</td><td class="r">21 h each</td></tr><tr><td>T4, T5 Compact the pad</td><td>Z1</td><td class="r">14 h each</td></tr><tr><td>T6, T7 Haul to the berm</td><td>Z2</td><td class="r">12 h each</td></tr><tr><td>T8 Compact the berm</td><td>Z2</td><td class="r">11 h</td></tr></tbody></table></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="scene" data-scene="repair" aria-labelledby="t-fl-repair">
+          <div class="scene__text">
+            <div class="fig">
+              <p class="fig__n"><span data-count="3">3</span><span class="fig__unit">Repairs</span></p>
+              <p class="fig__sub"><span class="pill pill--neg">All refused</span>each reorders the same 8 tasks; none gets under hour 60</p>
+            </div>
+            <div class="scene__body">
+              <h2 id="t-fl-repair" class="display">Three repairs, all refused</h2>
+              <p class="scene__say">Nemotron reorders the work three times. Each round comes back with numbers: an <b>82&nbsp;h critical path</b>, or the pad zone’s 75&nbsp;h again. The work itself cannot shrink.</p>
+            </div>
+            <div class="scene__nav"><button class="btn" type="button" data-go="graph">Back</button><button class="btn" type="button" data-go="advice">Next: the answer</button></div>
+          </div>
+          <div class="stage">
+            <div class="view" role="group" aria-label="Show"><button type="button" data-view="pic" aria-pressed="true">Picture</button><button type="button" data-view="num" aria-pressed="false">Numbers</button></div>
+            <figure class="face face--pic chart dots">
+              <div class="row"><span class="hbar__label">First plan<small>zone:Z1</small></span><div class="track"><span class="ref" style="left:25%"></span><span class="seg is-neg" style="left:25%;width:37.5%"></span><span class="dot is-neg" style="left:62.5%"></span></div><span class="val">75 h<small class="is-neg-text">15 over</small></span></div>
+              <div class="row"><span class="hbar__label">Repair 1<small>critical path</small></span><div class="track"><span class="ref" style="left:25%"></span><span class="seg is-neg" style="left:25%;width:55%"></span><span class="dot is-neg" style="left:80%"></span></div><span class="val">82 h<small class="is-neg-text">22 over</small></span></div>
+              <div class="row"><span class="hbar__label">Repair 2<small>zone:Z1</small></span><div class="track"><span class="ref" style="left:25%"></span><span class="seg is-neg" style="left:25%;width:37.5%"></span><span class="dot is-neg" style="left:62.5%"></span></div><span class="val">75 h<small class="is-neg-text">15 over</small></span></div>
+              <div class="row"><span class="hbar__label">Repair 3<small>critical path</small></span><div class="track"><span class="ref" style="left:25%"></span><span class="seg is-neg" style="left:25%;width:55%"></span><span class="dot is-neg" style="left:80%"></span></div><span class="val">82 h<small class="is-neg-text">22 over</small></span></div>
+              <div class="axis"><span style="left:0">50</span><span class="is-ref" style="left:25%">60 h deadline</span><span style="left:75%">80</span></div>
+              <figcaption class="stage__cap">Every round lands past the 60 h line. Reordering cannot shorten work the brief fixes.</figcaption>
+            </figure>
+            <div class="face face--num">
+              <div class="boxes">
+                <div class="box"><p class="box__title">Rounds</p><table class="tbl"><tbody><tr><td>First plan · 47 s</td><td><code>horizon</code> <code>zone:Z1</code></td><td class="r">75 h in Z1</td></tr><tr><td>Repair 1 · 62 s</td><td>critical path</td><td class="r">82 h</td></tr><tr><td>Repair 2 · 49 s</td><td><code>horizon</code> <code>zone:Z1</code></td><td class="r">75 h in Z1</td></tr><tr><td>Repair 3 · 142 s</td><td>critical path</td><td class="r">82 h</td></tr></tbody></table></div>
+                <div class="box"><p class="box__title">The chain that will not fit</p><p>T1 → T2 → T3 → T6 → T7 → T8: survey, both digs, both hauls, compact the berm. 82 h in sequence against a 60 h horizon. A dig-to-haul edge cannot be dropped: the berm is built from the pad’s spoil.</p></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="scene" data-scene="advice" aria-labelledby="t-fl-advice">
+          <div class="scene__text">
+            <div class="fig">
+              <p class="fig__n"><span data-count="85">85</span><span class="fig__unit">H</span></p>
+              <p class="fig__sub"><span class="pill pill--none">No plan</span>the earliest finish CP-SAT can prove: 25 h past the deadline</p>
+            </div>
+            <div class="scene__body">
+              <h2 id="t-fl-advice" class="display">No plan, and the reason</h2>
+              <p class="scene__say">Rather than shrink the pad the brief forbids, Moonwright stops and says what would work: <b>open the window at hour 85</b>. On the impossible briefs in the evaluation, 7 of 9 runs ended this way.</p>
+            </div>
+            <div class="scene__nav"><button class="btn" type="button" data-go="repair">Back</button><a class="btn" href="#habitat_berm" data-run-link="habitat_berm">Next run: Tight deadline</a></div>
+          </div>
+          <div class="stage">
+            <div class="view" role="group" aria-label="Show"><button type="button" data-view="pic" aria-pressed="true">Picture</button><button type="button" data-view="num" aria-pressed="false">Numbers</button></div>
+            <figure class="face face--pic chart">
+              <div class="hbar"><span class="hbar__label">Deadline</span><div class="hbar__track"><span class="hbar__fill" style="width:66.67%"></span><span class="hbar__val" style="right:calc(33.33% + 16px)">60 h</span></div></div>
+              <div class="hbar"><span class="hbar__label">Earliest finish<small>proven by CP-SAT</small></span><div class="hbar__track"><span class="hbar__fill is-ink" style="width:66.67%"></span><span class="hbar__fill is-neg" style="left:66.67%;width:27.77%"></span><span class="ref" style="left:66.67%"></span><span class="hbar__val is-in" style="right:calc(33.33% + 16px)">85 h</span></div></div>
+              <div class="axis"><span style="left:0">0 h</span><span style="left:33.33%">30</span><span class="is-ref" style="left:66.67%">60 h</span><span class="is-end" style="left:100%">90</span></div>
+              <div class="advice">
+                <p class="advice__k"><code>extend_horizon</code><span>CP-SAT optimal</span></p>
+                <p class="advice__q">“Finishing needs 85 h, 25 h past the 60 h deadline.”</p>
+              </div>
+            </figure>
+            <div class="face face--num">
+              <div class="boxes">
+                <div class="box"><p class="box__title">Advice <span class="pill pill--pos">Proven</span></p><table class="tbl"><tbody><tr><td>Kind</td><td class="r"><code>extend_horizon</code></td></tr><tr><td>Earliest finish</td><td class="r">85 h, optimal</td></tr><tr><td>Past the deadline</td><td class="r">25 h</td></tr><tr><td>Work trimmed</td><td class="r">none</td></tr></tbody></table></div>
+                <div class="box"><p class="box__title">In the evaluation</p><p>On the three briefs built to be impossible, 7 of 9 Nemotron 3 Ultra runs ended without a plan, 5 of them with advice CP-SAT proved. The 2 that verified had cut 10–40 % of the work and are counted out of scope.</p></div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <ol class="scrub" style="--n:4" aria-label="The impossible deadline run, scene by scene">
+        <li><button class="step" type="button" data-go="brief">Brief<span>60 h</span></button></li>
+        <li><button class="step" type="button" data-go="graph">Refused<span class="is-neg-text">75 h in Z1</span></button></li>
+        <li><button class="step" type="button" data-go="repair">Repairs<span class="is-neg-text">3 refused</span></button></li>
+        <li><button class="step" type="button" data-go="advice">Answer<span>85 h needed</span></button></li>
+      </ol>
+    </section>
+
+    <!-- ===================== Run 3: Tight deadline ===================== -->
+    <section class="runview" data-run="habitat_berm" aria-labelledby="h-hb" hidden>
+      <div class="head">
+        <div>
+          <h1 class="display" id="h-hb">Tight deadline</h1>
+          <p class="head__verdict"><span class="pill pill--pos">Verified</span><span class="num">Done at hour 52 of a 72-hour deadline, after 1 repair</span></p>
+        </div>
+        <button class="btn btn--primary replay" type="button" aria-pressed="false">Replay the run</button>
+      </div>
+
+      <div class="scenes">
+
+        <section class="scene" data-scene="brief" aria-labelledby="t-hb-brief">
+          <div class="scene__text">
+            <div class="fig">
+              <p class="fig__n"><span data-count="72">72</span><span class="fig__unit">H</span></p>
+              <p class="fig__sub">until a crew lander arrives on day four; the berm must be done</p>
+            </div>
+            <div class="scene__body">
+              <h2 id="t-hb-brief" class="display">What was asked</h2>
+              <p class="scene__say">A <b>foundation pit</b>, a <b>70 m plume berm</b> and a <b>borrow strip</b>, 400 m north of the landing pad. The site lead prefers one structure at a time, but that yields to the deadline.</p>
+            </div>
+            <div class="scene__nav"><button class="btn" type="button" data-go="graph">Next: the first plan</button></div>
+          </div>
+          <div class="stage">
+            <div class="view" role="group" aria-label="Show"><button type="button" data-view="pic" aria-pressed="true">Picture</button><button type="button" data-view="num" aria-pressed="false">Numbers</button></div>
+            <figure class="face face--pic brief">
+              <div class="photo">
+                <svg viewBox="0 0 3032 2637" preserveAspectRatio="xMidYMid slice" role="img" aria-label="Shackleton crater at the lunar south pole, seen from orbit, with the site LS-1 marked just outside the rim">
+                  <image href="assets/shackleton-crater.jpg" width="3032" height="2637"/>
+                  <rect width="3032" height="2637" fill="#000" opacity="0.14"/>
+                  <circle cx="2510" cy="1451" r="102" fill="none" stroke="#a08672" stroke-width="2" vector-effect="non-scaling-stroke"/>
+                  <rect x="2485" y="1426" width="50" height="50" fill="#a08672"/>
+                </svg>
+                <span class="credit">Shackleton crater · LROC and ShadowCam, NASA/KARI/ASU</span>
+              </div>
+              <figcaption class="inset">
+                <p class="inset__title"><i></i>LS-1, the site in the brief</p>
+                <svg viewBox="0 0 640 400" aria-hidden="true">
+                  <rect x="96" y="22" width="120" height="104" fill="none" stroke="#4a4a4a" stroke-width="2" stroke-dasharray="5 7"/>
+                  <rect x="126" y="44" width="60" height="60" fill="#262626" stroke="#f2f2f2" stroke-width="3"/>
+                  <path d="M156 130 V 178" stroke="#9a9a9a" stroke-width="2" stroke-dasharray="4 6"/>
+                  <rect x="24" y="182" width="304" height="62" fill="none" stroke="#a08672" stroke-width="2" stroke-dasharray="5 7"/>
+                  <rect x="40" y="204" width="272" height="18" fill="#f2f2f2"/>
+                  <rect x="24" y="262" width="304" height="72" fill="none" stroke="#4a4a4a" stroke-width="2" stroke-dasharray="5 7"/>
+                  <rect x="60" y="284" width="232" height="28" fill="#262626" stroke="#f2f2f2" stroke-width="3"/>
+                  <rect x="588" y="364" width="32" height="14" fill="#9a9a9a"/>
+                  <g stroke="#5c5c5c" stroke-width="2"><path d="M220 74 H 344"/><path d="M332 213 H 344"/><path d="M332 298 H 344"/></g>
+                  <g font-family="Albert Sans, sans-serif" font-size="32">
+                    <text x="356" y="85" fill="#f2f2f2">Pit · Z1</text>
+                    <text x="356" y="224" fill="#f2f2f2">Berm · Z2</text>
+                    <text x="356" y="309" fill="#f2f2f2">Strip · Z3</text>
+                    <text x="576" y="377" fill="#c8c8c8" text-anchor="end">Depot</text>
+                    <text x="168" y="164" fill="#9a9a9a" font-size="26">20 m</text>
+                  </g>
+                </svg>
+                <p>Pit and strip are separate zones, so both excavators may dig at once. Bronze is the berm zone, where every haul has to queue. Not to scale.</p>
+              </figcaption>
+            </figure>
+            <div class="face face--num">
+              <div class="boxes">
+                <div class="box"><p class="box__title">Brief</p><p>Foundation pit: 12 m by 12 m, 1.0 m deep (about 144 m³), base levelled and compacted. Plume berm: 70 m straight, 2 m high and 4 m wide (about 280 m³ of fill), from the pit spoil and the borrow strip, compacted in one lift and inspected. Borrow strip: 40 m by 6 m, 0.5 m deep (about 120 m³). Three days. The surveyor stakes the pit and the berm line first and inspects the berm last. Read by Nemotron 3.5 Lightning in 4.6 s.</p></div>
+                <div class="box"><p class="box__title">Fleet, each battery the whole job’s budget</p><table class="tbl"><tbody><tr><td>EX1, EX2</td><td>excavators</td><td class="r">5,000 Wh each</td></tr><tr><td>HL1, HL2</td><td>haulers</td><td class="r">3,000 Wh each</td></tr><tr><td>CP1, CP2</td><td>compactors</td><td class="r">3,500 Wh each</td></tr><tr><td>SV1</td><td>surveyor</td><td class="r">1,500 Wh</td></tr></tbody></table></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="scene" data-scene="graph" aria-labelledby="t-hb-graph">
+          <div class="scene__text">
+            <div class="fig">
+              <p class="fig__n"><span data-count="13">13</span><span class="fig__unit">Constraints</span></p>
+              <p class="fig__sub"><span class="pill pill--neg">Refused</span>in the core: the deadline, 10 order edges, the surveyor and the berm zone</p>
+            </div>
+            <div class="scene__body">
+              <h2 id="t-hb-graph" class="display">The first plan is refused</h2>
+              <p class="scene__say">Nemotron 3 Ultra proposes 14 tasks. Each limit fits on its own, yet <b>no order of the 14 tasks finishes by hour 72</b>. CP-SAT sends back the 13 constraints that clash.</p>
+            </div>
+            <div class="scene__nav"><button class="btn" type="button" data-go="brief">Back</button><button class="btn" type="button" data-go="repair">Next: the repair</button></div>
+          </div>
+          <div class="stage">
+            <div class="view" role="group" aria-label="Show"><button type="button" data-view="pic" aria-pressed="true">Picture</button><button type="button" data-view="num" aria-pressed="false">Numbers</button></div>
+            <figure class="face face--pic chart">
+              <div class="hbar hbar--thin"><span class="hbar__label">Longest chain<small>with the first drive</small></span><div class="hbar__track"><span class="hbar__fill is-ink" style="width:80%"></span><span class="ref" style="left:90%"></span><span class="hbar__val is-in" style="right:calc(20% + 12px)">64 h</span></div></div>
+              <div class="hbar hbar--thin"><span class="hbar__label">Berm zone Z2<small>7 tasks, end to end</small></span><div class="hbar__track"><span class="hbar__fill" style="width:61.25%;background:var(--accent)"></span><span class="ref" style="left:90%"></span><span class="hbar__val is-in" style="right:calc(38.75% + 12px)">49 h</span></div></div>
+              <div class="hbar hbar--thin"><span class="hbar__label">Excavators<small>the busiest type</small></span><div class="hbar__track"><span class="hbar__fill" style="width:25%"></span><span class="ref" style="left:90%"></span><span class="hbar__val" style="left:calc(25% + 12px)">20 h</span></div></div>
+              <div class="hbar hbar--thin"><span class="hbar__label">SV1<small>3 tasks and drives</small></span><div class="hbar__track"><span class="hbar__fill" style="width:12.5%"></span><span class="ref" style="left:90%"></span><span class="hbar__val" style="left:calc(12.5% + 12px)">10 h</span></div></div>
+              <div class="axis"><span style="left:0">0 h</span><span style="left:50%">40</span><span class="is-ref" style="left:90%">72 h</span></div>
+              <p class="core core--below"><span class="pill pill--neg">Core</span><code>horizon</code><code>zone:Z2</code><code>robot:SV1</code><code>T1→T5</code><code>T2→T5</code><code>T3→T4</code><code>T4→T9</code><code>T5→T6</code><code>T6→T7</code><code>T7→T8</code><code>T9→T10</code><code>T10→T13</code><code>T13→T14</code></p>
+            </figure>
+            <div class="face face--num">
+              <div class="boxes">
+                <div class="box"><p class="box__title">Core sent back to Nemotron <span class="pill pill--neg">Refused</span></p><p>The plan cannot finish within 72 h. The longest chain alone needs 64 h with the drive to its first zone; the excavators need at least 20 h. SV1 runs one task at a time, and its 3 tasks take 5 h plus at least 5 h of driving. Zone Z2 admits one robot at a time, so its 7 tasks, 49 h in total, cannot overlap.</p></div>
+                <div class="box"><p class="box__title">The 10 order edges in the core</p><table class="tbl"><tbody><tr><td>T3→T4→T9→T10→T13→T14</td><td class="r">60 h chain</td></tr><tr><td>T2→T5, T5→T6</td><td class="r">58 h chain</td></tr><tr><td>T1→T5</td><td class="r">56 h chain</td></tr><tr><td>T6→T7, T7→T8</td><td class="r">31 h chain</td></tr></tbody></table></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="scene" data-scene="repair" aria-labelledby="t-hb-repair">
+          <div class="scene__text">
+            <div class="fig">
+              <p class="fig__n"><span data-count="17">17</span><span class="fig__unit">Tasks</span></p>
+              <p class="fig__sub"><span class="pill pill--pos">Fits</span>from 14: the digs split into parts, each haul right after its part</p>
+            </div>
+            <div class="scene__body">
+              <h2 id="t-hb-repair" class="display">One repair from the core</h2>
+              <p class="scene__say">Nemotron splits the pit into three digs and the strip into two, and hauls after each part instead of after the whole dig. <b>The longest chain drops from 60&nbsp;h to 47&nbsp;h.</b></p>
+            </div>
+            <div class="scene__nav"><button class="btn" type="button" data-go="graph">Back</button><button class="btn" type="button" data-go="verified">Next: the proof</button></div>
+          </div>
+          <div class="stage">
+            <div class="view" role="group" aria-label="Show"><button type="button" data-view="pic" aria-pressed="true">Picture</button><button type="button" data-view="num" aria-pressed="false">Numbers</button></div>
+            <figure class="face face--pic chart dots">
+              <div class="row"><span class="hbar__label">Longest chain<small>hours of work</small></span><div class="track"><span class="ref" style="left:84%"></span><span class="seg is-gain" style="left:34%;width:26%"></span><span class="dot is-was" style="left:60%"></span><span class="dot is-now" style="left:34%"></span></div><span class="val">60 → 47 h</span></div>
+              <div class="row"><span class="hbar__label">Berm zone Z2<small>end to end</small></span><div class="track"><span class="ref" style="left:84%"></span><span class="seg is-gain" style="left:18%;width:20%"></span><span class="dot is-was" style="left:38%"></span><span class="dot is-now" style="left:18%"></span></div><span class="val">49 → 39 h</span></div>
+              <div class="row"><span class="hbar__label">Finish<small>proven</small></span><div class="track"><span class="ref" style="left:84%"></span><span class="seg is-pos" style="left:44%;width:40%"></span><span class="dot is-pos" style="left:44%"></span></div><span class="val">52 h<small class="is-pos-text">20 spare</small></span></div>
+              <div class="axis"><span style="left:0">30 h</span><span style="left:40%">50</span><span class="is-ref" style="left:84%">72 h deadline</span></div>
+              <figcaption class="stage__cap">Hollow dots are the first plan, white the repair. One round: 260 s of Nemotron 3 Ultra reasoning.</figcaption>
+            </figure>
+            <div class="face face--num">
+              <div class="boxes">
+                <div class="box"><p class="box__title">Repair 1 · 260 s <span class="pill pill--pos">Verified</span></p><table class="tbl"><tbody><tr><td>Removed</td><td class="r">T3–T10: two digs per structure, four long hauls</td></tr><tr><td>Added</td><td class="r">3 pit digs, 2 strip digs, 6 hauls</td></tr><tr><td>Kept</td><td class="r">stakes, compaction, inspection</td></tr></tbody></table></div>
+                <div class="box"><p class="box__title">Why it fits now</p><p>Hauling starts at hour 15, after the first 7 h pit dig, instead of after the whole pit. The hauls alternate between pit spoil and strip fill, so zone Z2 works without a gap from hour 15 to 52.</p></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="scene" data-scene="verified" aria-labelledby="t-hb-verified">
+          <div class="scene__text">
+            <div class="fig">
+              <p class="fig__n"><span data-count="52">52</span><span class="fig__unit">H</span></p>
+              <p class="fig__sub"><span class="pill pill--pos">Verified</span>of a 72-hour deadline, proven optimal in 0.04 s</p>
+            </div>
+            <div class="scene__body">
+              <h2 id="t-hb-verified" class="display">Proven: done at hour 52</h2>
+              <p class="scene__say">CP-SAT schedules all 17 tasks: 20 order edges, 7 robots and 3 zones hold, and <b>the berm zone works without a gap from hour 15 to 52</b>.</p>
+            </div>
+            <div class="scene__nav"><button class="btn" type="button" data-go="repair">Back</button><a class="btn" href="#landing_pad" data-run-link="landing_pad">Next run: Landing pad</a></div>
+          </div>
+          <div class="stage">
+            <div class="view" role="group" aria-label="Show"><button type="button" data-view="pic" aria-pressed="true">Picture</button><button type="button" data-view="num" aria-pressed="false">Numbers</button></div>
+            <figure class="face face--pic chart">
+              <div class="span"><span>Deadline</span><div class="span__track"><span class="span__fill" style="width:72.22%"></span></div><p class="span__note"><span>52 h used</span><span>72 h</span></p></div>
+              <p class="legend"><span><i style="background:var(--accent)"></i>berm zone Z2, one robot at a time</span><span><i style="background:var(--bar)"></i>pit and strip</span></p>
+              <div class="gantt gantt--dense">
+                <div class="g-row"><span>SV1</span><div class="g-track"><span class="g-bar" style="left:7.69%;width:1.92%"></span><span class="g-bar is-key" style="left:11.54%;width:3.85%"></span><span class="g-bar is-key" style="left:96.15%;width:3.85%"></span></div></div>
+                <div class="g-row"><span>EX1</span><div class="g-track"><span class="g-bar" style="left:15.38%;width:calc(17.31% - 2px)"></span><span class="g-bar" style="left:32.69%;width:17.31%"></span></div></div>
+                <div class="g-row"><span>EX2</span><div class="g-track"><span class="g-bar" style="left:15.38%;width:calc(13.46% - 2px)"></span><span class="g-bar" style="left:28.85%;width:calc(13.46% - 2px)"></span><span class="g-bar" style="left:42.31%;width:13.46%"></span></div></div>
+                <div class="g-row"><span>HL1</span><div class="g-track"><span class="g-bar is-key" style="left:28.85%;width:calc(7.69% - 2px)"></span><span class="g-bar is-key" style="left:36.54%;width:calc(9.62% - 2px)"></span><span class="g-bar is-key" style="left:46.15%;width:calc(7.69% - 2px)"></span><span class="g-bar is-key" style="left:53.85%;width:calc(9.62% - 2px)"></span><span class="g-bar is-key" style="left:63.46%;width:calc(7.69% - 2px)"></span><span class="g-bar is-key" style="left:71.15%;width:3.85%"></span></div></div>
+                <div class="g-row"><span>CP1</span><div class="g-track"><span class="g-bar" style="left:50%;width:19.23%"></span></div></div>
+                <div class="g-row"><span>CP2</span><div class="g-track"><span class="g-bar" style="left:55.77%;width:11.54%"></span><span class="g-bar is-key" style="left:75%;width:21.15%"></span></div></div>
+              </div>
+              <div class="g-axis"><span style="left:0%">0 h</span><span style="left:23.08%">12</span><span style="left:46.15%">24</span><span style="left:69.23%">36</span><span style="left:100%">52 h</span></div>
+              <figcaption class="stage__cap">HL2 stays idle: the berm zone takes one robot at a time, so a second hauler would only wait.</figcaption>
+            </figure>
+            <div class="face face--num">
+              <div class="boxes">
+                <div class="box"><p class="box__title">CP-SAT’s receipt <span class="pill pill--pos">Verified</span></p><table class="tbl"><tbody><tr><td>Precedence</td><td class="r">20 edges hold</td></tr><tr><td>Robots</td><td class="r">7, no overlaps</td></tr><tr><td>Safety zones</td><td class="r">3, one robot each</td></tr><tr><td>Tightest battery</td><td class="r">HL1, 66 % of 3,000 Wh</td></tr><tr><td>Status</td><td class="r">optimal, re-checked independently</td></tr></tbody></table></div>
+                <div class="box"><p class="box__title">Berm zone, in order</p><table class="tbl"><tbody><tr><td>Stake the berm line</td><td>SV1</td><td class="r">6–8 h</td></tr><tr><td>Six hauls, pit and strip in turn</td><td>HL1</td><td class="r">15–39 h</td></tr><tr><td>Compact the berm</td><td>CP2</td><td class="r">39–50 h</td></tr><tr><td>Inspect the berm</td><td>SV1</td><td class="r">50–52 h</td></tr></tbody></table></div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <ol class="scrub" style="--n:4" aria-label="The tight deadline run, scene by scene">
+        <li><button class="step" type="button" data-go="brief">Brief<span>72 h</span></button></li>
+        <li><button class="step" type="button" data-go="graph">Refused<span class="is-neg-text">13 in the core</span></button></li>
+        <li><button class="step" type="button" data-go="repair">Repair<span>17 tasks</span></button></li>
+        <li><button class="step" type="button" data-go="verified">Proven<span class="is-pos-text">52 h</span></button></li>
+      </ol>
+    </section>
+  </main>
+</div>
+
+<script>
+(() => {
+  const calm = matchMedia('(prefers-reduced-motion: reduce)');
+  const narrow = matchMedia('(max-width: 1100px)');
+  const views = [...document.querySelectorAll('.runview')];
+  const runs = Object.fromEntries(views.map((v) => [v.dataset.run, {
+    view: v,
+    scenes: [...v.querySelectorAll('.scene')],
+    steps: [...v.querySelectorAll('.step')],
+    replay: v.querySelector('.replay'),
+  }]));
+  let run = views[0].dataset.run;
+  let timer = null;
+
+  // two hundred runs, one square each
+  document.querySelectorAll('.waffle').forEach((w) => {
+    const lit = +w.dataset.lit;
+    w.innerHTML = Array.from({ length: +w.dataset.n }, (_, i) => (i < lit ? `<i class="on" style="--i:${i}"></i>` : '<i></i>')).join('');
+  });
+
+  // the big figure counts up to the run's number as its scene arrives
+  const count = (scene) => {
+    const el = scene.querySelector('[data-count]');
+    if (!el || calm.matches) return;
+    const to = +el.dataset.count, t0 = performance.now();
+    const tick = (t) => {
+      const k = Math.min(1, (t - t0) / 900);
+      el.textContent = Math.round(to * (1 - Math.pow(1 - k, 3))).toLocaleString('en-US');
+      if (k < 1) requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  };
+
+  const stop = () => {
+    if (timer) clearInterval(timer);
+    timer = null;
+    document.body.classList.remove('is-playing');
+    Object.values(runs).forEach((r) => { r.replay.textContent = 'Replay the run'; r.replay.setAttribute('aria-pressed', 'false'); });
+  };
+
+  const open = (id, scene, { keepHash = false, toTop = false } = {}) => {
+    if (!runs[id]) id = views[0].dataset.run;
+    if (id !== run) stop();
+    run = id;
+    const r = runs[id];
+    views.forEach((v) => { v.hidden = v !== r.view; });
+    document.querySelectorAll('[data-run-link]').forEach((a) => {
+      if (!a.classList.contains('run')) return;
+      const on = a.dataset.runLink === id;
+      a.classList.toggle('is-active', on);
+      if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
+    });
+    document.querySelectorAll('.topbar details').forEach((d) => { d.open = false; });
+    const ids = r.scenes.map((s) => s.dataset.scene);
+    const at = Math.max(0, ids.indexOf(scene));
+    r.scenes.forEach((s, i) => { s.hidden = i !== at; s.classList.remove('is-in'); });
+    void r.scenes[at].offsetWidth; // restart the arrival
+    r.scenes[at].classList.add('is-in');
+    count(r.scenes[at]);
+    r.steps.forEach((b, i) => {
+      if (i === at) b.setAttribute('aria-current', 'step'); else b.removeAttribute('aria-current');
+      b.classList.toggle('is-done', i < at);
+    });
+    // a clip plays only while its scene is open, and never under reduced motion
+    document.querySelectorAll('video').forEach((v) => {
+      if (v.closest('.scene') === r.scenes[at] && !calm.matches) v.play().catch(() => {}); else v.pause();
+    });
+    if (!keepHash) history.replaceState(null, '', '#' + id + '/' + ids[at]);
+    if (toTop && narrow.matches) scrollTo({ top: 0 });
+    return at;
+  };
+
+  const play = () => {
+    stop();
+    const r = runs[run];
+    let i = 0;
+    open(run, r.scenes[0].dataset.scene, { toTop: true });
+    document.body.classList.add('is-playing');
+    r.replay.textContent = 'Pause';
+    r.replay.setAttribute('aria-pressed', 'true');
+    timer = setInterval(() => {
+      i += 1;
+      if (i >= r.scenes.length) { stop(); return; }
+      open(run, r.scenes[i].dataset.scene);
+    }, 4500);
+  };
+
+  document.addEventListener('click', (e) => {
+    const rep = e.target.closest('.replay');
+    if (rep) { if (timer) stop(); else play(); return; }
+    const link = e.target.closest('[data-run-link]');
+    if (link) { e.preventDefault(); stop(); open(link.dataset.runLink, 'brief', { toTop: true }); return; }
+    const go = e.target.closest('[data-go]');
+    if (go) { stop(); open(run, go.dataset.go, { toTop: !go.classList.contains('step') }); return; }
+    const view = e.target.closest('[data-view]');
+    if (view) {
+      const num = view.dataset.view === 'num';
+      document.body.classList.toggle('numbers', num);
+      document.querySelectorAll('[data-view]').forEach((b) => b.setAttribute('aria-pressed', String((b.dataset.view === 'num') === num)));
+    }
+  });
+  addEventListener('keydown', (e) => {
+    if (e.target.closest('input, textarea, summary')) return;
+    const r = runs[run];
+    const at = r.scenes.findIndex((s) => !s.hidden);
+    if (e.key === 'ArrowRight' && at < r.scenes.length - 1) { stop(); open(run, r.scenes[at + 1].dataset.scene); }
+    if (e.key === 'ArrowLeft' && at > 0) { stop(); open(run, r.scenes[at - 1].dataset.scene); }
+  });
+
+  /* the live thing: PR1's energy check for any crest area (the landing pad run's own numbers) */
+  const PAD = 2701.8, PER_M2 = 8.6, TRAVEL = 17.5, BATTERY = 4000;
+  console.assert(Math.round(PAD + 160 * PER_M2 + TRAVEL) === 4095, 'first plan should need 4,095 Wh');
+  console.assert(Math.round(PAD + 150 * PER_M2 + TRAVEL) === 4009, 'repair 1 should need 4,009 Wh');
+  console.assert(Math.round(PAD + 145 * PER_M2 + TRAVEL) === 3966, 'repair 2 should need 3,966 Wh');
+  const crest = document.getElementById('crest');
+  const out = document.getElementById('crest-out');
+  const read = () => {
+    const diff = Math.round(PAD + crest.value * PER_M2 + TRAVEL) - BATTERY;
+    out.textContent = crest.value + ' m² · ' + Math.abs(diff) + (diff > 0 ? ' over' : ' spare');
+    out.className = diff > 0 ? 'is-neg-text' : 'is-pos-text';
+  };
+  crest.addEventListener('input', read);
+  read();
+
+  // #run/scene; a bare scene name opens it in the landing pad run
+  const [a, b] = location.hash.slice(1).split('/');
+  if (runs[a]) open(a, b || 'brief', { keepHash: true });
+  else open(views[0].dataset.run, a || 'brief', { keepHash: true });
+})();
+</script>
+</body>
+</html>

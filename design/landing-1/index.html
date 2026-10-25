@@ -9,24 +9,12 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Albert+Sans:wght@400;500&family=Imbue:opsz,wght@10..100,400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="site.css">
 <style>
-/* The dark room: one soft-black field, lit things in it. Display Imbue (uppercase), text Albert Sans.
+/* The overview of the one Moonwright site (colours, type and pills from site.css, shared with run.html).
+   The dark room: one soft-black field, lit things in it. Display Imbue (uppercase), text Albert Sans.
    One pair of margins, a 12-column grid, five type steps, bronze on the one action and one marker. */
 :root {
-  --bg: #111111;
-  --surface: #1c1c1c;
-  --raised: #2a2a2a;
-  --ink: #f2f2f2;
-  --muted: #9a9a9a;
-  --accent: #a08672;
-  --accent-ink: #111111;
-  --paper: #f2f2f2;
-  --paper-ink: #111111;
-  --paper-soft: #555555;
-
-  --display: 'Imbue', 'Didot', 'Bodoni 72', 'Times New Roman', serif;
-  --text: 'Albert Sans', 'Helvetica Neue', Arial, sans-serif;
-
   --step-small: clamp(0.8125rem, 0.79rem + 0.1vw, 0.875rem);
   --step-body: clamp(1.0625rem, 1rem + 0.25vw, 1.1875rem);
   --step-lead: clamp(1.25rem, 0.95rem + 1.15vw, 2rem);
@@ -44,7 +32,6 @@
   --t-press: 140ms;
   --t-hover: 180ms;
   --t-ui: 240ms;
-  color-scheme: dark;
 }
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -63,8 +50,6 @@ img, video { display: block; max-width: 100%; }
 a { color: inherit; }
 p { text-wrap: pretty; }
 h1, h2, h3 { text-wrap: balance; }
-:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
-::selection { background: var(--accent); color: var(--accent-ink); }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
 .page { position: relative; z-index: 1; background: var(--bg); }
@@ -188,10 +173,7 @@ h1, h2, h3 { text-wrap: balance; }
 [data-ui] .rcard__open { color: var(--ink); font-weight: 500; text-decoration: none; white-space: nowrap; }
 @media (hover: hover) and (pointer: fine) { [data-ui] .rcard__open:hover { text-decoration: underline; text-underline-offset: 0.2em; } }
 [data-ui] code { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 0.88em; }
-[data-ui] .pill { flex: none; white-space: nowrap; display: inline-flex; align-items: center; height: 22px; padding: 0 8px; border-radius: 4px; font-size: 12px; font-weight: 500; }
-[data-ui] .pill--neg { background: #2c1a20; color: #e5566f; }
-[data-ui] .pill--pos { background: #172a1d; color: #3fc07a; }
-[data-ui] .pill--none { background: #262626; color: #d8d8d8; }
+[data-ui] .pill { flex: none; } /* the pill itself is in site.css */
 
 /* ---------- How it works: each call beside its response ---------- */
 .ex { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: var(--gutter); row-gap: 24px; align-items: start; margin-top: clamp(72px, 8vw, 120px); }
@@ -407,7 +389,7 @@ h1, h2, h3 { text-wrap: balance; }
   </figure>
   <nav class="hero__nav" aria-label="Primary">
     <a class="link" href="#how">How it works</a>
-    <a class="link" href="#runs">Runs</a>
+    <a class="link" href="run.html">Runs</a>
     <a class="link" href="https://github.com/nkm1020/moonwright">GitHub</a>
   </nav>
   <h1 class="hero__title display" aria-label="Moonwright">
@@ -416,7 +398,7 @@ h1, h2, h3 { text-wrap: balance; }
   </h1>
   <div class="hero__copy">
     <p class="hero__lead" data-load style="--d:520ms">Plans for robot crews building on the Moon. NVIDIA Nemotron proposes the work; OR-Tools CP-SAT proves it, or refuses with the numbers.</p>
-    <a class="button" data-load style="--d:600ms" href="#open">Open the landing pad run</a>
+    <a class="button" data-load style="--d:600ms" href="run.html#landing_pad/brief">Open the landing pad run</a>
   </div>
 </header>
 
@@ -551,7 +533,7 @@ h1, h2, h3 { text-wrap: balance; }
         <footer class="rcard__foot">
           <p class="rcard__big">72 h</p>
           <p class="rcard__cap">of the 336 h deadline, optimal, solved in 13 ms</p>
-          <a class="rcard__open" href="#">Open this run →</a>
+          <a class="rcard__open" href="run.html#landing_pad/brief">Open this run →</a>
         </footer>
       </article>
 
@@ -577,7 +559,7 @@ h1, h2, h3 { text-wrap: balance; }
         <footer class="rcard__foot">
           <p class="rcard__big">85 h</p>
           <p class="rcard__cap">reported instead of a shrunken pad. In the evaluation, 7 of 9 runs on impossible briefs ended this way.</p>
-          <a class="rcard__open" href="#">Open this run →</a>
+          <a class="rcard__open" href="run.html#front_loaded/brief">Open this run →</a>
         </footer>
       </article>
 
@@ -602,7 +584,7 @@ h1, h2, h3 { text-wrap: balance; }
         <footer class="rcard__foot">
           <p class="rcard__big">52 h</p>
           <p class="rcard__cap">of the 72 h deadline, optimal</p>
-          <a class="rcard__open" href="#">Open this run →</a>
+          <a class="rcard__open" href="run.html#habitat_berm/brief">Open this run →</a>
         </footer>
       </article>
 
@@ -775,7 +757,7 @@ h1, h2, h3 { text-wrap: balance; }
         <button type="button" role="radio" aria-checked="false" data-mode="live">Live backend</button>
       </div>
       <p class="dialog__note" id="dlg-note">Replays the run recorded on Token Factory on 24 October 2026. No sign-in, no backend.</p>
-      <a class="button" id="dlg-go" href="#">Open the landing pad run</a>
+      <a class="button" id="dlg-go" href="run.html#landing_pad/brief">Open the landing pad run</a>
     </div>
   </div>
 </section>
@@ -793,6 +775,7 @@ h1, h2, h3 { text-wrap: balance; }
       <li>On this page</li>
       <li><a class="link" href="#schedule">One run, proven</a></li>
       <li><a class="link" href="#runs">Three runs</a></li>
+      <li><a class="link" href="run.html">Replay the runs</a></li>
       <li><a class="link" href="#how">How it works</a></li>
       <li><a class="link" href="#moon">Why the Moon</a></li>
     </ul>
@@ -893,7 +876,7 @@ h1, h2, h3 { text-wrap: balance; }
     } else {
       dnote.textContent = 'Replays the run recorded on Token Factory on 24 October 2026. No sign-in, no backend.';
       go.textContent = 'Open the landing pad run';
-      go.href = '#';
+      go.href = 'run.html#landing_pad/brief';
     }
   }));
 

@@ -1,0 +1,47 @@
+/* Moonwright, one site: the overview (index.html) and the runs (run.html) take their light, type and
+   small parts from this file, so stepping from one page to the other never changes the room.
+   A #111 ground, #1c1c1c surfaces a step lighter, Imbue capitals for names, Albert Sans for reading,
+   bronze for the action and the one thing each screen argues about, red and green only on data. */
+:root {
+  --bg: #111111;
+  --surface: #1c1c1c;
+  --raised: #2a2a2a;
+  --line: #2e2e2e;
+  --rule: #1f1f1f;
+  --ink: #f2f2f2;
+  --soft: #c8c8c8;
+  --muted: #9a9a9a;
+  --bar: #5c5c5c;
+  --accent: #a08672;
+  --accent-strong: #b49a86;
+  --accent-ink: #111111;
+  --neg: #e5566f;
+  --neg-bg: #2c1a20;
+  --pos: #3fc07a;
+  --pos-bg: #172a1d;
+  --none-bg: #262626;
+  --paper: #f2f2f2;
+  --paper-ink: #111111;
+  --paper-soft: #555555;
+
+  --display: 'Imbue', 'Didot', 'Bodoni 72', 'Times New Roman', serif;
+  --text: 'Albert Sans', 'Helvetica Neue', Arial, sans-serif;
+  color-scheme: dark;
+}
+
+/* moving between the two pages is a fade, not a reload flash */
+@view-transition { navigation: auto; }
+::view-transition-old(root), ::view-transition-new(root) { animation-duration: 320ms; }
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation: none !important; }
+}
+
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+::selection { background: var(--accent); color: var(--accent-ink); }
+.display { font-family: var(--display); font-weight: 400; text-transform: uppercase; font-optical-sizing: auto; }
+
+/* verdicts, the same pill on both pages */
+.pill { display: inline-flex; align-items: center; height: 22px; padding: 0 8px; border-radius: 4px; font-size: 12px; font-weight: 500; white-space: nowrap; }
+.pill--pos { background: var(--pos-bg); color: var(--pos); }
+.pill--neg { background: var(--neg-bg); color: var(--neg); }
+.pill--none { background: var(--none-bg); color: #d8d8d8; }
