@@ -7,28 +7,16 @@
 <link rel="stylesheet" href="slides.css">
 <style>
   .center { position: absolute; left: 0; right: 0; top: 214px; text-align: center; }
-  h1 { margin: 0; font-size: 104px; line-height: 1; font-weight: 600; letter-spacing: -0.04em; }
+  h1 { margin: 0; font-size: 196px; line-height: 0.9; }
   .rule { width: 40px; height: 2px; margin: 34px auto 0; background: var(--accent); border-radius: 1px; }
   .tag { margin: 30px 0 0; font-size: 42px; line-height: 1.2; font-weight: 500; letter-spacing: -0.02em; color: var(--fg); }
-  .repo { margin: 44px 0 0; font: 400 21px/1.4 var(--mono); color: var(--muted); }
-  .stack { margin: 12px 0 0; font: 400 15px/1.5 var(--mono); color: var(--dim); }
+  .repo { margin: 44px 0 0; font: 400 21px/1.4 var(--sans); color: var(--muted); }
+  .stack { margin: 12px 0 0; font: 400 16px/1.5 var(--sans); color: var(--dim); }
   .site { position: absolute; left: 50%; top: 50%; width: 1100px; height: 1100px; transform: translate(-50%, -50%); opacity: .5; }
 </style>
 </head>
 <body>
 <div class="stage">
-  <svg class="site" viewBox="0 0 520 520" aria-hidden="true">
-    <defs>
-      <pattern id="minor" width="13" height="13" patternUnits="userSpaceOnUse"><path class="minor" d="M13 0H0V13" fill="none"/></pattern>
-      <pattern id="major" width="130" height="130" patternUnits="userSpaceOnUse"><path class="major" d="M130 0H0V130" fill="none"/></pattern>
-      <radialGradient id="fade" cx="50%" cy="50%" r="50%"><stop offset="20%" stop-color="#fff"/><stop offset="100%" stop-color="#000"/></radialGradient>
-      <mask id="vignette"><rect width="520" height="520" fill="url(#fade)"/></mask>
-    </defs>
-    <g mask="url(#vignette)">
-      <rect width="520" height="520" fill="url(#minor)"/>
-      <rect width="520" height="520" fill="url(#major)"/>
-    </g>
-  </svg>
   <div class="center">
     <h1 class="rise">Moonwright</h1>
     <div class="rule rise" style="--d: .2s"></div>

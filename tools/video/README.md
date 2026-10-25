@@ -1,69 +1,58 @@
 # Demo video pipeline
 
-Renders the Moonwright demo video from `storyboard.json`: four HTML slides and the real app,
-driven by Playwright in Chromium and recorded with CDP `Page.startScreencast`, narrated with
-macOS `say`, captioned and assembled with ffmpeg. Every figure the video quotes comes from
-`facts.json`, which is checked before anything is recorded: against the recorded runs in
-`frontend/public/samples/`, against the live evaluation in `docs/eval/`, or, for a figure only the
-app computes during the recording, against the screen itself. Figures the screen shows are also
-waited for on screen during the capture, so the recording and the recorded run must agree.
+Renders the Moonwright demo video from `storyboard.json`: four HTML slides and the site
+(`design/landing-1`: the overview and the recorded runs, served as files), driven by Playwright in
+Chromium and recorded with CDP `Page.startScreencast`, narrated (OpenAI TTS or macOS `say`),
+captioned and assembled with ffmpeg. Every figure the video quotes comes from `facts.json`, which
+is checked before anything is recorded: against the recorded runs in `frontend/public/samples/`,
+against the live evaluation and the Isaac Sim run in `docs/eval/`. Figures the screen shows are
+also waited for on screen during the capture, so the recording and the recorded runs must agree.
 
 ## What the video shows, and what it does not claim
 
-The recording runs against the backend in fixture mode, so no model is called while recording.
-The fixtures are the landing pad's live run, recorded on Nebius Token Factory on Oct 24 on the
-final pipeline (`backend/fixtures/landing_pad`, the same take as
-`frontend/public/samples/landing_pad.plan.json`): in fixture mode the backend replays its
-answers for the structure, task-graph, repair and explanation steps, step for step, while the
-validator, CP-SAT, the simulator and Monte Carlo run for real. The narration says so: the brief
-scene says the demo replays a run recorded live on Token Factory, and the trace labels every
-replayed answer `recorded answer`. The plan scene's refusal, its two repairs and the verified
-schedule are that run's Nemotron 3 Ultra answers, checked again by the validator and CP-SAT
-during the capture. The Impossible deadline sample is the other recorded live run, loaded as
-recorded, and the narration credits it as such. The evidence slide reports run 4 of the live
-evaluation, the first on the final pipeline (docs/eval/2026-10-24-live-eval-run4, the Nemotron 3
-Ultra arm, `eval.rescored.csv`: scored with the final checks). The failure injection, the replan
-and both Monte Carlo runs (the baseline and the spare-robot what-if) are computed live during the
-capture; the spares join the fleet in its own order, the fleet the recorded
-`landing_pad.whatif.mc.json` was computed with, so the panel shows the README's figure.
+The site replays the three runs recorded live on Nebius Token Factory on Oct 24 on the final
+pipeline (`frontend/public/samples`: the landing pad, the impossible deadline, the tight deadline),
+scene by scene; nothing is planned or solved while recording. The landing pad's refusal, its two
+repairs, the verified schedule, the replan after EX1's failure and the 200-run Monte Carlo figures
+(as planned and with three spares) are that recorded run's results, and the narration says the
+run was recorded live. The crest slider computes PR1's energy check in the page from the run's
+own numbers. The failure scene plays the Isaac Sim mission (`tools/isaac`: PhysX rovers on NASA
+LOLA terrain of Shackleton's rim, the replan from their telemetry), whose figures come from
+`docs/eval/2026-10-25-isaac-closed-loop`. The evidence slide reports run 4 of the live evaluation
+(docs/eval/2026-10-24-live-eval-run4, the Nemotron 3 Ultra arm, `eval.rescored.csv`) and the
+core-vs-verdict ablation.
 
 ## One command
 
 ```bash
-cd frontend && pnpm install && cd ..   # once: the mirror build links frontend/node_modules
 tools/video/render.sh
 ```
 
 What it does, in order:
 
-1. Mirror-builds the frontend into `out/app` (rsync of `frontend/` without `node_modules` and
-   `.next`, a symlink to `frontend/node_modules`, `NEXT_PUBLIC_API_URL=http://127.0.0.1:8074`).
-   `frontend/.next` and `frontend/` are never written. `next` runs through `node` directly, not
-   `pnpm exec` (pnpm 11 would offer to purge the symlinked `node_modules`).
-2. Starts the backend in fixture mode on :8074 (`MOONWRIGHT_LLM=fixture MOONWRIGHT_LLM_LOG=off
-   uv run moonwright serve`) and the app on :3074. It refuses to record unless `/health` reports
-   `"llm":"fixture"`, so no model is ever called. Both ports must be free.
-3. Synthesizes the narration, then records every scene in real time (`caffeinate` keeps the Mac
+1. Serves `design/landing-1` on :3074 (`python3 -m http.server`; the port must be free).
+2. Synthesizes the narration, then records every scene in real time (`caffeinate` keeps the Mac
    awake; a scene during which the machine slept is rejected).
-4. Stops both servers (also on Ctrl-C or any error), then assembles everything with ffmpeg.
+3. Stops the server (also on Ctrl-C or any error), then assembles everything with ffmpeg.
 
-Everything it prints also goes to `out/logs/render.log`. A full render takes about 5 minutes on
-an M-series Mac (synthesized sentences are cached in `out/work/audio/cache`). Needs macOS `say`,
-ffmpeg (no libass needed: captions are rendered by Chromium), Node 22, pnpm, uv, and Playwright's
-Chromium build 1234 in `~/Library/Caches/ms-playwright`, which matches the pinned
+Everything it prints also goes to `out/logs/render.log`. A full render takes a few minutes on an
+M-series Mac (synthesized sentences are cached in `out/work/audio/cache`). Needs ffmpeg (no libass
+needed: captions are rendered by Chromium), Node 22, pnpm (for this folder's pinned Playwright),
+python3, macOS `say` (the fallback voice), network access for the site's Google Fonts, and
+Playwright's Chromium build 1234 in `~/Library/Caches/ms-playwright`, which matches the pinned
 `playwright@1.62.1` (if it is missing: `cd tools/video && pnpm exec playwright install
-chromium-headless-shell`).
+chromium-headless-shell`). The slides use the site's type (Imbue, Albert Sans) and its pictures
+(`slides/site` links to `design/landing-1/assets`).
 
 | Variable | Default | Effect |
 | --- | --- | --- |
-| `TTS` | `openai` when `OPENAI_API_KEY` is set, else `say` | narration engine. Put `OPENAI_API_KEY=...` in `tools/video/.env` or `tools/video/voice/.env` (both gitignored; loaded by the render's node process only, never by the fixture backend, and never logged). Sentences are still synthesized one by one, so the timing and captions work the same; synthesized sentences are cached in `out/work/audio/cache` like `say`'s |
+| `TTS` | `openai` when `OPENAI_API_KEY` is set, else `say` | narration engine. Put `OPENAI_API_KEY=...` in `tools/video/.env` or `tools/video/voice/.env` (both gitignored; loaded by the render's node process only and never logged). Sentences are still synthesized one by one, so the timing and captions work the same; synthesized sentences are cached in `out/work/audio/cache` like `say`'s |
 | `OPENAI_TTS_MODEL` | `gpt-4o-mini-tts` | OpenAI speech model (`tts-1`, `tts-1-hd` ignore the instructions) |
 | `OPENAI_TTS_VOICE` | `ash` | OpenAI voice |
 | `OPENAI_TTS_SPEED` | `1.4` | OpenAI speaking speed (0.25-4); at 1.0 the voice reads about 125 words a minute, `say` 180, and the instructions do not change the pace |
 | `OPENAI_TTS_INSTRUCTIONS` | a calm documentary narrator | how the voice should speak (gpt-4o-mini-tts) |
 | `VOICE` | `Samantha` | macOS voice (`say -v '?'` lists them). A downloaded Premium voice sounds much better: System Settings, Accessibility, Spoken Content, System voice, Manage Voices, then e.g. `VOICE="Ava (Premium)"` |
 | `RATE` | `180` | speaking rate, words per minute |
-| `SKIP_BUILD` | `0` | `1` reuses the last mirror build in `out/app` |
 | `ASSEMBLE_ONLY` | `0` | `1` re-runs captions + ffmpeg on the last capture, no servers (caption edits, layout) |
 | `KEEP_FRAMES` | `0` | `1` keeps the raw screencast PNGs (2-3 GB) in `out/work/frames` |
 | `FACTS_CHECK` | `strict` | `warn` renders even if `facts.json` disagrees with its sources |
@@ -78,11 +67,11 @@ chromium-headless-shell`).
 | `captions.srt` | sidecar captions for the whole narration, slides included: at most 2 lines x 42 characters, 1.2-6 s per cue, typographic apostrophes |
 | `thumbnail.png` | 1920x1080 poster (the title slide), since frame 0 is the fade from black |
 | `contact-sheet.png` | one still per scene, labelled with scene id, start time and length |
-| `readme-hero.gif` | 14 s of the plan scene's recorded live repairs (the refusal and both trims, no captions), 1280 px wide, 15 fps, two-pass palette, under 8 MB |
+| `readme-hero.gif` | 12 s from the refusal into the repairs (no captions), 1280 px wide, 15 fps, two-pass palette, under 8 MB |
 | `timing.txt`, `timing.json` | per-scene start, duration, narration and action seconds, output checks, loudness, the motion check |
 
 Working files live in `out/work` (narration WAVs and their timing, per-scene clips, caption
-images) and `out/logs` (render, build, backend and app logs).
+images) and `out/logs` (render and site server logs).
 
 ## How it is recorded
 
@@ -113,13 +102,11 @@ images) and `out/logs` (render, build, backend and app logs).
   tail, the actions' own time)`. Actions can wait for a `cue` (a phrase of the narration), so the
   cursor reaches what is being named as it is said; `pause` actions stretch to fill the time
   before the next cue, the narration is never cut, and a page that is done early is simply held.
-- Joins: a dip through the console background (#0b0f14) between the slides and the app, hard
-  cuts between the app scenes (one continuous session), one short dissolve that skips the seconds
-  the spare-robot what-if takes to compute (the panel keeps the real time), plus a fade in and
-  out. The narration is limited to -3 dBFS and normalised with two-pass `loudnorm` (linear) to
+- Joins: a dip through the site's ground (#111) between the slides and the site, hard cuts
+  between the site's scenes (one continuous session on run.html), plus a fade in and out. The narration is limited to -3 dBFS and normalised with two-pass `loudnorm` (linear) to
   -16 LUFS.
-- Captions: Geist on a nearly opaque graphite box, bottom centre inside the 90 % safe area (a
-  scene can move them to the bottom left or right where the app is empty). Each cue is a
+- Captions: Albert Sans on a nearly opaque #111 box, bottom centre inside the 90 % safe area (a
+  scene can move them to the bottom left or right where the page is empty). Each cue is a
   transparent PNG rendered by Chromium and overlaid by ffmpeg.
 - The total must stay within 2:55; `timing.txt` reports an overrun instead of dropping scenes.
 
@@ -177,8 +164,8 @@ when a value disagrees with it:
 | CSV rows | `csv docs/eval/2026-10-24-live-eval-run4/eval.rescored.csv condition=ultra/loop_on \|share:success=True \|pct` (also `\|len`, `\|distinct:col`, and `\|gain:success=True;first_try_feasible=True`: the points one share is ahead of another, each rounded to a whole percent first) |
 | a figure inside a sentence | `samples/landing_pad.plan.json steps.2.failure.details.0 \|re:at least ([\d,]+) Wh`: the first match of a pattern (its group, or the list of its groups); `\|num` reads "4,009" as 4009 and `\|diff` subtracts the second of two figures from the first (how far a demand is over its battery) |
 | two figures of one file, or of two | `samples/landing_pad.sim.json replans.0 \|pick:after.schedule.makespan_h,before.makespan_h \|diff` (the replan's delay); `samples/landing_pad.whatif.mc.json within_horizon_rate \|minus:samples/landing_pad.mc.json within_horizon_rate \|pts` (the what-if's gain in points, as the panel prints it) |
-| a Monte Carlo count | `samples/landing_pad.mc.json \|misses` (runs that missed the horizon) and `\|nobackup` (the misses that lost a robot with no backup), counted as the panel counts them |
-| the screen | `screen`: a figure the app computes during the capture that no recorded file holds (the Monte Carlo MTBF, a panel setting); the gate requires a `waitForText` in the storyboard that quotes it, so the render stops if the screen shows anything else |
+| a Monte Carlo count | `samples/landing_pad.mc.json \|misses` (runs that missed the horizon), `\|within` (runs on time, the site's "74 of 200") and `\|nobackup` (the misses that lost a robot with no backup) |
+| the screen | `screen`: a figure only the page shows, which no recorded file holds (none at present); the gate requires a `waitForText` in the storyboard that quotes it, so the render stops if the screen shows anything else |
 
 `TBD` marks a value that is not known yet: `repo_url` is TBD until the public repository exists,
 and the close slide leaves the repository line out until it is set.

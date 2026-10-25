@@ -1,10 +1,10 @@
 #!/usr/bin/env node
-// Entry point. render.sh runs `capture` while the fixture backend and the app are up, stops the
+// Entry point. render.sh runs `capture` while the site is served, stops the
 // servers, then runs `assemble` (ffmpeg only). Either phase can be re-run on its own:
 //   node src/render.mjs capture    narration + browser capture + caption images (needs servers)
 //   node src/render.mjs assemble   clips, final MP4s, SRT, contact sheet, GIF, timing table
 import fsp from "node:fs/promises";
-import { API_HEALTH, APP_URL, CLIPS_DIR, FPS, FRAMES_DIR, OUT_DIR, OUTPUTS, STATE_FILE, WORK_DIR } from "./lib/paths.mjs";
+import { APP_URL, CLIPS_DIR, FPS, FRAMES_DIR, OUT_DIR, OUTPUTS, STATE_FILE, WORK_DIR } from "./lib/paths.mjs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { checkFacts, loadStoryboard } from "./lib/story.mjs";
@@ -18,7 +18,7 @@ import { assemble, integratedLoudness, motionHoles, verifyOutput } from "./assem
 import { contactSheet, heroGif, thumbnail, timingTable } from "./extras.mjs";
 
 // tools/video/.env (gitignored) may hold OPENAI_API_KEY for the narration; it is loaded into this
-// process only, never into the fixture backend, and its values are never logged
+// process only, and its values are never logged
 const VIDEO_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");   // the repo path has spaces
 for (const dotenv of [path.join(VIDEO_DIR, ".env"), path.join(VIDEO_DIR, "voice", ".env")]) {
   try {
@@ -65,8 +65,6 @@ async function capturePhase() {
   await ensureDir(WORK_DIR);
   const story = loadStoryboard();
   factsGate(story);
-  const health = await fetch(API_HEALTH).then((r) => r.json());
-  if (health.llm !== "fixture") throw new Error(`backend reports llm=${health.llm}; the video is recorded against the fixture backend only`);
   log(`narration: ${env.tts === "openai" ? `OpenAI ${env.openai.model}, voice ${env.openai.voice}` : `macOS say, voice ${env.voice}, rate ${env.rate}`}`);
   const timings = await narrate(story.scenes, {
     engine: env.tts,

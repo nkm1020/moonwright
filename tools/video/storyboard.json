@@ -19,10 +19,10 @@
     "TBD": "T B D"
   },
   "gif": {
-    "scene": "plan",
-    "from": "Its first graph was refused",
-    "offset": 0.3,
-    "duration": 14,
+    "scene": "refused",
+    "from": "CP-SAT refuses the first plan",
+    "offset": 0.0,
+    "duration": 12,
     "fps": 15,
     "width": 1280,
     "maxMB": 8
@@ -84,433 +84,60 @@
       ]
     },
     {
-      "id": "brief",
+      "id": "overview",
       "kind": "ui",
-      "voDelay": 0.6,
+      "voDelay": 0.5,
       "transition": {
         "type": "dip",
         "duration": 0.5
       },
-      "narration": "Here's a mission brief in plain English. On Nebius Token Factory, Nemotron 3.5 Lightning turns it into requirements; this demo replays a run recorded live there. Every field stays editable.",
+      "note": "The site's overview (design/landing-1/index.html): the name over Apollo 17's rover, then the landing pad run's verified schedule as a board, the twice-refused task in bronze.",
+      "narration": "Here is a run recorded live on Nebius Token Factory: a landing pad and a blast berm near Shackleton crater, seven robots, fourteen days, nothing to recharge from. Every row of this schedule is proven by CP-SAT, and the bronze one was refused twice before it held.",
       "setup": [
         {
           "action": "goto",
-          "url": "/"
-        },
-        {
-          "action": "waitForText",
-          "text": "recorded answers"
-        },
-        {
-          "action": "waitForSelector",
-          "selector": "#brief-text"
-        },
-        {
-          "action": "cursor",
-          "x": 1060,
-          "y": 300
-        }
-      ],
-      "actions": [
-        {
-          "action": "hover",
-          "selector": "#brief-text",
-          "at": [
-            0.36,
-            0.38
-          ],
-          "cue": "mission brief"
-        },
-        {
-          "action": "clickRole",
-          "role": "button",
-          "name": "Structure brief",
-          "cue": "On Nebius Token Factory",
-          "lead": 0.6
-        },
-        {
-          "action": "waitForSelector",
-          "selector": "svg[aria-label^='Site map']"
-        },
-        {
-          "action": "waitForScroll"
-        },
-        {
-          "action": "hover",
-          "selector": "svg[aria-label^='Site map']",
-          "at": [
-            0.55,
-            0.5
-          ],
-          "cue": "turns it into requirements"
-        },
-        {
-          "action": "hover",
-          "text": "recorded answer",
-          "within": "#requirements",
-          "rect": "box",
-          "at": [
-            0.3,
-            1.0
-          ],
-          "offset": [
-            0,
-            10
-          ],
-          "cue": "this demo replays",
-          "lead": 0.7
-        },
-        {
-          "action": "highlight",
-          "text": "recorded answer",
-          "within": "#requirements",
-          "rect": "box",
-          "pad": 3,
-          "cue": "this demo replays"
-        },
-        {
-          "action": "unhighlight",
-          "cue": "Every field",
-          "lead": 0.85
-        },
-        {
-          "action": "scrollTo",
-          "selector": "[aria-label='robot 1 id']",
-          "align": "top",
-          "offset": 150,
-          "cue": "Every field",
-          "lead": 0.8
-        },
-        {
-          "action": "click",
-          "selector": "[aria-label='robot 2 battery in Wh']",
-          "at": [
-            0.6,
-            0.5
-          ],
-          "cue": "stays editable"
+          "url": "/index.html"
         },
         {
           "action": "pause",
-          "ms": 250,
+          "ms": 1600,
           "elastic": false
-        },
-        {
-          "action": "clickRole",
-          "role": "button",
-          "name": "Plan with these requirements",
-          "note": "the plan request starts here, so the next scene opens on the trace"
         }
       ],
-      "captionAlign": "left"
-    },
-    {
-      "id": "plan",
-      "kind": "ui",
-      "voDelay": 0.7,
-      "pauseBefore": {
-        "4": 0.8
-      },
-      "captionAlign": "right",
-      "narration": "Nemotron 3 Ultra proposes the task graph, and nothing it says is trusted. Its first graph was refused: the printer would need at least {{plan_core1_need_wh_words}} watt-hours of its {{printer_battery_wh_words}}. That proof becomes the repair prompt. Ultra trims the berm crest's sintering, still {{plan_core2_over_wh|words}} watt-hours over, and trims again. This time CP-SAT proves the plan against precedence, robots, zones, batteries and the {{landing_horizon_h}}-hour deadline: done in {{landing_makespan_h}} hours.",
-      "caption": "Nemotron 3 Ultra proposes the task graph, and nothing it says is trusted. Its first graph was refused: the printer would need at least {{plan_core1_need_wh}} Wh of its {{printer_battery_wh}}. That proof becomes the repair prompt. Ultra trims the berm crest's sintering, still {{plan_core2_over_wh}} Wh over, and trims again. This time CP-SAT proves the plan against precedence, robots, zones, batteries and the {{landing_horizon_h}}-hour deadline: done in {{landing_makespan_h}} hours.",
       "actions": [
         {
-          "action": "waitForText",
-          "text": "Verified plan: makespan {{landing_makespan_h}} h"
-        },
-        {
-          "action": "waitForText",
-          "text": "{{landing_repair_rounds}} repair rounds"
-        },
-        {
-          "action": "waitForScroll"
-        },
-        {
           "action": "hover",
-          "text": "Task graph",
-          "exact": true,
-          "within": "#plan",
-          "at": [
-            1.0,
-            1.0
-          ],
-          "offset": [
-            8,
-            2
-          ],
-          "cue": "Nemotron 3 Ultra proposes"
-        },
-        {
-          "action": "hover",
-          "text": "Validate",
-          "exact": true,
-          "within": "#plan",
-          "at": [
-            1.0,
-            1.0
-          ],
-          "offset": [
-            8,
-            2
-          ],
-          "cue": "nothing it says is trusted"
-        },
-        {
-          "action": "highlight",
-          "text": "energy:printer",
-          "exact": true,
-          "within": "#plan",
-          "rect": "box",
-          "pad": 3,
-          "cue": "first graph was refused"
-        },
-        {
-          "action": "waitForText",
-          "text": "{{plan_core1_need_wh}} Wh",
-          "exact": true,
-          "by": "the printer would need"
-        },
-        {
-          "action": "hover",
-          "text": "{{plan_core1_need_wh}} Wh",
-          "exact": true,
-          "at": [
-            1.0,
-            0.5
-          ],
-          "offset": [
-            128,
-            0
-          ],
-          "cue": "the printer would need",
-          "note": "rests right of '102% of budget', off the figures"
-        },
-        {
-          "action": "highlight",
-          "text": "{{plan_core1_need_wh}} Wh",
-          "exact": true,
-          "pad": 4,
-          "cue": "the printer would need"
-        },
-        {
-          "action": "zoomIn",
-          "text": "{{plan_core1_need_wh}} Wh",
-          "exact": true,
-          "scale": 1.6,
-          "to": [
-            0.58,
-            0.5
-          ],
-          "cue": "the printer would need",
-          "lead": 0.0
-        },
-        {
-          "action": "zoomOut",
-          "cue": "That proof becomes",
-          "lead": 1.0
-        },
-        {
-          "action": "unhighlight",
-          "cue": "That proof becomes",
-          "lead": 0.5
+          "role": "link",
+          "name": "Open the landing pad run",
+          "cue": "recorded live",
+          "lead": 0.4
         },
         {
           "action": "scrollTo",
-          "text": "round 1",
-          "exact": true,
-          "within": "#plan",
+          "selector": "#schedule-title",
           "align": "top",
-          "offset": 100,
-          "duration": 1100,
-          "cue": "That proof becomes",
-          "lead": 0.3,
-          "note": "brings both repairs, the second core and the verified schedule step into one view"
-        },
-        {
-          "action": "hover",
-          "text": "round 1",
-          "exact": true,
-          "within": "#plan",
-          "at": [
-            1.0,
-            0.5
-          ],
-          "offset": [
-            72,
-            0
-          ],
-          "cue": "the repair prompt",
-          "note": "rests after '12 tasks', off the text"
+          "offset": 40,
+          "duration": 1500,
+          "cue": "Every row",
+          "lead": 1.2
         },
         {
           "action": "waitForText",
-          "text": "quantity {{plan_crest_m2_0}} → {{plan_crest_m2_1}} m²"
+          "text": "Sinter the berm crest",
+          "exact": false
         },
         {
           "action": "hover",
-          "selector": "#plan span[title*='quantity {{plan_crest_m2_0}} → {{plan_crest_m2_1}} m²']",
+          "text": "Sinter the berm crest",
           "at": [
             1.0,
             0.5
           ],
           "offset": [
-            14,
+            16,
             0
           ],
-          "cue": "Ultra trims"
-        },
-        {
-          "action": "highlight",
-          "selector": "#plan span[title*='quantity {{plan_crest_m2_0}} → {{plan_crest_m2_1}} m²']",
-          "pad": 3,
-          "cue": "Ultra trims"
-        },
-        {
-          "action": "waitForText",
-          "text": "{{plan_core2_need_wh}} Wh",
-          "exact": true,
-          "by": "still"
-        },
-        {
-          "action": "hover",
-          "text": "{{plan_core2_need_wh}} Wh",
-          "exact": true,
-          "at": [
-            1.0,
-            0.5
-          ],
-          "offset": [
-            146,
-            0
-          ],
-          "cue": "still",
-          "note": "rests right of '100.2% of budget', off the figures"
-        },
-        {
-          "action": "highlight",
-          "text": "{{plan_core2_need_wh}} Wh",
-          "exact": true,
-          "pad": 4,
-          "cue": "still"
-        },
-        {
-          "action": "waitForText",
-          "text": "quantity {{plan_crest_m2_1}} → {{plan_crest_m2_2}} m²"
-        },
-        {
-          "action": "hover",
-          "selector": "#plan span[title*='quantity {{plan_crest_m2_1}} → {{plan_crest_m2_2}} m²']",
-          "at": [
-            0.95,
-            1.0
-          ],
-          "offset": [
-            0,
-            6
-          ],
-          "cue": "trims again",
-          "note": "under the chip's right end: the T12 chip sits right beside it"
-        },
-        {
-          "action": "highlight",
-          "selector": "#plan span[title*='quantity {{plan_crest_m2_1}} → {{plan_crest_m2_2}} m²']",
-          "pad": 3,
-          "cue": "trims again"
-        },
-        {
-          "action": "unhighlight",
-          "cue": "This time",
-          "lead": 0.15,
-          "note": "the second trim's ring holds through the beat before this sentence"
-        },
-        {
-          "action": "scrollTo",
-          "text": "Verification receipt",
-          "exact": true,
-          "within": "#plan",
-          "align": "top",
-          "offset": 16,
-          "duration": 1100,
-          "cue": "This time",
-          "lead": 0.1,
-          "note": "the receipt and the verified Gantt below it fill the view"
-        },
-        {
-          "action": "hover",
-          "text": "Precedence",
-          "exact": true,
-          "within": "#plan",
-          "at": [
-            1.0,
-            0.5
-          ],
-          "offset": [
-            8,
-            0
-          ],
-          "cue": "against precedence"
-        },
-        {
-          "action": "hover",
-          "text": "Battery",
-          "exact": true,
-          "within": "#plan",
-          "at": [
-            1.0,
-            0.5
-          ],
-          "offset": [
-            8,
-            0
-          ],
-          "duration": 1300,
-          "cue": "robots",
-          "lead": 0.1,
-          "note": "one slow glide along the receipt families while the voice lists them"
-        },
-        {
-          "action": "hover",
-          "text": "Deadline",
-          "exact": true,
-          "within": "#plan",
-          "at": [
-            1.0,
-            0.5
-          ],
-          "offset": [
-            44,
-            0
-          ],
-          "cue": "{{landing_horizon_h}}-hour deadline",
-          "note": "right of the label and clear of '{{landing_makespan_h}} of {{landing_horizon_h}} h' below it, which the voice reads now"
-        },
-        {
-          "action": "waitForText",
-          "text": "{{landing_makespan_h}} of {{landing_horizon_h}} h",
-          "exact": true
-        },
-        {
-          "action": "hover",
-          "text": "{{landing_makespan_h}} of {{landing_horizon_h}} h",
-          "exact": true,
-          "at": [
-            1.0,
-            0.45
-          ],
-          "offset": [
-            44,
-            0
-          ],
-          "cue": "{{landing_makespan_h}} hours"
-        },
-        {
-          "action": "highlight",
-          "text": "{{landing_makespan_h}} of {{landing_horizon_h}} h",
-          "exact": true,
-          "pad": 3,
-          "cue": "{{landing_makespan_h}} hours",
-          "note": "the receipt's deadline family, over the verified Gantt"
+          "cue": "the bronze one"
         },
         {
           "action": "pause",
@@ -519,158 +146,105 @@
       ]
     },
     {
-      "id": "simulate",
+      "id": "brief",
       "kind": "ui",
-      "voDelay": 0.5,
-      "captionAlign": "right",
-      "narration": "Then the plan meets the Moon. In the simulator, we break excavator {{replan_robot_no|words}} at hour {{replan_fail_h|words}}, {{replan_progress}} of the way through its first dig. CP-SAT reschedules the remaining {{replan_tasks|words}} tasks in milliseconds, with no model call: done at {{replan_after_h}} hours instead of {{replan_before_h}}, still verified.",
+      "voDelay": 0.4,
+      "captionAlign": "left",
+      "note": "run.html opens on the landing pad run's brief: Shackleton from orbit with LS-1 marked; the Numbers face shows the brief as Lightning read it and the fleet.",
+      "narration": "Nemotron 3.5 Lightning reads the brief into requirements: two structures, seven robots, and each battery is the whole job's budget.",
+      "setup": [
+        {
+          "action": "goto",
+          "url": "/run.html#landing_pad/brief"
+        },
+        {
+          "action": "pause",
+          "ms": 1500,
+          "elastic": false
+        }
+      ],
       "actions": [
         {
-          "action": "unhighlight"
-        },
-        {
-          "action": "scrollTo",
-          "selector": "#simulate",
-          "align": "top",
-          "offset": 52,
-          "duration": 1300,
-          "cue": "Then the plan meets the Moon",
-          "lead": 0.7,
-          "note": "offset 52 = the section's own scroll-mt-24 under the 44 px top bar, so the app's scrollIntoView after the run does not move the page again"
+          "action": "waitForText",
+          "text": "What was asked"
         },
         {
           "action": "click",
           "role": "button",
-          "name": "+ Add failure",
-          "cue": "In the simulator"
-        },
-        {
-          "action": "select",
-          "role": "combobox",
-          "name": "Robot for failure 1",
-          "value": "{{replan_robot}}",
-          "at": [
-            0.55,
-            0.5
-          ],
-          "cue": "break excavator"
-        },
-        {
-          "action": "click",
-          "role": "spinbutton",
-          "name": "Failure 1 time in hours",
-          "at": [
-            0.42,
-            0.5
-          ],
-          "cue": "at hour",
-          "lead": 0.75,
-          "note": "a new failure row defaults to ~40 % of the makespan (30 h); the time is typed over it"
-        },
-        {
-          "action": "press",
-          "key": "ControlOrMeta+A"
-        },
-        {
-          "action": "typeText",
-          "value": "{{replan_fail_h}}",
-          "delay": 110
-        },
-        {
-          "action": "clickRole",
-          "role": "button",
-          "name": "Run simulation",
-          "cue": "CP-SAT reschedules",
-          "lead": 1.1
-        },
-        {
-          "action": "waitForText",
-          "text": "Completed at {{replan_after_h}} h",
-          "by": "done at",
-          "note": "the voice names the finish at 'done at'; the result is normally on screen before 'CP-SAT reschedules'"
-        },
-        {
-          "action": "waitForText",
-          "text": "{{replan_tasks}} tasks remaining"
-        },
-        {
-          "action": "waitForText",
-          "text": "({{replan_progress}} done)"
-        },
-        {
-          "action": "waitForScroll"
-        },
-        {
-          "action": "scrollTo",
-          "role": "heading",
-          "name": "Replay",
+          "name": "Numbers",
           "exact": true,
-          "align": "top",
-          "offset": 22,
-          "duration": 800
-        },
-        {
-          "action": "click",
-          "role": "slider",
-          "name": "Simulation time",
-          "at": [
-            0.124,
-            0.5
-          ],
-          "note": "seeks to ~9.2 h of the 79 h replay: the replay reaches the failure at 10 h and holds on it, with the event banner drawn across the map"
+          "cue": "reads the brief",
+          "lead": 0.5
         },
         {
           "action": "waitForText",
-          "text": "holding at {{replan_fail_h}} h",
-          "by": "with no model call"
+          "text": "Read by Nemotron 3.5 Lightning"
         },
         {
           "action": "hover",
-          "selector": "[aria-label^='Simulation replay map']",
-          "at": [
-            0.555,
-            0.105
-          ],
-          "cue": "with no model call",
-          "note": "just under 'rescheduled 10 tasks in <0.01 s' in the canvas banner"
-        },
-        {
-          "action": "scrollTo",
-          "text": "+{{replan_delta_h}} h",
-          "exact": true,
-          "align": "center",
-          "offset": -40,
-          "cue": "done at",
-          "lead": 0.7,
-          "note": "the replan card fills the view and the replay's clock and slider scroll off the top: the clock keeps ticking after the hold, a dozen times a second, which the motion check would count as repeated frames"
-        },
-        {
-          "action": "waitForText",
-          "text": "+{{replan_delta_h}} h",
-          "exact": true
-        },
-        {
-          "action": "hover",
-          "text": "+{{replan_delta_h}} h",
-          "exact": true,
-          "rect": "box",
+          "text": "Fleet, each battery the whole job",
           "at": [
             1.0,
-            1.0
+            0.5
           ],
           "offset": [
-            12,
-            8
+            16,
+            0
           ],
-          "cue": "instead of"
+          "cue": "seven robots"
+        },
+        {
+          "action": "click",
+          "role": "button",
+          "name": "Picture",
+          "exact": true,
+          "cue": "job's budget",
+          "lead": -0.2
+        },
+        {
+          "action": "pause",
+          "ms": 300
+        }
+      ]
+    },
+    {
+      "id": "refused",
+      "kind": "ui",
+      "voDelay": 0.7,
+      "narration": "Nemotron 3 Ultra proposes twelve tasks, and nothing it says is trusted. CP-SAT refuses the first plan with a proof: the printer needs {{plan_core1_need_wh_words}} watt-hours of its {{printer_battery_wh_words}}.",
+      "actions": [
+        {
+          "action": "click",
+          "role": "button",
+          "name": "Next: the first plan",
+          "cue": "Nemotron 3 Ultra",
+          "lead": 0.7
+        },
+        {
+          "action": "waitForText",
+          "text": "{{plan_core1_need_wh}} Wh",
+          "exact": true,
+          "by": "watt-hours"
         },
         {
           "action": "highlight",
-          "text": "+{{replan_delta_h}} h",
+          "text": "energy:printer",
           "exact": true,
-          "rect": "box",
           "pad": 4,
-          "cue": "instead of"
+          "cue": "refuses the first plan"
+        },
+        {
+          "action": "hover",
+          "text": "Printing needs",
+          "at": [
+            1.0,
+            0.5
+          ],
+          "offset": [
+            180,
+            0
+          ],
+          "cue": "the printer needs"
         },
         {
           "action": "pause",
@@ -679,209 +253,213 @@
       ]
     },
     {
-      "id": "robustness",
+      "id": "repairs",
       "kind": "ui",
       "voDelay": 0.5,
-      "narration": "{{mc_runs|Words}} runs with random robot failures, once per {{mc_mtbf_h}} robot-hours, each replanned by CP-SAT. Only {{mc_within_pct}} finish by the deadline; {{mc_spof_misses}} of the {{mc_misses}} misses trace to {{mc_spof_count|words}} robots with no backup. So add a spare of each and replay the same draws.",
+      "captionAlign": "left",
+      "narration": "That proof becomes the repair prompt. Ultra sinters less of the berm crest: {{plan_crest_m2_1}} square metres is still {{plan_core2_over_wh|words}} watt-hours over, {{plan_crest_m2_2}} fits. The same check runs right in the page.",
       "actions": [
         {
           "action": "unhighlight"
         },
         {
-          "action": "scrollTo",
-          "selector": "#robustness",
-          "align": "top",
-          "offset": 52,
-          "duration": 1100
-        },
-        {
-          "action": "clickRole",
+          "action": "click",
           "role": "button",
-          "name": "Run Monte Carlo"
+          "name": "Next: the repairs",
+          "cue": "That proof becomes",
+          "lead": 0.6
         },
         {
           "action": "waitForText",
-          "text": "MTBF {{mc_mtbf_h}} h"
+          "text": "{{plan_core2_need_wh}} Wh",
+          "exact": false,
+          "by": "still"
         },
         {
           "action": "hover",
-          "text": "MTBF {{mc_mtbf_h}} h",
+          "text": "{{plan_core2_need_wh}} Wh",
+          "exact": false,
           "at": [
-            0.27,
-            1.0
+            1.0,
+            0.5
           ],
           "offset": [
-            0,
-            12
+            14,
+            0
           ],
-          "cue": "once per"
+          "cue": "is still"
         },
         {
-          "action": "waitForText",
-          "text": "Finished within horizon",
-          "by": "Only"
+          "action": "hover",
+          "text": "3,966 Wh",
+          "exact": false,
+          "at": [
+            1.0,
+            0.5
+          ],
+          "offset": [
+            14,
+            0
+          ],
+          "cue": "fits",
+          "lead": 0.5
         },
         {
-          "action": "scrollTo",
-          "text": "Single points of failure",
-          "align": "top",
-          "offset": 96,
-          "duration": 900,
-          "cue": "each replanned",
+          "action": "click",
+          "text": "Try a crest",
+          "exact": true,
+          "cue": "The same check",
           "lead": 0.3
         },
         {
-          "action": "waitForText",
-          "text": "{{mc_within_pct}}",
-          "exact": true,
-          "by": "Only"
-        },
-        {
-          "action": "hover",
-          "text": "{{mc_within_pct}}",
-          "exact": true,
-          "at": [
-            1.0,
-            0.62
-          ],
-          "offset": [
-            18,
-            0
-          ],
-          "cue": "Only"
-        },
-        {
-          "action": "highlight",
-          "text": "{{mc_within_pct}}",
-          "exact": true,
-          "pad": [
-            5,
-            -7,
-            -1
-          ],
-          "cue": "Only"
-        },
-        {
-          "action": "zoomIn",
-          "text": "{{mc_within_pct}}",
-          "exact": true,
-          "scale": 1.45,
-          "to": [
-            0.12,
-            0.36
-          ],
-          "cue": "Only",
-          "lead": 0.0
+          "action": "press",
+          "key": "ArrowLeft",
+          "repeat": 15,
+          "delay": 70
         },
         {
           "action": "waitForText",
-          "text": "{{mc_spof_misses}} of {{mc_misses}} misses came from a robot with no backup"
-        },
-        {
-          "action": "highlight",
-          "text": "{{mc_spof_misses}} of {{mc_misses}} misses came from a robot with no backup",
-          "pad": 4,
-          "cue": "of the"
-        },
-        {
-          "action": "zoomOut",
-          "cue": "So add a spare",
-          "lead": 1.0
-        },
-        {
-          "action": "unhighlight",
-          "cue": "So add a spare",
-          "lead": 0.4
-        },
-        {
-          "action": "clickRole",
-          "role": "button",
-          "name": "+ add PR2",
-          "cue": "So add a spare",
-          "lead": 0.35
-        },
-        {
-          "action": "clickRole",
-          "role": "button",
-          "name": "+ add SV2",
-          "duration": 480
-        },
-        {
-          "action": "clickRole",
-          "role": "button",
-          "name": "+ add CP2",
-          "duration": 480
-        },
-        {
-          "action": "waitForText",
-          "text": "in the fleet",
-          "note": "the what-if spinner ('Replaying 200 runs with CP2, PR2, SV2 in the fleet…') is on screen when the scene ends"
+          "text": "{{plan_crest_m2_2}} m² · 34 spare",
+          "exact": true
         },
         {
           "action": "pause",
-          "ms": 200
+          "ms": 400
         }
       ]
     },
     {
-      "id": "whatif",
+      "id": "proven",
       "kind": "ui",
-      "voDelay": 0.35,
-      "transition": {
-        "type": "fade",
-        "duration": 0.35
-      },
-      "note": "The three what-if runs take several seconds on the backend (each click starts a 200-run Monte Carlo, the last one with all three spares); the wait is cut out between the two scenes with a short dissolve, the panel header keeps the real time. The spares join the fleet in its own order (CP2, PR2, SV2), the fleet the recorded landing_pad.whatif.mc.json replays, so the panel shows its figure.",
-      "narration": "Now {{whatif_pct}} finish by the deadline: a replan can hand the lost work to a spare.",
-      "setup": [
-        {
-          "action": "waitForText",
-          "text": "+{{whatif_gain_pts}} pts vs baseline",
-          "timeout": 45000
-        },
-        {
-          "action": "waitForText",
-          "text": "{{whatif_pct}}",
-          "exact": true
-        }
-      ],
+      "voDelay": 0.5,
+      "narration": "CP-SAT proves the plan against every order, zone and battery: done at hour {{landing_makespan_h}} of {{landing_horizon_h}}, and no schedule finishes sooner.",
       "actions": [
         {
+          "action": "click",
+          "role": "button",
+          "name": "Next: the proof",
+          "cue": "CP-SAT proves",
+          "lead": 0.6
+        },
+        {
+          "action": "waitForText",
+          "text": "of a {{landing_horizon_h}}-hour deadline",
+          "by": "done at hour"
+        },
+        {
           "action": "hover",
-          "text": "{{whatif_pct}}",
-          "exact": true,
+          "text": "T10, the crest refused twice",
           "at": [
             1.0,
-            0.62
+            0.5
           ],
           "offset": [
-            18,
+            16,
             0
           ],
-          "cue": "Now"
+          "cue": "every order"
         },
         {
-          "action": "highlight",
-          "text": "{{whatif_pct}}",
-          "exact": true,
-          "pad": [
-            5,
-            -7,
-            -1
-          ],
-          "cue": "Now"
+          "action": "pause",
+          "ms": 400
+        }
+      ]
+    },
+    {
+      "id": "failure",
+      "kind": "ui",
+      "voDelay": 0.5,
+      "captionAlign": "left",
+      "minDuration": 18.5,
+      "note": "The failure scene plays the Isaac Sim clip (tools/isaac: PhysX rovers on NASA LOLA terrain of Shackleton's rim; EX1 turns red at 5.75 s into the clip, hour 10).",
+      "narration": "Then a robot fails. In NVIDIA Isaac Sim, PhysX rovers drive this plan on Shackleton's rim, on terrain NASA measured. At hour {{isaac_fail_h|words}}, excavator {{isaac_fail_robot_no|words}} stops; CP-SAT replans the other {{isaac_replan_tasks|words}} tasks in a hundredth of a second, with no model call, and the rovers finish at hour {{isaac_finish_h|words}}.",
+      "actions": [
+        {
+          "action": "click",
+          "role": "button",
+          "name": "Next: a robot fails",
+          "cue": "Then a robot fails",
+          "lead": 0.5
         },
         {
-          "action": "zoomIn",
-          "text": "{{whatif_pct}}",
-          "exact": true,
-          "scale": 1.45,
-          "to": [
-            0.36,
-            0.3
+          "action": "waitForText",
+          "text": "CP-SAT replans {{isaac_replan_tasks}} tasks"
+        },
+        {
+          "action": "waitForText",
+          "text": "{{isaac_replan_s}} s",
+          "exact": true
+        },
+        {
+          "action": "moveTo",
+          "x": 1180,
+          "y": 700,
+          "cue": "In NVIDIA Isaac Sim"
+        },
+        {
+          "action": "hover",
+          "text": "EX1 fails on T3",
+          "exact": false,
+          "cue": "stops",
+          "lead": 0.4
+        },
+        {
+          "action": "hover",
+          "text": "CP-SAT replans {{isaac_replan_tasks}} tasks",
+          "cue": "replans the other"
+        },
+        {
+          "action": "hover",
+          "text": "done, 257 h inside the deadline",
+          "cue": "the rovers finish"
+        },
+        {
+          "action": "pause",
+          "ms": 600
+        }
+      ]
+    },
+    {
+      "id": "odds",
+      "kind": "ui",
+      "voDelay": 0.5,
+      "narration": "Two hundred runs with random breakdowns: as planned, only {{mc_within_n|words}} finish on time. With a spare printer, compactor and surveyor, {{whatif_within_n|words}} do.",
+      "actions": [
+        {
+          "action": "click",
+          "role": "button",
+          "name": "Next: how often it holds",
+          "cue": "Two hundred runs",
+          "lead": 0.6
+        },
+        {
+          "action": "waitForText",
+          "text": "{{mc_within_n}} of {{mc_runs}} on time",
+          "by": "finish on time"
+        },
+        {
+          "action": "hover",
+          "selector": ".waffle",
+          "nth": 0,
+          "at": [
+            0.9,
+            0.5
           ],
-          "cue": "Now",
-          "lead": 0.0
+          "cue": "as planned"
+        },
+        {
+          "action": "waitForText",
+          "text": "{{whatif_within_n}} of {{mc_runs}} on time"
+        },
+        {
+          "action": "hover",
+          "selector": ".waffle",
+          "nth": 1,
+          "at": [
+            0.9,
+            0.5
+          ],
+          "cue": "With a spare"
         },
         {
           "action": "pause",
@@ -892,223 +470,71 @@
     {
       "id": "impossible",
       "kind": "ui",
-      "voDelay": 0.7,
+      "voDelay": 0.5,
       "captionAlign": "left",
-      "narration": "Some briefs are impossible. In this recorded live run, Nemotron 3.5 Lightning even dropped the pad's compaction, and Moonwright restored it from the brief. {{impossible_repair_rounds|Words}} repairs kept every task, yet CP-SAT proves the {{impossible_deadline_h}}-hour deadline cannot hold, and finds the one it can meet: {{impossible_needed_h}} hours.",
+      "narration": "Some briefs are impossible. Here the pad's five tasks share one zone, one robot at a time, and they cannot fit before the lander's window at hour {{impossible_deadline_h|words}}. {{impossible_repair_rounds|Words}} repairs, all refused. Moonwright will not shrink the pad the brief forbids; CP-SAT proves the earliest finish instead: hour {{impossible_needed_h|words}}.",
       "actions": [
         {
-          "action": "clickRole",
+          "action": "click",
+          "role": "link",
+          "name": "Next run: Impossible deadline",
+          "cue": "Some briefs are impossible",
+          "lead": 0.6
+        },
+        {
+          "action": "waitForText",
+          "text": "until a heavy cargo lander"
+        },
+        {
+          "action": "click",
           "role": "button",
-          "name": "Impossible deadline: load the recorded run"
-        },
-        {
-          "action": "waitForText",
-          "text": "Set the deadline to {{impossible_needed_h}} h"
-        },
-        {
-          "action": "waitForText",
-          "text": "Not proved after {{impossible_repair_rounds}} repair rounds"
-        },
-        {
-          "action": "waitForScroll"
+          "name": "Next: the first plan",
+          "cue": "five tasks share",
+          "lead": 0.4
         },
         {
           "action": "hover",
-          "text": "Recorded live run",
-          "within": "#plan",
-          "rect": "box",
-          "at": [
-            0.3,
-            1.0
-          ],
-          "offset": [
-            0,
-            8
-          ],
-          "cue": "this recorded live run"
-        },
-        {
-          "action": "highlight",
-          "text": "Recorded live run",
-          "within": "#plan",
-          "rect": "box",
-          "pad": 3,
-          "cue": "this recorded live run"
-        },
-        {
-          "action": "hover",
-          "text": "operation restored",
-          "exact": true,
-          "within": "#plan",
-          "rect": "box",
-          "at": [
-            0.5,
-            1.0
-          ],
-          "offset": [
-            0,
-            10
-          ],
-          "cue": "even dropped",
-          "lead": 0.7
-        },
-        {
-          "action": "highlight",
-          "text": "operation restored",
-          "exact": true,
-          "within": "#plan",
-          "rect": "box",
-          "pad": 3,
-          "cue": "even dropped"
-        },
-        {
-          "action": "highlight",
-          "text": "subgrade compacted and inspected",
-          "within": "#plan",
-          "pad": 3,
-          "cue": "restored it from the brief",
-          "lead": 0.3,
-          "note": "the structure stage's note quoting the pad's own entry in the brief"
-        },
-        {
-          "action": "hover",
-          "text": "subgrade compacted and inspected",
-          "within": "#plan",
-          "at": [
-            1.0,
-            1.0
-          ],
-          "offset": [
-            8,
-            4
-          ],
-          "cue": "restored it from the brief"
-        },
-        {
-          "action": "unhighlight",
-          "cue": "repairs kept",
-          "lead": 0.9
-        },
-        {
-          "action": "scrollTo",
-          "text": "round 1",
-          "exact": true,
-          "within": "#plan",
-          "align": "top",
-          "offset": 180,
-          "cue": "repairs kept",
-          "lead": 0.9,
-          "note": "the first two repairs fill the trace; the advice and the receipt stay pinned on the right"
-        },
-        {
-          "action": "hover",
-          "text": "round 1",
-          "exact": true,
-          "within": "#plan",
+          "text": "Pad zone Z1",
           "at": [
             1.0,
             0.5
           ],
           "offset": [
-            64,
+            260,
             0
           ],
-          "cue": "kept every task",
-          "note": "rests after '8 tasks', off the chips"
+          "cue": "cannot fit"
         },
         {
-          "action": "highlight",
-          "text": "scope {{impossible_scope_drift}} energy",
-          "within": "#plan",
-          "rect": "box",
-          "pad": 3,
-          "cue": "kept every task"
+          "action": "click",
+          "role": "button",
+          "name": "Repairs",
+          "cue": "repairs, all refused",
+          "lead": 0.6
         },
         {
-          "action": "unhighlight",
-          "cue": "yet CP-SAT proves",
+          "action": "click",
+          "role": "button",
+          "name": "Answer",
+          "cue": "Moonwright will not shrink",
           "lead": 0.3
         },
         {
-          "action": "hover",
-          "text": "past the {{impossible_deadline_h}} h deadline",
-          "within": "#plan",
-          "at": [
-            1.0,
-            0.5
-          ],
-          "offset": [
-            14,
-            0
-          ],
-          "cue": "yet CP-SAT proves"
+          "action": "waitForText",
+          "text": "Finishing needs {{impossible_needed_h}} h",
+          "by": "earliest finish"
         },
         {
           "action": "highlight",
-          "text": "past the {{impossible_deadline_h}} h deadline",
-          "within": "#plan",
-          "pad": 4,
-          "cue": "deadline cannot hold"
-        },
-        {
-          "action": "hover",
-          "text": "{{impossible_needed_h}} h",
-          "exact": true,
-          "within": "#plan",
-          "at": [
-            1.0,
-            0.62
-          ],
-          "offset": [
-            18,
-            0
-          ],
-          "cue": "finds the one it can meet"
-        },
-        {
-          "action": "highlight",
-          "text": "{{impossible_needed_h}} h",
-          "exact": true,
-          "within": "#plan",
-          "pad": [
-            5,
-            -1,
-            -1
-          ],
-          "cue": "finds the one it can meet"
-        },
-        {
-          "action": "zoomIn",
-          "text": "{{impossible_needed_h}} h",
-          "exact": true,
-          "within": "#plan",
-          "scale": 1.5,
-          "to": [
-            0.3,
-            0.22
-          ],
-          "cue": "finds the one it can meet",
-          "lead": 0.0
+          "text": "Finishing needs {{impossible_needed_h}} h",
+          "pad": 6,
+          "cue": "the earliest finish"
         },
         {
           "action": "pause",
-          "ms": 600
+          "ms": 700
         }
       ]
-    },
-    {
-      "id": "isaac",
-      "kind": "slide",
-      "slide": "isaac.html",
-      "transition": {
-        "type": "dip",
-        "duration": 0.5
-      },
-      "voDelay": 0.6,
-      "minDuration": 21.2,
-      "note": "media/isaac.webm and media/isaac_clock.js come from tools/isaac (mission.py drove it on the LOLA ground, render_replay.py drew it; tools/isaac/README.md). The clip plays from the start of the scene; its cards follow the clip's own mission clock: the fault and the replan at 10 h (5.75 s into the clip, where the voice says 'drive faults'), the finish at the end.",
-      "narration": "In NVIDIA Isaac Sim, PhysX rovers drive the plan on Shackleton's rim, on terrain NASA measured. When excavator {{isaac_fail_robot_no|words}}'s drive faults, their telemetry goes back to Moonwright, CP-SAT replans the fleet, and the rovers finish every task at hour {{isaac_finish_h|words}}, none of them late.",
-      "actions": []
     },
     {
       "id": "evidence",

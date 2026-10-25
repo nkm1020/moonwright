@@ -168,6 +168,8 @@ const FORMATTERS = {
   /** a Monte Carlo result -> its misses: the runs that did not finish within the horizon, counted
    *  as the panel counts them (withinHorizonCount in frontend OutcomeBar.tsx) */
   misses: (mc) => mc.runs - withinHorizon(mc),
+  /** a Monte Carlo result -> the runs that finished within the horizon (the panel's "74 of 200") */
+  within: (mc) => withinHorizon(mc),
   /** a Monte Carlo result -> the misses that came from a robot with no backup: the lost_only
    *  outcomes that lost one of its single_points_of_failure, as the panel's "118 of 126 misses"
    *  counts them (attributeOutcomes in OutcomeBar.tsx) */

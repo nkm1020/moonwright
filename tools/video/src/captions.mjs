@@ -1,5 +1,5 @@
 // Caption cues from the narration timing (or a scene's caption override), the SRT file and the
-// burned-in caption images: each cue is rendered by Chromium (Geist, like the console) as a
+// burned-in caption images: each cue is rendered by Chromium (Albert Sans, like the site) as a
 // transparent 1920x1080 PNG and overlaid by ffmpeg (this ffmpeg build has no libass/drawtext).
 import fsp from "node:fs/promises";
 import path from "node:path";
@@ -72,7 +72,7 @@ export async function writeSrt(cues, file) {
 }
 
 /** One transparent 1920x1080 PNG per cue (plus a blank one), rendered by Chromium at the same
- *  forced 1.25 scale factor as the capture, with the console's Geist font; no server needed. */
+ *  forced 1.25 scale factor as the capture, with the site's Albert Sans; no server needed. */
 export async function renderCaptionImages(cues, facts) {
   await emptyDir(CAPTIONS_DIR);
   const { browser, context } = await launchBrowser();
@@ -88,10 +88,10 @@ export async function renderCaptionImages(cues, facts) {
 async function renderWith(page, cues) {
   await page.goto(`${OFFLINE_ORIGIN}/__video/slides/_caption.html`, { waitUntil: "load" });
   await page.evaluate(() => document.fonts.ready);
-  await page.evaluate(() => window.setCaption(["Geist"]));
+  await page.evaluate(() => window.setCaption(["Albert Sans"]));
   await page.evaluate(() => document.fonts.ready);
-  const loaded = await page.evaluate(() => [...document.fonts].some((f) => f.family.replace(/["']/g, "") === "Geist" && f.status === "loaded"));
-  if (!loaded) throw new Error("caption font Geist did not load (is out/app built?)");
+  const loaded = await page.evaluate(() => [...document.fonts].some((f) => f.family.replace(/["']/g, "") === "Albert Sans" && f.status === "loaded"));
+  if (!loaded) throw new Error("caption font Albert Sans did not load (the captions fetch it from Google Fonts)");
   const shot = async (file) => {
     await page.screenshot({ path: file, omitBackground: true, animations: "disabled" });
     return file;

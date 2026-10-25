@@ -44,27 +44,10 @@ export async function launchBrowser() {
   return { browser, context };
 }
 
-/** The app build's own @font-face rules (Geist, Geist Mono), pointed at the running app, so the
- *  slides and captions use the console's typeface without fetching anything from outside. */
+/** The site's typefaces (design/landing-1: Imbue for names, Albert Sans for reading), so the slides
+ *  and captions speak in the same type as the pages the video records. */
 function appFontsCss() {
-  const root = path.join(APP_DIR, ".next", "static");
-  const files = [];
-  const walk = (d) => {
-    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
-      const p = path.join(d, e.name);
-      if (e.isDirectory()) walk(p);
-      else if (e.name.endsWith(".css")) files.push(p);
-    }
-  };
-  if (fs.existsSync(root)) walk(root);
-  const rules = new Set();
-  for (const f of files) {
-    for (const m of fs.readFileSync(f, "utf8").matchAll(/@font-face\s*\{[^}]*\}/g)) {
-      rules.add(m[0].replace(/url\((['"]?)\.\.\/media\//g, "url($1/_next/static/media/"));
-    }
-  }
-  if (!rules.size) log("warning: no @font-face rules found in the app build; slides fall back to Helvetica/Menlo");
-  return [...rules].join("\n");
+  return '@import url("https://fonts.googleapis.com/css2?family=Albert+Sans:wght@400;500;600&family=Imbue:opsz,wght@10..100,400&display=swap");';
 }
 
 const escapeHtml = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -177,6 +160,8 @@ function estimate(a) {
       return 0.5;
     case "goto":
       return 1.5;
+    case "press":
+      return (a.repeat ?? 1) * ((a.delay ?? 70) / 1000);
     default:
       return 0.05;
   }
@@ -504,7 +489,11 @@ class Driver {
         return;
       }
       case "press":
-        await p.keyboard.press(a.key);
+        // `repeat` presses `key` that many times, `delay` ms apart (a slider stepped by its arrows)
+        for (let i = 0; i < (a.repeat ?? 1); i++) {
+          if (i) await sleep(a.delay ?? 70);
+          await p.keyboard.press(a.key);
+        }
         return;
       case "reveal":
         await p.evaluate(([sel, cls]) => document.querySelectorAll(sel).forEach((e) => e.classList.add(cls)), [a.selector, a.className ?? "in"]);
