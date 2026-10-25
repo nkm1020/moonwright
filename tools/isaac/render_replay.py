@@ -187,8 +187,13 @@ for zid, z in zones.items():
         stakes.setdefault(zid, []).append(s)
 
 # ---------------------------------------------------------------- robots: NASA models (public domain), a truss for the printer
-ASSET = {"excavator": "rassor.usd", "hauler": "rassor.usd", "compactor": "rassor.usd", "surveyor": "opportunity.usd"}
+ASSET = {"excavator": "rassor.usd", "hauler": "rassor.usd", "compactor": "rassor.usd", "surveyor": "rassor.usd"}
+SIZE = {"excavator": 1.0, "hauler": 1.0, "compactor": 1.0, "surveyor": 0.72}   # the surveyor: a smaller chassis with a mast
 TARGET_LEN = {"rassor.usd": 6.5, "opportunity.usd": 5.0}       # metres on screen, ~2x real for legibility
+# Both glTF files say Y-up, but they disagree on its sign: checked by rendering each model in every
+# orientation (inspect_asset.py): RASSOR stands on its wheels with its drums raised at -90 deg about X,
+# Opportunity's mast points up at +90 deg.
+ROT_X = {"rassor.usd": -90.0, "opportunity.usd": 90.0}
 ROLE = {"excavator": (1.0, 0.62, 0.12), "hauler": (0.55, 0.75, 1.0), "compactor": (0.45, 0.9, 0.45),
         "printer": (0.95, 0.95, 0.95), "surveyor": (0.95, 0.95, 0.95)}
 FIT = {}
@@ -201,7 +206,8 @@ def asset_fit(name):
     mn, mx = rng.GetMin(), rng.GetMax()
     if up == "Y":
         length = max(mx[0] - mn[0], mx[2] - mn[2]); height = mx[1] - mn[1]
-        offset = Gf.Vec3d(-(mn[0] + mx[0]) / 2, -mn[1], -(mn[2] + mx[2]) / 2)
+        floor = mn[1] if ROT_X[name] > 0 else mx[1]          # the side that ends up at the bottom
+        offset = Gf.Vec3d(-(mn[0] + mx[0]) / 2, -floor, -(mn[2] + mx[2]) / 2)
     else:
         length = max(mx[0] - mn[0], mx[1] - mn[1]); height = mx[2] - mn[2]
         offset = Gf.Vec3d(-(mn[0] + mx[0]) / 2, -(mn[1] + mx[1]) / 2, -mn[2])
@@ -218,8 +224,14 @@ for rid, typ in track["types"].items():
     if typ in ASSET:
         path, up, sc, offset, top = asset_fit(ASSET[typ])
         m = UsdGeom.Xform.Define(stage, root + "/Model")
-        if up == "Y": m.AddRotateXOp().Set(90.0)
-        m.AddScaleOp().Set(Gf.Vec3f(sc, sc, sc))
+        if up == "Y": m.AddRotateXOp().Set(ROT_X[ASSET[typ]])
+        k = sc * SIZE[typ]
+        m.AddScaleOp().Set(Gf.Vec3f(k, k, k))
+        top = top * SIZE[typ]
+        if typ == "surveyor":   # survey mast and scanner head
+            parts.append(cyl(root + "/Mast", 0.07, 2.4, (0, 0, top + 1.2), M["body_sv"][0]))
+            parts.append(cube(root + "/Scanner", (0.7, 0.45, 0.4), (0, 0, top + 2.5), M["dark"][0]))
+            top = top + 2.7
         m.AddTranslateOp(opSuffix="center").Set(offset)
         m.GetPrim().GetReferences().AddReference(path)
         model = m.GetPrim()

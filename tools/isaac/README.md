@@ -8,9 +8,12 @@ is dug or hauled physically, and no physics decides anything.
 
 The robots are NASA models from [NASA 3D Resources](https://github.com/nasa/NASA-3D-Resources) (free
 and without copyright; no NASA endorsement is implied): RASSOR, NASA's Regolith Advanced Surface Systems
-Operations Robot, stands in for the excavators, haulers and compactor (a small light on top marks the
-role: amber excavator, blue hauler, green compactor); the Mars Exploration Rover Opportunity stands in for
-the surveyor; the sintering printer is drawn as a gantry truss. Models are shown at about twice real
+Operations Robot, stands in for every mobile robot (a small light on top marks the role: amber
+excavator, blue hauler, green compactor, white surveyor, which is a smaller chassis with a survey mast);
+the sintering printer is drawn as a gantry truss. RASSOR stands on its wheels with its drums raised, as it
+drives; the two NASA glTF files disagree on the sign of their up axis, which `inspect_asset.py` (one model
+in four orientations) settles. Opportunity's model is its stowed configuration and Perseverance's crashed
+the converter, so neither is used. Models are shown at about twice real
 size so they read in a wide shot.
 
 What changes on screen: the pad darkens as it is dug, compacted and sintered; the berm grows with the
@@ -34,8 +37,7 @@ depot shares its cell with the pad, so the simulator stacks them there).
 
        B=https://raw.githubusercontent.com/nasa/NASA-3D-Resources/master/3D%20Models
        curl -L -o rassor.glb "$B/Regolith%20Advanced%20Surface%20Systems%20Operations%20Robot%20(RASSOR)/Regolith%20Advanced%20Surface%20Systems%20Operations%20Robot%20(RASSOR).glb"
-       curl -L -o opportunity.glb "$B/Mars%20Exploration%20Rover%20-%20Opportunity%20(MER-B)/Mars%20Exploration%20Rover%20-%20Opportunity%20(MER-B).glb"
-       python convert_assets.py rassor.glb opportunity.glb      # -> rassor.usd, opportunity.usd (Kit asset converter)
+       python convert_assets.py rassor.glb                      # -> rassor.usd (Kit asset converter)
 
    One model per run is the safe way: the converter crashed on the Perseverance model and once
    after a first conversion in the same process.
