@@ -1,7 +1,7 @@
 """Orchestrator: structure -> task graph -> validate -> schedule -> (repair x N) -> explain.
 
 This is the F5 loop from the PRD. Every stage appends a :class:`LoopStep` so the UI can render
-"구조화 -> 그래프 -> 검증 -> 스케줄 -> 수정 n회".
+"structure -> graph -> validate -> schedule -> repair n times".
 
 Progress callback
 -----------------

@@ -877,7 +877,7 @@ export interface MonteCarloResult {
   completed: number;
   /** completed / runs */
   completion_rate: number;
-  /** completed within horizon_h / runs: the "기한 내 완공 확률" of the PRD */
+  /** completed within horizon_h / runs: the PRD's "probability of finishing by the deadline" */
   within_horizon_rate: number;
   /** Wilson 95% interval of within_horizon_rate, [low, high] */
   within_horizon_ci: [number, number];

@@ -16,7 +16,14 @@ CP-SAT replans the remaining work in milliseconds, and Monte Carlo puts a number
 measured terrain; when one breaks down, Moonwright replans from their telemetry and the rovers carry
 out the new verified plan.
 
-<!-- TODO(video): hero GIF docs/img/hero.gif + links: demo video, live demo -->
+![Hour 10 in NVIDIA Isaac Sim on Shackleton's rim: excavator EX1 breaks down, and CP-SAT replans the other 10 tasks in 0.01 s](docs/img/hero.jpg)
+
+> **Judges, start here.** The demo video (under three minutes) walks one run end to end. The site in
+> [`design/landing-1`](design/landing-1) replays the three runs recorded live on Token Factory,
+> scene by scene, with no backend and no key (open `index.html`, or `python3 -m http.server` in that
+> folder). To run the pipeline yourself, offline: [Run it](#run-it), a few commands and no API key;
+> live on Token Factory: one environment variable. The evidence behind every figure is in
+> [`docs/eval`](docs/eval).
 
 ## Why
 
@@ -27,6 +34,13 @@ right and quietly break what matters: a battery that runs dry halfway through a 
 one blast zone, a haul scheduled before the material is dug, a deadline no schedule can meet.
 Solvers catch all of that, but someone has to write the model. Moonwright puts each where it is
 strong: Nemotron reads the brief, decomposes the work and repairs it; CP-SAT proves it.
+
+NASA names this need. Its FY26 Civil Space Shortfall Prioritization lists shortfall SF15, "Operate
+multi-agent robotic and crewed systems in cooperative planetary surface activities", with need
+15.04, "Perform Earth-independent cooperative tasks on planetary bodies using autonomous software
+tools in multi-agent robotic systems", and need 4.01, "Perform site preparation and bulk regolith
+manipulation for infrastructure construction, including landing pads, berms, ...": the landing pad
+and blast berm this demo plans ([PDF](https://www.nasa.gov/wp-content/uploads/2026/05/fy26-civil-space-shortfall-prioritization.pdf)).
 
 The same loop fits autonomous earthmoving on Earth, where a fleet of electric machines shares
 batteries, exclusion zones and a hard handover date.
@@ -94,7 +108,7 @@ Details, edge cases and the reasoning behind each rule: [docs/design.md](docs/de
 
 | Role | Model | Why this model |
 | --- | --- | --- |
-| Structure the brief | `nvidia/Nemotron-3_5-Lightning`, reasoning off | short, frequent, schema-bound; 3 s median, a fraction of a cent |
+| Structure the brief | `nvidia/Nemotron-3_5-Lightning`, reasoning off | short, frequent, schema-bound; 4 s median (run 4), a fraction of a cent |
 | Task graph and repair | `nvidia/Nemotron-3-Ultra-550b-a55b`, reasoning on | measured: more first-try plans, faster per token than Super, and honest on impossible briefs |
 | Explanation | `nvidia/nemotron-3-super-120b-a12b` | readable summaries of a verified plan at low cost |
 
@@ -104,6 +118,31 @@ Every call goes through the OpenAI-compatible Token Factory API with `response_f
 before falling back to a direct answer. Every request is logged (status, tokens, latency, request
 id, never prompt text) and summarised per model and role. Routing is one environment variable per
 role (`backend/.env.example`).
+
+**Where Token Factory sped up the work.** One OpenAI-compatible endpoint served all three
+Nemotron sizes, so routing each role to the model that fits it was a configuration change, not an
+integration: when the measurements showed Ultra beating Super on first-try plans and on speed
+(263-295 against 134-157 output tokens per second on the same prompts), the task graph moved to
+Ultra in one line. Strict `json_schema` decoding on every model removed a whole class of parsing
+failures, and the reasoning switch per request let the structuring calls answer directly while
+the planning calls reason. That made the evaluation affordable to run four times in three days:
+1,494 requests with three to five concurrent clients, zero non-200 responses and zero 429s, about
+$0.05 per plan at the median. Each run found a hole in the checks
+(shrunk work, hauls before digs, structuring slips), and each fix was re-measured the next day.
+Details and the rough edges: [docs/feedback-draft.md](docs/feedback-draft.md).
+
+**NVIDIA models we did not use, and why.** The Physical AI track names GR00T, Cosmos and SONIC
+next to Nemotron. GR00T and SONIC are control policies for arms and humanoids; Moonwright's
+problem is the plan a crew of wheeled machines follows, which is a reasoning and verification
+task, so Nemotron plans and CP-SAT proves, and the rovers in Isaac Sim are driven by a plain
+heading controller. Cosmos Reason would fit a perception step (confirming from a camera that a
+zone is clear before work starts); `nvidia/Cosmos3-Super-Reasoner` left Token Factory's shared API
+on Aug 31 2026 and now needs a dedicated endpoint, which this project does not run.
+
+**On the robot.** The split is cloud planning, on-board replanning: Nemotron needs the network,
+CP-SAT does not. The solver-only replan took a median 9 ms (p95 52 ms) on a laptop CPU in run 4,
+which is the part a crew's own computer (a Jetson-class board, say) would run when a robot fails
+and the link to Earth is 1.3 s away; we have not measured it on a Jetson.
 
 ## Evidence
 

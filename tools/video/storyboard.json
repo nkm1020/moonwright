@@ -19,22 +19,32 @@
     "TBD": "T B D"
   },
   "gif": {
-    "scene": "refused",
-    "from": "CP-SAT refuses the first plan",
-    "offset": 0.0,
-    "duration": 12,
-    "fps": 15,
-    "width": 1280,
+    "scene": "coldopen",
+    "from": 0.8,
+    "duration": 6,
+    "fps": 12,
+    "width": 720,
     "maxMB": 8
   },
   "scenes": [
+    {
+      "id": "coldopen",
+      "kind": "slide",
+      "slide": "coldopen.html",
+      "burnCaptions": false,
+      "voDelay": 0.9,
+      "minDuration": 8.4,
+      "note": "The first seconds: the Isaac Sim mission at the fault (the site's own clip, slides/site/isaac-closed-loop.webm, from 4.35 s; EX1 turns red at 5.75 s), then the replan card, before the title.",
+      "narration": "Hour {{isaac_fail_h|words}} on the rim of Shackleton crater: an excavator breaks down. Moonwright replans the crew in a hundredth of a second, and proves the new plan.",
+      "actions": []
+    },
     {
       "id": "title",
       "kind": "slide",
       "slide": "title.html",
       "still": 7.6,
       "burnCaptions": false,
-      "narration": "Moonwright: a planning agent for robot crews building on the Moon. Nemotron proposes the plan. A solver proves it.",
+      "narration": "Moonwright. Nemotron proposes the plan. A solver proves it.",
       "actions": [
         {
           "action": "reveal",
@@ -46,7 +56,11 @@
           "selector": ".t-prove",
           "cue": "A solver proves"
         }
-      ]
+      ],
+      "transition": {
+        "type": "dip",
+        "duration": 0.5
+      }
     },
     {
       "id": "problem",
@@ -92,7 +106,7 @@
         "duration": 0.5
       },
       "note": "The site's overview (design/landing-1/index.html): the name over Apollo 17's rover, then the landing pad run's verified schedule as a board, the twice-refused task in bronze.",
-      "narration": "Here is a run recorded live on Nebius Token Factory: a landing pad and a blast berm near Shackleton crater, seven robots, fourteen days, nothing to recharge from. Every row of this schedule is proven by CP-SAT, and the bronze one was refused twice before it held.",
+      "narration": "Here is a run recorded live on Nebius Token Factory: a landing pad and a blast berm near Shackleton crater, seven robots, fourteen days. CP-SAT refused the bronze row twice before it held.",
       "setup": [
         {
           "action": "goto",
@@ -118,8 +132,8 @@
           "align": "top",
           "offset": 40,
           "duration": 1500,
-          "cue": "Every row",
-          "lead": 1.2
+          "cue": "CP-SAT refused",
+          "lead": 1.0
         },
         {
           "action": "waitForText",
@@ -137,7 +151,7 @@
             16,
             0
           ],
-          "cue": "the bronze one"
+          "cue": "the bronze row"
         },
         {
           "action": "pause",
@@ -370,7 +384,7 @@
       "kind": "ui",
       "voDelay": 0.5,
       "captionAlign": "left",
-      "minDuration": 18.5,
+      "minDuration": 16.0,
       "note": "The failure scene plays the Isaac Sim clip (tools/isaac: PhysX rovers on NASA LOLA terrain of Shackleton's rim; EX1 turns red at 5.75 s into the clip, hour 10).",
       "narration": "Then a robot fails. In NVIDIA Isaac Sim, PhysX rovers drive this plan on Shackleton's rim, on terrain NASA measured. At hour {{isaac_fail_h|words}}, excavator {{isaac_fail_robot_no|words}} stops; CP-SAT replans the other {{isaac_replan_tasks|words}} tasks in a hundredth of a second, with no model call, and the rovers finish at hour {{isaac_finish_h|words}}.",
       "actions": [
@@ -420,6 +434,155 @@
       ]
     },
     {
+      "id": "live",
+      "kind": "ui",
+      "voDelay": 0.5,
+      "captionAlign": "right",
+      "transition": {
+        "type": "dip",
+        "duration": 0.5
+      },
+      "note": "The working app (frontend/, Next.js + FastAPI in fixture mode), not a replay: the setup plans the landing pad from its recorded Token Factory answers; the recorded part injects a failure the site does not show and CP-SAT replans it during the capture. Figures checked against tools/video/runs/landing_pad.hl2-at-24.sim.json (the CLI's run of the same failure).",
+      "narration": "And this is the working app, not a replay. Pick any robot and any hour: hauler {{app_fail_robot_no|words}} breaks down at hour {{app_fail_h|words}}. CP-SAT reschedules the remaining {{app_replan_tasks|words}} tasks on the spot, and the pad still finishes at hour {{app_after_h|words}}, because the other hauler takes over.",
+      "setup": [
+        {
+          "action": "goto",
+          "url": "http://127.0.0.1:3076/"
+        },
+        {
+          "action": "waitForText",
+          "text": "recorded answers",
+          "timeout": 60000
+        },
+        {
+          "action": "waitForSelector",
+          "selector": "#brief-text",
+          "timeout": 30000
+        },
+        {
+          "action": "clickRole",
+          "role": "button",
+          "name": "Structure brief"
+        },
+        {
+          "action": "waitForSelector",
+          "selector": "svg[aria-label^='Site map']",
+          "timeout": 90000
+        },
+        {
+          "action": "clickRole",
+          "role": "button",
+          "name": "Plan with these requirements"
+        },
+        {
+          "action": "waitForText",
+          "text": "Verified plan: makespan {{landing_makespan_h}} h",
+          "timeout": 180000
+        },
+        {
+          "action": "scrollTo",
+          "selector": "#simulate",
+          "align": "top",
+          "offset": 52,
+          "duration": 300
+        },
+        {
+          "action": "waitForScroll"
+        },
+        {
+          "action": "pause",
+          "ms": 600,
+          "elastic": false
+        }
+      ],
+      "actions": [
+        {
+          "action": "click",
+          "role": "button",
+          "name": "+ Add failure",
+          "cue": "Pick any robot",
+          "lead": 0.4
+        },
+        {
+          "action": "select",
+          "role": "combobox",
+          "name": "Robot for failure 1",
+          "value": "{{app_fail_robot}}",
+          "at": [
+            0.55,
+            0.5
+          ],
+          "cue": "hauler"
+        },
+        {
+          "action": "click",
+          "role": "spinbutton",
+          "name": "Failure 1 time in hours",
+          "at": [
+            0.42,
+            0.5
+          ],
+          "cue": "at hour",
+          "lead": 0.75
+        },
+        {
+          "action": "press",
+          "key": "ControlOrMeta+A"
+        },
+        {
+          "action": "typeText",
+          "value": "{{app_fail_h}}",
+          "delay": 110
+        },
+        {
+          "action": "clickRole",
+          "role": "button",
+          "name": "Run simulation",
+          "cue": "CP-SAT reschedules",
+          "lead": 1.7
+        },
+        {
+          "action": "waitForText",
+          "text": "Completed at {{app_after_h}} h",
+          "by": "still finishes"
+        },
+        {
+          "action": "waitForText",
+          "text": "{{app_replan_tasks}} tasks remaining"
+        },
+        {
+          "action": "waitForText",
+          "text": "({{app_progress}} done)"
+        },
+        {
+          "action": "waitForScroll"
+        },
+        {
+          "action": "scrollTo",
+          "text": "CP-SAT rescheduled, Nemotron not needed",
+          "exact": true,
+          "align": "center",
+          "offset": -40,
+          "duration": 900,
+          "cue": "and the pad still finishes",
+          "lead": 0.6
+        },
+        {
+          "action": "highlight",
+          "text": "CP-SAT rescheduled, Nemotron not needed",
+          "exact": true,
+          "rect": "box",
+          "pad": 4,
+          "cue": "and the pad still finishes",
+          "lead": 0.0
+        },
+        {
+          "action": "pause",
+          "ms": 500
+        }
+      ]
+    },
+    {
       "id": "odds",
       "kind": "ui",
       "voDelay": 0.5,
@@ -465,7 +628,22 @@
           "action": "pause",
           "ms": 400
         }
-      ]
+      ],
+      "setup": [
+        {
+          "action": "goto",
+          "url": "/run.html#landing_pad/failure"
+        },
+        {
+          "action": "pause",
+          "ms": 1200,
+          "elastic": false
+        }
+      ],
+      "transition": {
+        "type": "dip",
+        "duration": 0.5
+      }
     },
     {
       "id": "impossible",
@@ -545,7 +723,7 @@
         "type": "dip",
         "duration": 0.5
       },
-      "narration": "Three Nemotron models on Nebius Token Factory, each routed to its job, inside a solver loop. On the final pipeline, Nemotron 3 Ultra planned {{eval_briefs}} test briefs in {{eval_runs}} live runs: {{eval_verified_pct}} ended verified, {{eval_in_scope_pct}} with all of the work in it. The repair loop adds {{eval_loop_gain_pts}} points to the {{eval_first_try_pct}} verified on the first try. And the proof is what does it: given the solver's core, Ultra repaired {{eval_core_repair_pct}} of the plans it got wrong; told only that they were refused, {{eval_verdict_repair_pct}}.",
+      "narration": "Three Nemotron models on Nebius Token Factory, each routed to its job, inside a solver loop. On the final pipeline, Nemotron 3 Ultra planned {{eval_briefs}} test briefs in {{eval_runs}} live runs: {{eval_verified_pct}} ended verified, {{eval_in_scope_pct}} with all of the work in it. And the proof is what does it: given the solver's core, Ultra repaired {{eval_core_repair_pct}} of the plans it got wrong; told only that they were refused, {{eval_verdict_repair_pct}}.",
       "actions": [
         {
           "action": "reveal",
@@ -580,8 +758,8 @@
         {
           "action": "reveal",
           "selector": ".ev-loop",
-          "cue": "The repair loop adds",
-          "lead": 0.2
+          "cue": "with all of the work",
+          "lead": -0.6
         },
         {
           "action": "reveal",

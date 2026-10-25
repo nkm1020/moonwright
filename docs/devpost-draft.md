@@ -1,8 +1,8 @@
-# Devpost submission draft (English). Numbers in [MEASURE] slots are filled only from measured runs.
+# Devpost submission draft (English). Every figure comes from a saved run in the repository.
 
 **Project name:** Moonwright
 **Track:** Physical AI (simulation-only entry; an embodied-agent planning runtime)
-**Tagline:** Nemotron proposes the construction plan, CP-SAT proves it, Nemotron repairs what the solver rejects, and the agent replans when a robot fails.
+**Elevator pitch (<= 200 characters):** Nemotron plans a lunar robot crew's construction; CP-SAT proves it or returns the proof it fails, and repairs fed that proof succeed 70% vs 32%. Run on PhysX rovers in Isaac Sim.
 
 ## Inspiration
 
@@ -47,6 +47,10 @@ guessing again.
 6. **Robustness.** A Monte Carlo panel replays the plan hundreds of times with random robot
    failures and duration jitter and reports the probability of finishing within the deadline, which
    robots are single points of failure, and what a spare would buy.
+7. **On rovers, in NVIDIA Isaac Sim.** Seven four-wheeled PhysX rovers carry out the verified plan
+   on the rim of Shackleton crater (NASA LOLA's 5 m/px terrain) at lunar gravity. When a rover
+   breaks down, the rovers' telemetry goes to Moonwright, CP-SAT replans, and the rovers carry out
+   the new verified schedule: the agent senses, decides and acts in a physics simulation.
 
 ## How we built it
 
@@ -69,11 +73,22 @@ guessing again.
   a failure, event detection, and a replanning path that derives the remaining work from the
   original task definitions, locks the running task to its robot, and refuses replans that drop
   work.
+- **Isaac Sim closed loop:** NVIDIA Isaac Sim 5.1 on a Windows RTX 4070 SUPER. Each robot is an
+  articulation (chassis and four driven wheels) on terrain cut from NASA LOLA's map of
+  Shackleton's rim; the executor follows the 2D simulator's rules, and a bridge script hands the
+  measured frame to the backend's `replan_after_event` (the same code path as the 2D replans) and
+  the verified schedule back to the rovers. RTX rendering with Replicator; NASA's RASSOR model.
 - **Stack:** Python 3.13, FastAPI with server-sent events for the live trace, OR-Tools, pydantic;
-  Next.js 16, TypeScript and Tailwind for the UI (Gantt, replay canvas, before/after, Monte Carlo).
-  Fully offline demo mode on recorded Nemotron answers so reviewers can run it without a key.
+  Next.js 16, TypeScript and Tailwind for the app (Gantt, replay canvas, before/after, Monte
+  Carlo); a static site that replays the three runs recorded live on Token Factory scene by scene,
+  with no backend and no key; a video pipeline (Playwright, OpenAI TTS, ffmpeg) whose every quoted
+  figure is checked against the saved runs before recording.
 
 ## How this differs from "an LLM that writes a schedule"
+
+The short version: the solver's proof is what makes the model's repairs work. Given CP-SAT's
+minimal infeasibility core with its numbers, Nemotron 3 Ultra repaired 70 % of the plans it got
+wrong; told only that they were refused, 32 % (Fisher's exact test p = 0.008).
 
 The model never emits a schedule. It emits scope: tasks, quantities, precedence, robot types.
 Hours and watt-hours come from a rate model, the assignment and timing come from the solver, and
@@ -121,6 +136,11 @@ plan in the repository (`docs/eval/`).
   failures (0.002 per robot-hour) and duration jitter, every failure replanned by CP-SAT: 37 %
   finish within the 336 h horizon (95 % CI 31-44 %). 118 of the 126 misses trace to the compactor,
   the printer and the surveyor, which have no backup; with one spare of each, 86 % (81-90 %).
+- **On PhysX rovers (Isaac Sim).** With EX1 lost at hour 10 on Shackleton's rim, CP-SAT
+  rescheduled the remaining 10 tasks from the rovers' telemetry in 0.01 s (72 h to 79 h) and the
+  rovers finished every task at 79 h, the same as the 2D simulator; none of the 6 completed drives
+  reached its zone after the planned start. Physics also showed what the travel model misses: a
+  skid-steer rover that has to turn around first takes 9.7 % longer on that leg.
 
 ## Challenges
 
@@ -155,7 +175,9 @@ plan in the repository (`docs/eval/`).
 ## Limitations and known failures
 
 - Travel is exact for the planning model (straight legs between zone centres in whole hours, in
-  the order CP-SAT picks), not terrain. The simulator is 2D and kinematic.
+  the order CP-SAT picks), not terrain and not turning in place, which Isaac Sim shows can add
+  10 % to a leg. The 2D simulator is kinematic; in Isaac Sim the driving is PhysX but the work
+  (digging, hauling, sintering) is not simulated physically, and failures are injected.
 - Durations and energies come from an illustrative rate model calibrated to the briefs' battery
   units, not from a specific robot's datasheet; quantities are the model's estimates from the
   structure dimensions and are shown with their basis.
@@ -172,38 +194,87 @@ plan in the repository (`docs/eval/`).
 
 ## Who would use this
 
-Site-preparation planning for lunar surface construction programs (NASA MMPACT's pad and
-infrastructure work, ICON's Project Olympus, Lunar Outpost, KICT's lunar construction research)
-and, on Earth, remote and hazardous earthworks where a crew must execute a plan with little
-supervision: mine sites, disaster recovery, offshore. [Add one sentence from a practitioner who
-tried the UI.]
+NASA lists the need. Its FY26 Civil Space Shortfall Prioritization includes SF15, "Operate
+multi-agent robotic and crewed systems in cooperative planetary surface activities", with need
+15.04, "Perform Earth-independent cooperative tasks on planetary bodies using autonomous software
+tools in multi-agent robotic systems", and need 4.01, "Perform site preparation and bulk regolith
+manipulation for infrastructure construction, including landing pads, berms, ...": the landing pad
+and berm this demo plans. Users: site-preparation planners in lunar surface construction programs
+(NASA's surface construction work, ICON's Project Olympus, KICT's lunar construction research,
+multi-rover missions in the line of JPL's CADRE) and, on Earth, remote and hazardous earthworks
+where a fleet of electric machines executes a plan with little supervision: mine sites, disaster
+recovery, offshore.
 
 ## Track fit
 
-Moonwright is an embodied-agent runtime for a robot crew: it senses simulator telemetry (positions,
+Moonwright is an embodied-agent runtime for a robot crew: it senses telemetry (positions,
 batteries, failures), decides (verified rescheduling, escalation to the reasoning model when the
-fleet cannot finish) and acts (new per-robot task lists). The verified schedule is the task list a
-ROS 2 executor or an Isaac/GR00T stack would consume; the 2D simulator is enough to show the
-planning depth, and the path to a physics simulator is the first item in What's next.
+fleet cannot finish) and acts (new per-robot task lists). In NVIDIA Isaac Sim the loop is closed
+on PhysX rovers: the telemetry comes from the physics, and the rovers drive the schedule that
+comes back. GR00T and SONIC are control policies for arms and humanoids, and Moonwright's problem
+is the plan a crew of wheeled machines follows, so Nemotron plans, CP-SAT proves, and a plain
+heading controller drives; Cosmos Reason would fit a camera check (is the zone clear?), but
+`nvidia/Cosmos3-Super-Reasoner` left Token Factory's shared API on Aug 31 2026. The replan needs
+no network (a median 9 ms on a laptop CPU), which is the part a robot's own computer would run.
 
 ## What's next
 
-- Isaac Sim / ROS 2 execution of the per-robot task lists; terrain-aware travel; recharging and
-  night cycles; multiple depots.
+- A turn allowance and terrain slope in the travel model, measured from the Isaac Sim drives.
+- A perception step: a vision model confirms from the site cameras that a zone is clear before
+  work starts, and disagreements with telemetry become events.
+- ROS 2 execution of the per-robot task lists; recharging and night cycles; multiple depots.
 - Rate tables from real robot datasheets and a material-flow model (haul cycles tied to placement).
-- Monte Carlo as a batch job and a hosted backend on Nebius.
+- Monte Carlo as a Nebius Serverless Job, and the replan measured on a Jetson-class board.
 
 ## Built with
 
-Nebius Token Factory, NVIDIA Nemotron 3.5 Lightning, Nemotron 3 Ultra, Nemotron 3 Super,
-Google OR-Tools CP-SAT, Python, FastAPI, pydantic, Next.js, TypeScript, Tailwind CSS.
+Tags (hyphenated, so Devpost keeps them whole): nebius-token-factory, nvidia-nemotron,
+nemotron-3-ultra, nemotron-3.5-lightning, nemotron-3-super, nvidia-isaac-sim, physx, or-tools,
+cp-sat, python, fastapi, pydantic, next.js, typescript, tailwindcss, nasa-lola.
 
 ## Feedback on Nebius Token Factory and NVIDIA Nemotron (required section)
 
-See `docs/feedback-draft.md`; paste the measured version here.
+The form asks nine questions; draft answers below. The three ratings are the submitter's own
+call: the numbers here are suggestions marked [confirm].
+
+1. **Which models, and why that size?** Nemotron 3.5 Lightning structures the brief (short,
+   frequent, schema-bound: 4 s median, about $0.0003 a call). Nemotron 3 Ultra, reasoning on,
+   writes the task graph and every repair, the step that needs multi-step decomposition; we
+   measured it against Super on the same requirements: more plans verified on the first graph,
+   honest failure on impossible briefs (Super quietly shrank the work), and faster output
+   (263-295 against 134-157 tokens per second). Nemotron 3 Super writes the explanation of a
+   verified plan, where its lower price matters and reasoning does not.
+2. **Output quality for this use case (1-10):** 8 [confirm]. Strict JSON held on all three models;
+   the decomposition is where it errs (45 % of Ultra's first graphs refused in run 4), and those
+   errors are exactly what the solver can name and the model can repair.
+3. **Fine-tuned, prompt-engineered or out of the box?** Prompt-engineered with strict
+   `json_schema` outputs, no fine-tuning. The repair prompt carries CP-SAT's minimal
+   infeasibility core with its numbers; that one change is worth 70 % against 32 % repaired.
+4. **Compared with other models you have used?** We compared Nemotron sizes against each other
+   (66 paired live runs per arm); we did not benchmark other vendors' models for this project, so
+   we will not claim a comparison we did not measure.
+5. **Most valuable Nebius capabilities, and how?** Three Nemotron sizes on one OpenAI-compatible
+   endpoint (per-role routing became configuration), strict `json_schema` decoding on every model,
+   the per-request thinking switch, and reliability: 1,494 requests over four evaluation runs,
+   three to five concurrent clients, zero non-200 responses and zero 429s.
+6. **How likely to recommend Nemotron on Nebius (1-10):** 9 [confirm].
+7. **Inference on Nebius compared with previous environments (1-10):** 8 [confirm].
+8. **Features that would have helped:** a reasoning budget separate from `max_tokens` (at 16,384,
+   78 of 190 Ultra reasoning calls were cut before answering); a spend cap or auto-charge switch
+   (the console offers only TPM/RPM limits, a card is required even with promo credits, and an
+   API key can only be revoked, not paused); the request's cost in the usage field; a
+   machine-readable deprecation field in `models_info`; and which structured-output modes each
+   model honours, in the catalogue.
+9. **What you hope to see from the Nemotron team next:** reasoning-effort levels the chat template
+   honours; typical reasoning lengths per model in the model cards; a vision model sized for a
+   robot's own computer, and Cosmos Reason back on the shared API, so a planning agent can add a
+   perception check without running a dedicated endpoint.
+
+The longer version, with the measurements behind each point: `docs/feedback-draft.md`.
 
 ## Links
 
-- Video (<= 3 min): [TODO]
-- Repository (public, MIT): [TODO]
-- Demo URL (sample mode works without a backend): [TODO]
+- Video (<= 3 min, public on YouTube): [after upload]
+- Repository (public, MIT): https://github.com/nkm1020/moonwright
+- Demo URL (not required for Physical AI; the static site replays the recorded runs with no
+  backend): [after the Pages deploy]

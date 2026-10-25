@@ -52,7 +52,13 @@
   "isaac_after_h": 79,
   "isaac_finish_h": 79,
   "isaac_late_legs": 0,
-  "repo_url": "TBD",
+  "app_fail_robot": "HL2",
+  "app_fail_robot_no": 2,
+  "app_fail_h": 24,
+  "app_progress": "60%",
+  "app_replan_tasks": 8,
+  "app_after_h": 72,
+  "repo_url": "github.com/nkm1020/moonwright",
   "_comment": "Every figure the narration, captions and slides quote. {{name}} in storyboard.json and slides/*.html is replaced by the value here. The render checks every entry in _sources before anything is recorded and stops on a mismatch: the recorded live runs (frontend/public/samples, the Oct 24 takes the backend's fixtures replay, and the simulation and Monte Carlo files computed from them), the live evaluation (docs/eval/2026-10-24-live-eval-run4/eval.rescored.csv, run 4 on the final pipeline, the Nemotron 3 Ultra arm the architecture slide routes to, scored with the final checks), or 'screen' for a figure only the page shows (none at present): those must be quoted by a waitForText in storyboard.json, so the render stops if the screen shows anything else. Figures the screen also shows (the plan's verdicts and repairs, the failure's progress, the replan's delay, the Monte Carlo misses, the what-if and its gain) are quoted by a waitForText too, so they are checked against both the recorded run and the capture. TBD = not known yet: repo_url hides the close slide's repository line until it is set.",
   "_sources": {
     "landing_makespan_h": "samples/landing_pad.plan.json schedule.makespan_h",
@@ -107,6 +113,12 @@
     "isaac_before_h": "docs/eval/2026-10-25-isaac-closed-loop/mission.json replans.0.makespan_before_h",
     "isaac_after_h": "docs/eval/2026-10-25-isaac-closed-loop/mission.json replans.0.makespan_after_h",
     "isaac_finish_h": "docs/eval/2026-10-25-isaac-closed-loop/mission.json finish_h |round",
-    "isaac_late_legs": "docs/eval/2026-10-25-isaac-closed-loop/mission.json late_legs |len"
+    "isaac_late_legs": "docs/eval/2026-10-25-isaac-closed-loop/mission.json late_legs |len",
+    "app_fail_robot": "tools/video/runs/landing_pad.hl2-at-24.sim.json events.0.robot",
+    "app_fail_robot_no": "tools/video/runs/landing_pad.hl2-at-24.sim.json events.0.robot |re:(\\d+)$ |num",
+    "app_fail_h": "tools/video/runs/landing_pad.hl2-at-24.sim.json events.0.t_h",
+    "app_progress": "tools/video/runs/landing_pad.hl2-at-24.sim.json events.0.detail |re:\\((\\d+%) done\\)",
+    "app_replan_tasks": "tools/video/runs/landing_pad.hl2-at-24.sim.json replans.0.remaining_tasks |len",
+    "app_after_h": "tools/video/runs/landing_pad.hl2-at-24.sim.json finished_at_h"
   }
 }

@@ -9,7 +9,7 @@ Contract:
         budget_wh, demanded_wh, travel_wh}]   # the energy figures behind a verdict, as numbers
                                               # (kind "type", "robot" or "order")
 
-Model (PRD section "스케줄링 모델"):
+Model (PRD section "Scheduling model"):
   x[i,r]  BoolVar for every task i and every robot r with r.type == task.robot_type
   s[i]    IntVar start, [start_offset_h, horizon_h]; end = s + duration
   a[r,k,l] BoolVar per arc of robot r's circuit: task l is the next r runs after k ("Travel")
