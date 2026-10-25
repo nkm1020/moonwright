@@ -1,0 +1,927 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Moonwright</title>
+<meta name="description" content="Moonwright plans work for robot crews building on the Moon. NVIDIA Nemotron proposes the plan; OR-Tools CP-SAT proves it or refuses it with the numbers.">
+<script>document.documentElement.classList.add('js')</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Albert+Sans:wght@400;500&family=Imbue:opsz,wght@10..100,400&display=swap" rel="stylesheet">
+<style>
+/* The dark room: one soft-black field, lit things in it. Display Imbue (uppercase), text Albert Sans.
+   One pair of margins, a 12-column grid, five type steps, bronze on the one action and one marker. */
+:root {
+  --bg: #111111;
+  --surface: #1c1c1c;
+  --raised: #2a2a2a;
+  --ink: #f2f2f2;
+  --muted: #9a9a9a;
+  --accent: #a08672;
+  --accent-ink: #111111;
+  --paper: #f2f2f2;
+  --paper-ink: #111111;
+  --paper-soft: #555555;
+
+  --display: 'Imbue', 'Didot', 'Bodoni 72', 'Times New Roman', serif;
+  --text: 'Albert Sans', 'Helvetica Neue', Arial, sans-serif;
+
+  --step-small: clamp(0.8125rem, 0.79rem + 0.1vw, 0.875rem);
+  --step-body: clamp(1.0625rem, 1rem + 0.25vw, 1.1875rem);
+  --step-lead: clamp(1.25rem, 0.95rem + 1.15vw, 2rem);
+  --step-head: clamp(2.5rem, 0.6rem + 5.2vw, 5rem);
+  --step-display: clamp(8.75rem, 13vw, 12.5rem);
+
+  --margin: max(clamp(16px, 2.2vw, 32px), calc((100vw - 1760px) / 2)); /* content stops widening at 1760px */
+  --gutter: clamp(12px, 1.4vw, 24px);
+  --section: clamp(104px, 13vw, 200px);
+
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.76, 0, 0.24, 1);
+  --ease-soft: cubic-bezier(0.33, 1, 0.68, 1);
+  --t-press: 140ms;
+  --t-hover: 180ms;
+  --t-ui: 240ms;
+  color-scheme: dark;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--text);
+  font-size: var(--step-body);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+img, video { display: block; max-width: 100%; }
+a { color: inherit; }
+p { text-wrap: pretty; }
+h1, h2, h3 { text-wrap: balance; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+::selection { background: var(--accent); color: var(--accent-ink); }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+.page { position: relative; z-index: 1; background: var(--bg); }
+.wrap {
+  padding-left: max(var(--margin), env(safe-area-inset-left, 0px));
+  padding-right: max(var(--margin), env(safe-area-inset-right, 0px));
+}
+.grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: var(--gutter); }
+
+.display { font-family: var(--display); font-weight: 400; text-transform: uppercase; letter-spacing: -0.01em; line-height: 0.9; font-optical-sizing: auto; }
+.h2 { margin: 0; font-size: var(--step-head); }
+
+.button {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-height: 52px; padding: 0 24px;
+  background: var(--accent); color: var(--accent-ink);
+  font: 500 var(--step-body)/1 var(--text);
+  text-decoration: none; border: 0; border-radius: 0; cursor: pointer;
+  transition: transform var(--t-press) var(--ease-out), background-color var(--t-hover) ease;
+}
+.button:active { transform: scale(0.97); }
+.link { text-decoration: underline; text-decoration-color: transparent; text-underline-offset: 0.22em; text-decoration-thickness: 0.07em; transition: text-decoration-color var(--t-hover) ease; }
+@media (hover: hover) and (pointer: fine) {
+  .button:hover { background-color: #b49a86; }
+  .link:hover { text-decoration-color: currentColor; }
+}
+
+/* ---------- Hero: the name from the top edge to the bottom edge ---------- */
+.hero { position: relative; height: 100svh; min-height: 640px; overflow: clip; background: #0d0d0d; }
+.hero__picture { position: absolute; inset: 0; margin: 0; overflow: clip; }
+.hero__picture img { width: 100%; height: 100%; object-fit: cover; object-position: 50% 14%; filter: brightness(0.72) contrast(1.05); }
+.hero__nav { position: absolute; z-index: 3; top: 30px; right: max(var(--margin), env(safe-area-inset-right, 0px)); display: flex; gap: 28px; font-size: var(--step-small); }
+.hero__nav a { color: var(--ink); text-decoration: none; padding-block: 8px; }
+.hero__title { position: absolute; inset: 0; z-index: 2; margin: 0; font-size: var(--step-display); line-height: 0.85; }
+.hero__title .line { position: absolute; display: block; overflow: hidden; padding-bottom: 0.08em; margin-bottom: -0.08em; }
+.hero__title [data-line] { display: block; }
+.hero__title .line--1 { left: max(var(--margin), env(safe-area-inset-left, 0px)); top: calc(72px - 0.1em); }
+.hero__title .line--2 { right: max(var(--margin), env(safe-area-inset-right, 0px)); bottom: calc(24px - 0.12em); }
+.hero__copy {
+  position: absolute; z-index: 3; left: 30vw; top: 48%; transform: translateY(-50%);
+  width: min(calc(44ch + 48px), calc(100% - 30vw - var(--margin)));
+  padding: 24px; background: rgba(10, 10, 10, 0.64);
+  display: flex; flex-direction: column; align-items: flex-start; gap: 20px;
+}
+.hero__lead { margin: 0; font-size: max(1.125rem, var(--step-body)); line-height: 1.55; }
+
+/* ---------- Section frame ---------- */
+.sec { padding-top: var(--section); }
+.sec__head { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: var(--gutter); align-items: end; row-gap: 20px; }
+.sec__head .h2 { grid-column: 1 / 8; }
+.sec__aside { grid-column: 8 / 13; margin: 0; max-width: 38ch; color: var(--ink); }
+
+/* ---------- Showcase: the verified schedule as a departure board ---------- */
+[data-ui].board { margin-top: 56px; display: flex; flex-direction: column; gap: 4px; }
+[data-ui] .row {
+  appearance: none; border: 0; border-radius: 0; margin: 0; width: 100%;
+  display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: var(--gutter); align-items: center;
+  min-height: 72px; padding: 0 20px;
+  background: var(--surface); color: var(--ink); font: inherit; text-align: left; cursor: pointer;
+  transition: background-color var(--t-ui) ease, color var(--t-ui) ease;
+}
+[data-ui] .row__name { grid-column: 1 / 6; font-size: var(--step-lead); line-height: 1.15; }
+[data-ui] .row__id { display: inline-block; min-width: 2.6em; font-size: 15px; color: var(--muted); font-variant-numeric: tabular-nums; vertical-align: 0.25em; }
+[data-ui] .row__robot { grid-column: 6 / 8; font-size: var(--step-lead); }
+[data-ui] .row__zone { grid-column: 8 / 9; font-size: var(--step-lead); color: var(--muted); }
+[data-ui] .row__hours { grid-column: 9 / 11; font-size: var(--step-lead); text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+[data-ui] .row__status { grid-column: 11 / 13; justify-self: end; flex: none; white-space: nowrap; padding: 8px 14px; background: var(--raised); color: var(--ink); font-size: 15px; line-height: 1; }
+[data-ui] .row.is-repaired .row__status { background: var(--ink); color: #111111; }
+[data-ui] .row__detail { display: none; grid-column: 1 / 9; margin: 22px 0 0; font-size: 17px; line-height: 1.5; max-width: 62ch; }
+[data-ui] .row__facts { display: none; }
+[data-ui] .row[aria-expanded="true"] { background: var(--accent); color: var(--accent-ink); min-height: 216px; align-items: start; padding-top: 24px; padding-bottom: 24px; }
+[data-ui] .row[aria-expanded="true"] .row__id,
+[data-ui] .row[aria-expanded="true"] .row__zone { color: #2b2219; }
+[data-ui] .row[aria-expanded="true"] .row__status { background: #111111; color: var(--ink); }
+[data-ui] .row[aria-expanded="true"] .row__detail { display: block; }
+[data-ui] .row__basis { display: block; margin-top: 10px; font-size: 14px; }
+@media (hover: hover) and (pointer: fine) {
+  [data-ui] .row[aria-expanded="false"]:hover { background: #242424; }
+}
+
+/* ---------- Work: three runs, each card tells its own run ---------- */
+.runs { margin-top: 64px; display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: var(--gutter); align-items: center; }
+.runs__names { grid-column: 1 / 7; margin: 0; padding: 0 var(--gutter) 0 0; list-style: none; display: flex; flex-direction: column; gap: clamp(24px, 3vw, 44px); }
+.run { appearance: none; border: 0; background: none; margin: 0; padding: 0; font: inherit; text-align: left; cursor: pointer; color: var(--muted); display: flex; flex-direction: column; gap: 8px; }
+.run__name { font-size: var(--step-head); line-height: 0.95; transition: color var(--t-hover) ease; }
+.run__verdict { font-size: var(--step-body); transition: color var(--t-hover) ease; }
+.run.is-active .run__name, .run.is-active .run__verdict { color: var(--ink); }
+@media (hover: hover) and (pointer: fine) { .run:hover .run__name { color: var(--ink); } }
+.runs__cards { grid-column: 7 / 13; display: grid; }
+.runs__cards > .rcard { grid-area: 1 / 1; align-self: start; transition: opacity 240ms ease, visibility 240ms; }
+.runs__cards > .rcard:not(.is-active) { opacity: 0; visibility: hidden; }
+
+[data-ui].rcard { display: flex; flex-direction: column; gap: 24px; padding: clamp(22px, 2.4vw, 34px); background: #0a0a0a; border: 1px solid #2e2e2e; color: var(--ink); font-family: var(--text); font-size: 16px; line-height: 1.5; }
+[data-ui] .rcard__head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+[data-ui] .rcard__name { margin: 0; font-size: 28px; line-height: 1.15; font-weight: 500; }
+[data-ui] .rcard__brief { margin: 6px 0 0; color: #b4b4b4; max-width: 46ch; }
+[data-ui] .rchart { margin: 0; padding: 20px 20px 16px; background: #141414; }
+[data-ui] .rchart__q { margin: 0 0 14px; font-weight: 500; }
+[data-ui] .rchart__row, [data-ui] .rchart__axis { display: grid; grid-template-columns: 10.5em minmax(0, 1fr) 4.5em; column-gap: 14px; align-items: center; }
+[data-ui] .rchart__label { font-size: 14px; color: #d8d8d8; line-height: 1.25; }
+[data-ui] .rchart__track { position: relative; height: 40px; }
+[data-ui] .rchart__ref { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--ink); }
+[data-ui] .rchart__seg { position: absolute; top: 50%; height: 2px; margin-top: -1px; }
+[data-ui] .rchart__dot { position: absolute; top: 50%; width: 14px; height: 14px; margin: -7px 0 0 -7px; border-radius: 50%; }
+[data-ui] .rchart__bar { position: absolute; top: 11px; bottom: 11px; }
+[data-ui] .is-over { background: #e5566f; }
+[data-ui] .is-ok { background: #3fc07a; }
+[data-ui] .is-base { background: #555555; }
+[data-ui] .rchart__val { text-align: right; font-size: 15px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+[data-ui] .rchart__axis { margin-top: 6px; font-size: 13px; color: #b4b4b4; }
+[data-ui] .rchart__ticks { position: relative; height: 18px; }
+[data-ui] .rchart__ticks span { position: absolute; top: 0; transform: translateX(-50%); white-space: nowrap; font-variant-numeric: tabular-nums; }
+[data-ui] .rchart__ticks .is-ref { color: var(--ink); }
+[data-ui] .rchart__ticks .is-wide { position: static; transform: none; }
+[data-ui] .rcard__steps { list-style: none; margin: 0; padding: 0; }
+[data-ui] .rcard__steps li { display: grid; grid-template-columns: 6em minmax(0, 1fr); column-gap: 14px; padding: 12px 0; border-top: 1px solid #1f1f1f; }
+[data-ui] .rcard__k { color: #b4b4b4; }
+[data-ui] .rcard__foot { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 16px; row-gap: 8px; padding-top: 18px; border-top: 1px solid #2e2e2e; }
+[data-ui] .rcard__big { margin: 0; font-size: 44px; line-height: 1; font-variant-numeric: tabular-nums; }
+[data-ui] .rcard__cap { margin: 0; flex: 1 1 16em; color: #b4b4b4; }
+[data-ui] .rcard__open { color: var(--ink); font-weight: 500; text-decoration: none; white-space: nowrap; }
+@media (hover: hover) and (pointer: fine) { [data-ui] .rcard__open:hover { text-decoration: underline; text-underline-offset: 0.2em; } }
+[data-ui] code { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 0.88em; }
+[data-ui] .pill { flex: none; white-space: nowrap; display: inline-flex; align-items: center; height: 22px; padding: 0 8px; border-radius: 4px; font-size: 12px; font-weight: 500; }
+[data-ui] .pill--neg { background: #2c1a20; color: #e5566f; }
+[data-ui] .pill--pos { background: #172a1d; color: #3fc07a; }
+[data-ui] .pill--none { background: #262626; color: #d8d8d8; }
+
+/* ---------- How it works: each call beside its response ---------- */
+.ex { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: var(--gutter); row-gap: 24px; align-items: start; margin-top: clamp(72px, 8vw, 120px); }
+.sec__head + .ex { margin-top: 64px; }
+.ex__say { grid-column: 1 / -1; margin: 0; font-size: var(--step-lead); line-height: 1.25; max-width: 34ch; }
+[data-ui].call { grid-column: 1 / 6; background: var(--surface); padding: 24px; font-size: 16px; line-height: 1.5; color: var(--ink); }
+[data-ui].call label, [data-ui] .call__label { display: block; margin-bottom: 10px; font-size: 14px; color: #b4b4b4; }
+[data-ui].call textarea { width: 100%; min-height: 168px; resize: vertical; padding: 14px; background: #111111; color: var(--ink); border: 1px solid #3a3a3a; border-radius: 6px; font: 16px/1.55 var(--text); }
+[data-ui].response { grid-column: 6 / 13; margin-top: 48px; padding: 24px; background: #0a0a0a; border: 1px solid #2e2e2e; font-size: 16px; line-height: 1.5; color: var(--ink); }
+[data-ui] .src { margin: 0 0 14px; color: #b4b4b4; font-size: 14px; }
+[data-ui] .kv { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+[data-ui] .kv th { text-align: left; font-weight: 400; color: #b4b4b4; font-size: 13px; padding: 0 0 8px; }
+[data-ui] .kv td { padding: 10px 12px 10px 0; border-top: 1px solid #1f1f1f; vertical-align: top; font-size: 15px; }
+[data-ui] .kv td.num, [data-ui] .kv th.num { text-align: right; padding-right: 0; }
+
+[data-ui] .rules { margin: 14px 0 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 6px; }
+[data-ui] .rules li { padding: 5px 9px; background: #1c1c1c; border-radius: 4px; font-size: 13px; color: #d8d8d8; }
+[data-ui] .verdict { display: flex; align-items: center; gap: 10px; margin: 0 0 10px; }
+[data-ui] .meter { position: relative; height: 10px; margin: 18px 0 8px; background: #1f1f1f; }
+[data-ui] .meter__fill { position: absolute; inset: 0 auto 0 0; background: #e5566f; transition: width var(--t-ui) var(--ease-out), background-color var(--t-ui) ease; }
+[data-ui] .meter__fill.is-ok { background: #3fc07a; }
+[data-ui] .meter__budget { position: absolute; top: -6px; bottom: -6px; width: 2px; background: var(--ink); }
+[data-ui] .meter__scale { display: flex; justify-content: space-between; color: #b4b4b4; font-size: 12px; font-variant-numeric: tabular-nums; }
+[data-ui] .split { margin: 12px 0 0; color: #b4b4b4; font-variant-numeric: tabular-nums; }
+
+/* the live thing: repair it yourself */
+[data-ui].call--slider { padding: 22px 20px 26px; }
+[data-ui] .slider__top { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+[data-ui] .slider__value { font-size: 32px; line-height: 1; font-variant-numeric: tabular-nums; white-space: nowrap; }
+[data-ui] .slider__track { position: relative; margin-top: 18px; }
+[data-ui] input[type="range"] { width: 100%; height: 44px; margin: 0; background: transparent; accent-color: var(--accent); cursor: pointer; }
+[data-ui] .slider__marks { position: relative; height: 40px; font-size: 12px; color: #b4b4b4; }
+[data-ui] .slider__mark { position: absolute; top: 0; transform: translateX(-50%); text-align: center; white-space: nowrap; padding-top: 10px; }
+[data-ui] .slider__mark::before { content: ""; position: absolute; top: 0; left: 50%; width: 1px; height: 7px; background: #6a6a6a; }
+[data-ui] .slider__presets { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+[data-ui] .preset { appearance: none; min-height: 40px; padding: 0 14px; border: 1px solid #3a3a3a; border-radius: 6px; background: transparent; color: var(--ink); font: 14px/1 var(--text); cursor: pointer; transition: border-color var(--t-hover) ease, background-color var(--t-hover) ease; }
+[data-ui] .preset[aria-pressed="true"] { border-color: var(--accent); background: #2a241f; }
+@media (hover: hover) and (pointer: fine) { [data-ui] .preset:hover { border-color: #6a6a6a; } }
+[data-ui].response--wide { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 32px; }
+[data-ui] .check__need { margin: 0; font-size: 30px; line-height: 1.15; font-variant-numeric: tabular-nums; }
+[data-ui] .check__note { margin: 12px 0 0; color: #d8d8d8; }
+[data-ui] .receipt__title { margin: 0 0 10px; font-weight: 500; }
+.how__end { margin-top: clamp(72px, 8vw, 120px); display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: var(--gutter); row-gap: 40px; align-items: start; }
+.how__close { grid-column: 1 / 6; margin: 0; max-width: 46ch; }
+.roles { grid-column: 7 / 13; }
+.roles__title { margin: 0; font-size: var(--step-body); font-weight: 500; }
+.roles dl { margin: 14px 0 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: var(--gutter); row-gap: 20px; }
+.roles dt { font-weight: 500; }
+.roles dd { margin: 2px 0 0; color: var(--muted); }
+.roles__note { margin: 24px 0 0; color: var(--muted); }
+
+/* ---------- Stats: figures inside a sentence ---------- */
+.stats { min-height: 64svh; display: grid; align-content: center; padding-block: var(--section); }
+.stats__p { grid-column: 1 / -1; justify-self: center; text-align: center; margin: 0; font-size: var(--step-lead); line-height: 1.3; color: #bdbdbd; max-width: 50ch; }
+.stats__p b { font-weight: 400; color: var(--ink); }
+
+/* ---------- About: the Moon, as an uneven mosaic ---------- */
+.moon__title { margin: 0; font-size: var(--step-display); line-height: 0.85; }
+.mosaic { margin: 72px 0 0; padding: 0; list-style: none; display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: var(--gutter); row-gap: clamp(64px, 8vw, 128px); align-items: start; }
+.tile { margin: 0; }
+.tile--a { grid-column: 1 / 6; }
+.tile--b { grid-column: 7 / 13; margin-top: 16vw; }
+.tile--c { grid-column: 2 / 6; }
+.tile--d { grid-column: 8 / 12; margin-top: 8vw; }
+.tile--e { grid-column: 1 / 6; }
+.mosaic__close { grid-column: 7 / 12; align-self: end; margin: 0; font-size: var(--step-lead); line-height: 1.3; max-width: 30ch; }
+.tile__frame { overflow: clip; background: #1a1a1a; aspect-ratio: 1 / 1; }
+.tile--a .tile__frame, .tile--e .tile__frame { aspect-ratio: 4 / 5; }
+.tile__frame img, .tile__frame video { width: 100%; height: 100%; object-fit: cover; filter: brightness(0.84) contrast(1.05); }
+.tile__name { margin: 18px 0 2px; font-weight: 500; }
+.tile__role { margin: 0; font-size: var(--step-small); color: var(--muted); }
+.tile__text { margin: 10px 0 0; max-width: 40ch; }
+
+/* ---------- CTA: the first step, already open ---------- */
+/* the words in the left half, the open dialog in the right half, one shared foot line;
+   the field is as tall as its content, so a tall or wide window never leaves it half empty */
+.cta { background: var(--accent); color: var(--accent-ink); display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: var(--gutter); align-items: end; padding-block: clamp(96px, 9vw, 168px); }
+.cta__words { grid-column: 1 / 7; }
+.cta__title { margin: 0; font-size: var(--step-head); line-height: 0.92; }
+.cta__title .line { display: block; }
+.cta__text { margin: 24px 0 0; max-width: 40ch; }
+.cta__dialog { grid-column: 7 / 13; justify-self: start; width: 100%; max-width: 600px; }
+[data-ui].dialog {
+  width: 100%; padding: 24px; background: #111111; color: var(--ink);
+  border-radius: 10px;
+  font-family: var(--text); font-size: 15px; line-height: 1.5;
+}
+[data-ui] .dialog__title { margin: 0 0 18px; font-size: 18px; font-weight: 500; }
+[data-ui] .dialog__label { display: block; margin-bottom: 8px; font-size: 13px; color: #b4b4b4; }
+[data-ui].dialog textarea { width: 100%; min-height: 120px; resize: vertical; padding: 12px; background: #1c1c1c; color: var(--ink); border: 1px solid #3a3a3a; border-radius: 6px; font: 15px/1.5 var(--text); }
+[data-ui] .seg { display: flex; gap: 22px; margin: 18px 0 0; border-bottom: 1px solid #2e2e2e; }
+[data-ui] .seg button { appearance: none; position: relative; padding: 10px 0 12px; border: 0; background: none; color: #b4b4b4; font: 14px/1 var(--text); cursor: pointer; transition: color var(--t-hover) ease; }
+[data-ui] .seg button[aria-checked="true"] { color: var(--ink); }
+[data-ui] .seg button[aria-checked="true"]::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 1px; background: var(--accent); }
+[data-ui] .dialog__note { margin: 14px 0 18px; color: #b4b4b4; font-size: 14px; }
+[data-ui] .dialog .button { width: 100%; min-height: 52px; font-size: 16px; }
+
+/* ---------- Footer: the curtain, the name at full width ---------- */
+.foot {
+  position: sticky; bottom: 0; z-index: 0;
+  min-height: 100svh; display: grid; grid-template-rows: auto 1fr auto;
+  background: var(--paper); color: var(--paper-ink);
+  padding-top: 40px; padding-bottom: max(24px, env(safe-area-inset-bottom, 0px));
+}
+.foot__cols { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: var(--gutter); row-gap: 32px; }
+.foot__col { grid-column: span 3; margin: 0; padding: 0; list-style: none; }
+.foot__col li { margin: 0 0 4px; color: var(--paper-soft); }
+.foot__col li:first-child { color: var(--paper-ink); font-weight: 500; }
+.foot__col a { color: inherit; }
+.foot__mark { align-self: end; margin: 0; }
+.foot__mark svg { display: block; width: 100%; height: auto; overflow: visible; }
+.foot__mark text { font-family: var(--display); fill: var(--paper-ink); text-transform: uppercase; }
+.foot__legal { margin: 20px 0 0; font-size: var(--step-small); color: var(--paper-soft); max-width: 60ch; }
+.foot__legal a { color: var(--paper-ink); }
+
+/* ---------- Narrower than a laptop ---------- */
+@media (max-width: 1100px) {
+  .runs { display: flex; flex-direction: column; align-items: stretch; gap: 40px; margin-top: 48px; }
+  .runs__names { padding: 0; gap: 20px; }
+
+  [data-ui] .row__name { grid-column: 1 / 7; }
+  [data-ui] .row__robot { grid-column: 7 / 8; }
+  [data-ui] .row__zone { display: none; }
+  [data-ui] .row__hours { grid-column: 8 / 10; }
+  [data-ui] .row__status { grid-column: 10 / 13; }
+  [data-ui] .row__detail { grid-column: 1 / -1; }
+  [data-ui].call, [data-ui].response { grid-column: 1 / -1; }
+  [data-ui].response { margin-top: 0; }
+  .how__close, .roles { grid-column: 1 / -1; }
+
+  .cta { grid-template-columns: 1fr; row-gap: 48px; padding-block: 88px 72px; }
+  .cta__words { grid-column: 1; }
+  .cta__dialog { grid-column: 1; justify-self: start; max-width: 600px; }
+}
+
+/* ---------- Phone ---------- */
+@media (max-width: 760px) {
+  .hero__picture img { object-position: 30% 50%; }
+  .hero__nav { top: 20px; gap: 18px; }
+  .hero__title { font-size: 19vw; }
+  .hero__title .line--1 { left: 16px; top: 88px; }
+  .hero__title .line--2 { right: 16px; bottom: 20px; }
+  .hero__copy { left: 16px; right: 16px; width: auto; top: 46%; padding: 18px; }
+
+  .sec__head .h2, .sec__aside, .runs__intro { grid-column: 1 / -1; }
+
+  [data-ui].board { margin-top: 40px; }
+  [data-ui] .row { grid-template-columns: minmax(0, 1fr) auto; min-height: 64px; padding: 0 14px; column-gap: 12px; }
+  [data-ui] .row__name { grid-column: 1; font-size: 20px; }
+  [data-ui] .row__id { display: none; }
+  [data-ui] .row__robot, [data-ui] .row__zone, [data-ui] .row__hours { display: none; }
+  [data-ui] .row__status { grid-column: 2; font-size: 13px; padding: 7px 10px; }
+  [data-ui] .row[aria-expanded="true"] { min-height: 200px; padding-top: 18px; }
+  [data-ui] .row__detail { grid-column: 1 / -1; margin-top: 14px; font-size: 16px; }
+  [data-ui] .row[aria-expanded="true"] .row__facts { display: block; grid-column: 1 / -1; margin-top: 14px; font-size: 16px; line-height: 1.5; }
+
+
+  .ex { margin-top: 64px; row-gap: 16px; }
+  [data-ui].call, [data-ui].response { padding: 18px; }
+  [data-ui].response--wide { grid-template-columns: 1fr; }
+  .roles dl { grid-template-columns: 1fr; }
+  [data-ui].rcard { padding: 20px; }
+  [data-ui] .rchart { padding: 16px 14px 14px; }
+  [data-ui] .rchart__row, [data-ui] .rchart__axis { grid-template-columns: 6.5em minmax(0, 1fr) 4em; column-gap: 10px; }
+  [data-ui] .rchart__label { font-size: 13px; }
+  [data-ui] .rchart__ticks .is-minor, [data-ui] .rchart__ticks .is-wide { display: none; }
+  [data-ui] .rcard__steps li { grid-template-columns: 1fr; row-gap: 2px; }
+
+  .stats { min-height: 70svh; }
+  .stats__p { grid-column: 1 / -1; line-height: 1.35; }
+
+  .moon__title { font-size: 19vw; }
+  .mosaic { margin-top: 40px; display: flex; flex-direction: column; gap: 56px; }
+  .tile { width: 100%; margin-top: 0; }
+  .tile--b, .tile--d { width: 78%; align-self: flex-end; }
+  .mosaic__close { max-width: none; }
+
+  .cta { row-gap: 40px; padding-block: 64px 40px; }
+  .cta__dialog { max-width: none; }
+
+  .foot__col { grid-column: span 6; }
+  .foot__cols { row-gap: 32px; }
+}
+
+/* ---------- Motion ---------- */
+@media (prefers-reduced-motion: no-preference) {
+  .js .hero [data-line] { transform: translateY(105%); animation: line-up 900ms var(--ease-expo) forwards; animation-delay: calc(var(--i) * 110ms + 150ms); }
+  .js .hero [data-load] { opacity: 0; transform: translateY(14px); animation: rise 520ms var(--ease-out) forwards; animation-delay: var(--d, 520ms); }
+  .js .hero__picture img { transform: scale(1.06); animation: settle 1600ms var(--ease-soft) 60ms forwards; }
+  .js [data-reveal] { opacity: 0; transform: translateY(24px); transition: opacity 600ms var(--ease-out), transform 750ms var(--ease-expo); transition-delay: calc(min(var(--i, 0), 4) * 70ms); }
+  .js [data-reveal].is-in { opacity: 1; transform: none; }
+  .js [data-shutter] .tile__frame { transition: clip-path 900ms var(--ease-in-out); }
+  .js [data-shutter] .tile__frame > img, .js [data-shutter] .tile__frame > video { transition: transform 1300ms var(--ease-soft); }
+  .js [data-shutter]:not(.is-in) .tile__frame { clip-path: inset(0 0 100% 0); }
+  .js [data-shutter]:not(.is-in) .tile__frame > img, .js [data-shutter]:not(.is-in) .tile__frame > video { transform: scale(1.1); }
+  @supports (animation-timeline: view()) {
+    .drift { animation: drift linear both; animation-timeline: view(); animation-range: entry 0% exit 100%; }
+  }
+}
+@keyframes line-up { to { transform: none; } }
+@keyframes rise { to { opacity: 1; transform: none; } }
+@keyframes settle { to { transform: none; } }
+@keyframes drift { from { translate: 0 -3%; } to { translate: 0 3%; } }
+</style>
+</head>
+<body>
+<div class="page">
+
+<header class="hero">
+  <figure class="hero__picture">
+    <img src="assets/apollo-17-lunar-roving-vehicle-as17-134.jpg" width="3840" height="3031" fetchpriority="high" decoding="async"
+      alt="Apollo 17's Lunar Roving Vehicle parked on grey regolith below the sunlit slope of the South Massif, under a black sky">
+  </figure>
+  <nav class="hero__nav" aria-label="Primary">
+    <a class="link" href="#how">How it works</a>
+    <a class="link" href="#runs">Runs</a>
+    <a class="link" href="https://github.com/nkm1020/moonwright">GitHub</a>
+  </nav>
+  <h1 class="hero__title display" aria-label="Moonwright">
+    <span class="line line--1" aria-hidden="true"><span data-line style="--i:0">Moon</span></span>
+    <span class="line line--2" aria-hidden="true"><span data-line style="--i:1">wright</span></span>
+  </h1>
+  <div class="hero__copy">
+    <p class="hero__lead" data-load style="--d:520ms">Plans for robot crews building on the Moon. NVIDIA Nemotron proposes the work; OR-Tools CP-SAT proves it, or refuses with the numbers.</p>
+    <a class="button" data-load style="--d:600ms" href="#open">Open the landing pad run</a>
+  </div>
+</header>
+
+<main>
+
+<section id="schedule" class="sec wrap" aria-labelledby="schedule-title">
+  <div class="sec__head">
+    <h2 id="schedule-title" class="h2 display" data-reveal>One run, proven</h2>
+    <p class="sec__aside" data-reveal style="--i:1">The landing pad run’s verified schedule: 12 tasks for 7 robots, done at hour 72 of a 336-hour deadline. The bronze row is the task the solver refused twice. Choose any task to read it.</p>
+  </div>
+  <div class="board" data-ui>
+    <button class="row" type="button" aria-expanded="false" data-reveal style="--i:0">
+      <span class="row__name"><span class="row__id">T1</span>Survey the pad</span>
+      <span class="row__robot">SV1</span><span class="row__zone">Z1</span><span class="row__hours">0–3 h</span>
+      <span class="row__status">As proposed</span>
+      <span class="row__facts">SV1 · zone Z1 · hours 0–3</span>
+      <span class="row__detail">Stakes the 314 m² pad before anything is dug. 3 h, 157 Wh. The first task of the run.</span>
+    </button>
+    <button class="row" type="button" aria-expanded="false" data-reveal style="--i:1">
+      <span class="row__name"><span class="row__id">T3</span>Dig the pad, part 1</span>
+      <span class="row__robot">EX1</span><span class="row__zone">Z1</span><span class="row__hours">3–12 h</span>
+      <span class="row__status">As proposed</span>
+      <span class="row__facts">EX1 · zone Z1 · hours 3–12</span>
+      <span class="row__detail">Excavates 62.8 m³ of the 0.4 m bowl. 9 h, 1,005 Wh. Waits for the pad survey.</span>
+    </button>
+    <button class="row" type="button" aria-expanded="false" data-reveal style="--i:2">
+      <span class="row__name"><span class="row__id">T2</span>Survey the berm</span>
+      <span class="row__robot">SV1</span><span class="row__zone">Z2</span><span class="row__hours">6–8 h</span>
+      <span class="row__status">As proposed</span>
+      <span class="row__facts">SV1 · zone Z2 · hours 6–8</span>
+      <span class="row__detail">Stakes the 160 m² berm line. 2 h, 80 Wh. SV1 takes it after the pad survey.</span>
+    </button>
+    <button class="row" type="button" aria-expanded="false" data-reveal style="--i:3">
+      <span class="row__name"><span class="row__id">T4</span>Dig the pad, part 2</span>
+      <span class="row__robot">EX1</span><span class="row__zone">Z1</span><span class="row__hours">12–21 h</span>
+      <span class="row__status">As proposed</span>
+      <span class="row__facts">EX1 · zone Z1 · hours 12–21</span>
+      <span class="row__detail">The other 62.8 m³, on the same excavator. 9 h, 1,005 Wh. EX2 stays idle: only one robot may work in a zone at a time.</span>
+    </button>
+    <button class="row" type="button" aria-expanded="false" data-reveal style="--i:4">
+      <span class="row__name"><span class="row__id">T5</span>Haul spoil to the berm</span>
+      <span class="row__robot">HL2</span><span class="row__zone">Z2</span><span class="row__hours">21–26 h</span>
+      <span class="row__status">As proposed</span>
+      <span class="row__facts">HL2 · zone Z2 · hours 21–26</span>
+      <span class="row__detail">Moves 60 m³ of pad spoil. 5 h, 420 Wh. Waits for both digs, so nothing is hauled before it is dug.</span>
+    </button>
+    <button class="row" type="button" aria-expanded="false" data-reveal style="--i:5">
+      <span class="row__name"><span class="row__id">T7</span>Compact the pad</span>
+      <span class="row__robot">CP1</span><span class="row__zone">Z1</span><span class="row__hours">21–34 h</span>
+      <span class="row__status">As proposed</span>
+      <span class="row__facts">CP1 · zone Z1 · hours 21–34</span>
+      <span class="row__detail">Compacts the 314 m² subgrade. 13 h, 1,257 Wh. Starts the hour the second dig ends.</span>
+    </button>
+    <button class="row" type="button" aria-expanded="false" data-reveal style="--i:6">
+      <span class="row__name"><span class="row__id">T6</span>Haul the second load</span>
+      <span class="row__robot">HL2</span><span class="row__zone">Z2</span><span class="row__hours">26–31 h</span>
+      <span class="row__status">As proposed</span>
+      <span class="row__facts">HL2 · zone Z2 · hours 26–31</span>
+      <span class="row__detail">The other 60 m³ of spoil. 5 h, 420 Wh.</span>
+    </button>
+    <button class="row" type="button" aria-expanded="false" data-reveal style="--i:7">
+      <span class="row__name"><span class="row__id">T9</span>Sinter the pad</span>
+      <span class="row__robot">PR1</span><span class="row__zone">Z1</span><span class="row__hours">34–57 h</span>
+      <span class="row__status">As proposed</span>
+      <span class="row__facts">PR1 · zone Z1 · hours 34–57</span>
+      <span class="row__detail">A 30 cm sintered surface over 314 m². 23 h, 2,702 Wh: two thirds of PR1’s battery, which no charger will refill.</span>
+    </button>
+    <button class="row" type="button" aria-expanded="false" data-reveal style="--i:8">
+      <span class="row__name"><span class="row__id">T8</span>Compact the berm</span>
+      <span class="row__robot">CP1</span><span class="row__zone">Z2</span><span class="row__hours">37–44 h</span>
+      <span class="row__status">As proposed</span>
+      <span class="row__facts">CP1 · zone Z2 · hours 37–44</span>
+      <span class="row__detail">160 m² of berm. 7 h, 640 Wh, after CP1 drives over from the pad.</span>
+    </button>
+    <button class="row" type="button" aria-expanded="false" data-reveal style="--i:9">
+      <span class="row__name"><span class="row__id">T11</span>Inspect the pad</span>
+      <span class="row__robot">SV1</span><span class="row__zone">Z1</span><span class="row__hours">57–58 h</span>
+      <span class="row__status">As proposed</span>
+      <span class="row__facts">SV1 · zone Z1 · hours 57–58</span>
+      <span class="row__detail">1 h, 75 Wh, the hour after the pad is sintered.</span>
+    </button>
+    <button class="row is-repaired" type="button" aria-expanded="true" data-reveal style="--i:10">
+      <span class="row__name"><span class="row__id">T10</span>Sinter the berm crest</span>
+      <span class="row__robot">PR1</span><span class="row__zone">Z2</span><span class="row__hours">60–71 h</span>
+      <span class="row__status">Repaired</span>
+      <span class="row__facts">PR1 · zone Z2 · hours 60–71</span>
+      <span class="row__detail">Nemotron’s first graph sintered 160 m² here, and PR1 needed 4,095 Wh of its 4,000. Two repairs cut the crest to 145 m²: 11 h, 1,247 Wh, and PR1 ends at 3,966 Wh.<code class="row__basis">basis: "40 m * 4 m - 15 m2 = 145 m2 (reduced to meet printer battery)"</code></span>
+    </button>
+    <button class="row is-repaired" type="button" aria-expanded="false" data-reveal style="--i:11">
+      <span class="row__name"><span class="row__id">T12</span>Inspect the berm</span>
+      <span class="row__robot">SV1</span><span class="row__zone">Z2</span><span class="row__hours">71–72 h</span>
+      <span class="row__status">Repaired</span>
+      <span class="row__facts">SV1 · zone Z2 · hours 71–72</span>
+      <span class="row__detail">The last task, ending at hour 72. The second repair made it wait for the crest and the berm compaction.</span>
+    </button>
+  </div>
+</section>
+
+<section id="runs" class="sec wrap" aria-labelledby="runs-title">
+  <div class="sec__head">
+    <h2 id="runs-title" class="h2 display" data-reveal>Three runs</h2>
+    <p class="sec__aside" data-reveal style="--i:1">Each was recorded live on Nebius Token Factory on 24&nbsp;October 2026 and replays in the browser. Pick a run to see what the checks refused, how Nemotron repaired it, and where it ended.</p>
+  </div>
+  <div class="runs">
+    <ul class="runs__names">
+      <li data-reveal><button class="run is-active" type="button" data-run="landing_pad" aria-pressed="true"><span class="run__name display">Landing pad</span><span class="run__verdict">Verified in 72 h after 2 repairs</span></button></li>
+      <li data-reveal style="--i:1"><button class="run" type="button" data-run="front_loaded" aria-pressed="false"><span class="run__name display">Impossible deadline</span><span class="run__verdict">No plan: it needs 85 h, proven</span></button></li>
+      <li data-reveal style="--i:2"><button class="run" type="button" data-run="habitat_berm" aria-pressed="false"><span class="run__name display">Tight deadline</span><span class="run__verdict">Verified in 52 h after 1 repair</span></button></li>
+    </ul>
+    <div class="runs__cards" data-reveal style="--i:1">
+
+      <article class="rcard is-active" data-card="landing_pad" data-ui aria-labelledby="rc-lp">
+        <header class="rcard__head">
+          <div>
+            <h3 class="rcard__name" id="rc-lp">Landing pad</h3>
+            <p class="rcard__brief">A 20 m landing pad and a 40 m blast berm near Shackleton crater: 7 robots, 14 days, no recharging.</p>
+          </div>
+          <span class="pill pill--pos">Verified</span>
+        </header>
+        <figure class="rchart">
+          <figcaption class="rchart__q">Did the printer’s battery hold? PR1 carries 4,000 Wh.</figcaption>
+          <div class="rchart__row"><span class="rchart__label">First graph</span><span class="rchart__track"><span class="rchart__ref" style="left:45.45%"></span><span class="rchart__seg is-over" style="left:45.45%;width:43.19%"></span><span class="rchart__dot is-over" style="left:88.64%"></span></span><span class="rchart__val">4,095 Wh</span></div>
+          <div class="rchart__row"><span class="rchart__label">Repair 1</span><span class="rchart__track"><span class="rchart__ref" style="left:45.45%"></span><span class="rchart__seg is-over" style="left:45.45%;width:4.10%"></span><span class="rchart__dot is-over" style="left:49.55%"></span></span><span class="rchart__val">4,009 Wh</span></div>
+          <div class="rchart__row"><span class="rchart__label">Repair 2</span><span class="rchart__track"><span class="rchart__ref" style="left:45.45%"></span><span class="rchart__seg is-ok" style="left:30.0%;width:15.45%"></span><span class="rchart__dot is-ok" style="left:30.0%"></span></span><span class="rchart__val">3,966 Wh</span></div>
+          <div class="rchart__axis" aria-hidden="true"><span></span><span class="rchart__ticks"><span class="is-minor" style="left:0%">3,900</span><span class="is-ref" style="left:45.45%"><span class="is-wide">budget </span>4,000</span><span class="is-minor" style="left:90.91%">4,100</span></span><span></span></div>
+        </figure>
+        <ol class="rcard__steps">
+          <li><span class="rcard__k">Graph</span><span>Nemotron 3 Ultra proposes 12 tasks. Refused: <code>energy:printer</code>, 95 Wh over.</span></li>
+          <li><span class="rcard__k">Repair 1</span><span>Berm crest 160 → 150 m². Still 9 Wh over: refused.</span></li>
+          <li><span class="rcard__k">Repair 2</span><span>Crest 150 → 145 m². CP-SAT proves the whole schedule.</span></li>
+        </ol>
+        <footer class="rcard__foot">
+          <p class="rcard__big">72 h</p>
+          <p class="rcard__cap">of the 336 h deadline, optimal, solved in 13 ms</p>
+          <a class="rcard__open" href="#">Open this run →</a>
+        </footer>
+      </article>
+
+      <article class="rcard" data-card="front_loaded" data-ui aria-labelledby="rc-fl">
+        <header class="rcard__head">
+          <div>
+            <h3 class="rcard__name" id="rc-fl">Impossible deadline</h3>
+            <p class="rcard__brief">A 30 m heavy-lander pad and a 70 m spoil berm in 60 hours. The brief forbids a smaller pad.</p>
+          </div>
+          <span class="pill pill--none">No plan</span>
+        </header>
+        <figure class="rchart">
+          <figcaption class="rchart__q">Can the work finish by hour 60?</figcaption>
+          <div class="rchart__row"><span class="rchart__label">Pad zone Z1, one robot at a time</span><span class="rchart__track"><span class="rchart__bar is-base" style="left:0;width:66.67%"></span><span class="rchart__bar is-over" style="left:66.67%;width:16.66%"></span><span class="rchart__ref" style="left:66.67%"></span></span><span class="rchart__val">75 h</span></div>
+          <div class="rchart__row"><span class="rchart__label">Earliest finish CP-SAT can prove</span><span class="rchart__track"><span class="rchart__bar is-base" style="left:0;width:66.67%"></span><span class="rchart__bar is-over" style="left:66.67%;width:27.77%"></span><span class="rchart__ref" style="left:66.67%"></span></span><span class="rchart__val">85 h</span></div>
+          <div class="rchart__axis" aria-hidden="true"><span></span><span class="rchart__ticks"><span style="left:0%">0 h</span><span class="is-minor" style="left:33.33%">30</span><span class="is-ref" style="left:66.67%">deadline 60</span><span class="is-minor" style="left:100%">90</span></span><span></span></div>
+        </figure>
+        <ol class="rcard__steps">
+          <li><span class="rcard__k">Graph</span><span>Refused: <code>horizon</code> and <code>zone:Z1</code>. Five pad tasks need 75 h in one zone.</span></li>
+          <li><span class="rcard__k">Repairs 1–3</span><span>Nemotron reorders the work three times. Each is refused again: an 82 h critical path, or zone Z1’s 75 h.</span></li>
+          <li><span class="rcard__k">Advice</span><span>CP-SAT proves the earliest finish is 85 h: the deadline would have to move by 25 h.</span></li>
+        </ol>
+        <footer class="rcard__foot">
+          <p class="rcard__big">85 h</p>
+          <p class="rcard__cap">reported instead of a shrunken pad. In the evaluation, 7 of 9 runs on impossible briefs ended this way.</p>
+          <a class="rcard__open" href="#">Open this run →</a>
+        </footer>
+      </article>
+
+      <article class="rcard" data-card="habitat_berm" data-ui aria-labelledby="rc-hb">
+        <header class="rcard__head">
+          <div>
+            <h3 class="rcard__name" id="rc-hb">Tight deadline</h3>
+            <p class="rcard__brief">A foundation pit, a 70 m plume berm and a borrow strip in 3 days, before a crew lander arrives.</p>
+          </div>
+          <span class="pill pill--pos">Verified</span>
+        </header>
+        <figure class="rchart">
+          <figcaption class="rchart__q">Does the plan finish by hour 72?</figcaption>
+          <div class="rchart__row"><span class="rchart__label">First graph, 14 tasks</span><span class="rchart__track"><span class="rchart__bar is-base" style="left:0;width:80%"></span><span class="rchart__bar is-over" style="left:80%;width:20%"></span><span class="rchart__ref" style="left:80%"></span></span><span class="rchart__val">over 72 h</span></div>
+          <div class="rchart__row"><span class="rchart__label">After 1 repair, 17 tasks</span><span class="rchart__track"><span class="rchart__bar is-ok" style="left:0;width:57.78%"></span><span class="rchart__ref" style="left:80%"></span></span><span class="rchart__val">52 h</span></div>
+          <div class="rchart__axis" aria-hidden="true"><span></span><span class="rchart__ticks"><span style="left:0%">0 h</span><span class="is-minor" style="left:33.33%">30</span><span class="is-ref" style="left:80%">deadline 72</span></span><span></span></div>
+        </figure>
+        <ol class="rcard__steps">
+          <li><span class="rcard__k">Graph</span><span>Refused with a core of 13 constraints: <code>horizon</code>, 10 precedence edges, <code>robot:SV1</code>, <code>zone:Z2</code>.</span></li>
+          <li><span class="rcard__k">Repair 1</span><span>Nemotron splits the digs and hauls per zone, so both excavators dig at once. CP-SAT proves it.</span></li>
+        </ol>
+        <footer class="rcard__foot">
+          <p class="rcard__big">52 h</p>
+          <p class="rcard__cap">of the 72 h deadline, optimal</p>
+          <a class="rcard__open" href="#">Open this run →</a>
+        </footer>
+      </article>
+
+    </div>
+  </div>
+</section>
+
+<section id="how" class="sec wrap" aria-labelledby="how-title">
+  <div class="sec__head">
+    <h2 id="how-title" class="h2 display" data-reveal>How it works</h2>
+    <p class="sec__aside" data-reveal style="--i:1">Three exchanges from the landing pad run, with its real numbers. The model reads and writes; the solver checks and decides.</p>
+  </div>
+
+  <div class="ex">
+    <p class="ex__say" data-reveal>First, write the brief in plain English.</p>
+    <div class="call" data-ui data-reveal style="--i:1">
+      <label for="brief-in">Brief</label>
+      <textarea id="brief-in" readonly>Landing pad: circular, 20 m diameter. Excavate a bowl 0.4 m deep to firm regolith, level to plus or minus 5 cm, compact the subgrade, then sinter a 30 cm regolith surface. Blast berm: a 40 m arc on the north side of the pad, 1.5 m high and 4 m wide at the base, built from pad spoil, compacted, with a sintered crest. Both complete and inspected within 14 days.</textarea>
+    </div>
+    <div class="response" data-ui data-reveal style="--i:2">
+      <p class="src">Requirements · Nemotron 3.5 Lightning · 7.3 s</p>
+      <table class="kv">
+        <thead><tr><th>Structure</th><th>Size</th><th>Work</th></tr></thead>
+        <tbody>
+          <tr><td><code>PAD1</code> pad</td><td>Ø 20 m, 0.4 m deep</td><td>excavate, compact, sinter</td></tr>
+          <tr><td><code>BERM1</code> berm</td><td>40 × 4 m, 1.5 m high</td><td>haul, compact, sinter</td></tr>
+        </tbody>
+      </table>
+      <ul class="rules">
+        <li>EX1, EX2 5,000 Wh</li><li>HL1, HL2 3,000 Wh</li><li>CP1 3,500 Wh</li><li>PR1 4,000 Wh</li><li>SV1 1,500 Wh</li><li>336 h</li><li>one robot per zone</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="ex">
+    <p class="ex__say" data-reveal>Then Nemotron proposes the tasks, and the checks answer with numbers.</p>
+    <div class="call" data-ui data-reveal style="--i:1">
+      <span class="call__label">Task graph · Nemotron 3 Ultra, reasoning on · 12 tasks · 38 s</span>
+      <table class="kv">
+        <tbody>
+          <tr><td><code>T9</code></td><td>sinter PAD1 · printer</td><td class="num">314 m²</td><td class="num">2,702 Wh</td></tr>
+          <tr><td><code>T10</code></td><td>sinter BERM1 · printer</td><td class="num">160 m²</td><td class="num">1,376 Wh</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="response" data-ui data-reveal style="--i:2">
+      <p class="verdict"><span class="pill pill--neg">Refused</span><code>energy:printer</code></p>
+      <p style="margin:0">Printer tasks need at least 4,095 Wh: 4,078 Wh of work and 18 Wh of travel. PR1 carries 4,000 Wh.</p>
+      <div class="meter" aria-hidden="true"><div class="meter__fill" style="width: 97.5%"></div><div class="meter__budget" style="left: 95.24%"></div></div>
+      <div class="meter__scale" aria-hidden="true"><span>0 Wh</span><span>budget 4,000</span></div>
+    </div>
+  </div>
+
+  <div class="ex" id="repair">
+    <p class="ex__say" data-reveal>Last, repair from the proof. Try it yourself.</p>
+    <div class="call call--slider" data-ui data-reveal style="--i:1">
+      <div class="slider__top">
+        <label for="crest" style="margin:0">Shrink the berm crest until PR1’s battery holds</label>
+        <output class="slider__value" id="crest-out" for="crest">160 m²</output>
+      </div>
+      <div class="slider__track">
+        <input type="range" id="crest" min="100" max="170" step="1" value="160" aria-describedby="check-need">
+        <div class="slider__marks" aria-hidden="true">
+          <span class="slider__mark" style="left: 64.3%">145</span>
+          <span class="slider__mark" style="left: 71.4%">150</span>
+          <span class="slider__mark" style="left: 85.7%">160</span>
+        </div>
+      </div>
+      <div class="slider__presets">
+        <button class="preset" type="button" data-area="160" aria-pressed="true">First graph · 160</button>
+        <button class="preset" type="button" data-area="150" aria-pressed="false">Repair 1 · 150</button>
+        <button class="preset" type="button" data-area="145" aria-pressed="false">Repair 2 · 145</button>
+      </div>
+    </div>
+    <div class="response response--wide" data-ui data-reveal style="--i:2">
+      <div class="check" aria-live="polite">
+        <p class="verdict" id="check-verdict"><span class="pill pill--neg">Refused</span><code>energy:printer</code></p>
+        <p class="check__need" id="check-need">PR1 needs 4,095 Wh of 4,000</p>
+        <div class="meter" aria-hidden="true"><div class="meter__fill" id="check-fill" style="width: 97.5%"></div><div class="meter__budget" style="left: 95.24%"></div></div>
+        <div class="meter__scale" aria-hidden="true"><span>0 Wh</span><span>budget 4,000</span></div>
+        <p class="split" id="check-split">2,702 pad + 1,376 crest + 18 travel</p>
+        <p class="check__note" id="check-note">Nemotron’s first graph. Over by 95 Wh, so the checks send it back with this core.</p>
+      </div>
+      <div class="receipt">
+        <p class="receipt__title">CP-SAT’s receipt for the 145 m² plan</p>
+        <table class="kv">
+          <tbody>
+            <tr><td>Precedence</td><td class="num">18 edges hold</td></tr>
+            <tr><td>Robots</td><td class="num">7, no overlaps</td></tr>
+            <tr><td>Safety zones</td><td class="num">2, one robot each</td></tr>
+            <tr><td>Batteries, with travel</td><td class="num">PR1 3,966 of 4,000 Wh</td></tr>
+            <tr><td>Deadline</td><td class="num">72 of 336 h</td></tr>
+            <tr><td>Status</td><td class="num">optimal, 13 ms, re-checked</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="how__end">
+    <p class="how__close" data-reveal>Nemotron gets three repairs. In the last evaluation, 55&nbsp;% of plans verified on the first graph and 86&nbsp;% after repairs. When none verifies, CP-SAT tries single changes and returns only the ones it can prove: a later deadline, a bigger battery, one more robot.</p>
+    <div class="roles" data-reveal style="--i:1">
+      <h3 class="roles__title">Who does what</h3>
+      <dl>
+        <div><dt>Nemotron 3.5 Lightning</dt><dd>Reads the brief into requirements.</dd></div>
+        <div><dt>Nemotron 3 Ultra</dt><dd>Proposes the task graph and every repair, reasoning on.</dd></div>
+        <div><dt>Rate table and validator</dt><dd>Turn quantities into hours and watt-hours, then check scope, supply order and batteries.</dd></div>
+        <div><dt>OR-Tools CP-SAT</dt><dd>Schedules and proves the plan, or returns the minimal core with its numbers.</dd></div>
+        <div><dt>Nemotron 3 Super</dt><dd>Explains the verified plan.</dd></div>
+      </dl>
+      <p class="roles__note">Every model call goes to Nebius Token Factory with a strict JSON schema.</p>
+    </div>
+  </div>
+</section>
+
+<section id="evidence" class="stats wrap grid" aria-labelledby="evidence-title">
+  <h2 id="evidence-title" class="visually-hidden">Evidence</h2>
+  <p class="stats__p" data-reveal>Across <b>66&nbsp;live runs</b>, <b>86&nbsp;%</b> ended with a plan the solver proved. Shown the solver’s proof, Nemotron repaired <b>70&nbsp;%</b> of refused plans; told only “refused”, <b>32&nbsp;%</b>.</p>
+</section>
+
+<section id="moon" class="sec wrap" aria-labelledby="moon-title">
+  <h2 id="moon-title" class="moon__title display" data-reveal>Why the Moon</h2>
+  <ul class="mosaic">
+    <li class="tile tile--a" data-shutter>
+      <div class="tile__frame"><img src="assets/earthrise-over-compton-crater-lro-full-res.jpg" width="1920" height="2792" loading="lazy" decoding="async" alt="Earth rising over the grey horizon of Compton crater, seen by the Lunar Reconnaissance Orbiter" style="object-position: 50% 40%"></div>
+      <p class="tile__name">Earth, 1.3 light-seconds away</p>
+      <p class="tile__role">Earthrise over Compton crater · LRO, 2015</p>
+      <p class="tile__text">Nobody steers an excavator across that delay, and nobody on Earth catches a bad plan in time. The plan has to be right before it runs.</p>
+    </li>
+    <li class="tile tile--b" data-shutter>
+      <div class="tile__frame"><img src="assets/shackleton-crater.jpg" width="3032" height="2637" loading="lazy" decoding="async" alt="Shackleton crater at the lunar south pole from above: a round bowl with one sunlit edge of its rim, ringed by grey highlands and unlit ground" style="object-position: 68% 58%"></div>
+      <p class="tile__name">Shackleton crater, south pole</p>
+      <p class="tile__role">LROC and ShadowCam mosaic · NASA, 2023</p>
+      <p class="tile__text">The demo’s site, LS-1, is a plateau 1.8&nbsp;km east of this rim: 80 by 80&nbsp;m of loose regolith, a depot on its south edge, nothing to recharge from.</p>
+    </li>
+    <li class="tile tile--c" data-shutter>
+      <div class="tile__frame"><img src="assets/apollo-11-bootprint.jpg" width="1920" height="1936" loading="lazy" decoding="async" alt="A bootprint pressed into fine grey lunar soil, with small rocks around it"></div>
+      <p class="tile__name">Regolith</p>
+      <p class="tile__role">Bootprint · Apollo 11, 1969</p>
+      <p class="tile__text">Loose to 40&nbsp;cm over firmer ground. The pad is dug 0.4&nbsp;m to firm regolith, compacted, then sintered 30&nbsp;cm deep.</p>
+    </li>
+    <li class="tile tile--d" data-shutter>
+      <div class="tile__frame"><video autoplay muted loop playsinline preload="metadata" poster="assets/apollo-16-rover-practice-poster.jpg" width="854" height="480" aria-hidden="true" style="object-position: 34% 50%"><source src="assets/apollo-16-rover-practice.webm" type="video/webm"></video></div>
+      <p class="tile__name">Batteries are the budget</p>
+      <p class="tile__role">Lunar rover practice drive · Apollo 16, 1972</p>
+      <p class="tile__text">With nothing to recharge from, each robot’s battery covers its whole job, driving included. The solver counts every leg it drives.</p>
+    </li>
+    <li class="tile tile--e" data-shutter>
+      <div class="tile__frame"><img src="assets/rassor-excavation-testing-swamp-works-ksc-20250603-2.jpg" width="1920" height="2880" loading="lazy" decoding="async" alt="NASA's RASSOR excavator, two drum arms raised, on a mound of simulated regolith in a test hall" style="object-position: 50% 24%; filter: brightness(0.7) contrast(1.08)"></div>
+      <p class="tile__name">When a robot fails</p>
+      <p class="tile__role">RASSOR excavator test · NASA Kennedy, 2025</p>
+      <p class="tile__text">CP-SAT replans the remaining work in a median 9&nbsp;ms. With three spares, the landing pad plan finishes on time in 86&nbsp;% of 200 random-failure runs, up from 37&nbsp;%.</p>
+    </li>
+    <li class="mosaic__close" data-reveal>The same loop fits earthworks on Earth: mine sites, disaster recovery and offshore work, wherever electric machines share batteries, exclusion zones and a deadline.</li>
+  </ul>
+</section>
+
+<section id="open" class="cta wrap" aria-labelledby="cta-title">
+  <div class="cta__words">
+    <h2 id="cta-title" class="cta__title display" data-reveal><span class="line">Models propose.</span><span class="line">Solvers prove.</span></h2>
+    <p class="cta__text" data-reveal style="--i:1">The run opens on its brief. Step through the refusal, both repairs, the verified schedule, a robot failure at hour 10 and 200 Monte Carlo runs.</p>
+  </div>
+  <div class="cta__dialog" data-reveal style="--i:2">
+    <div class="dialog" data-ui role="group" aria-labelledby="dlg-title">
+      <p class="dialog__title" id="dlg-title">Open a run</p>
+      <label class="dialog__label" for="dlg-brief">Brief</label>
+      <textarea id="dlg-brief" rows="5">LS-1 landing pad and blast berm. A circular pad, 20 m across: dig a bowl 0.4 m deep to firm regolith, compact it, sinter a 30 cm surface. A 40 m berm from the pad spoil, with a sintered crest. Done and inspected within 14 days.</textarea>
+      <div class="seg" role="radiogroup" aria-label="Run from">
+        <button type="button" role="radio" aria-checked="true" data-mode="recorded">Recorded run</button>
+        <button type="button" role="radio" aria-checked="false" data-mode="live">Live backend</button>
+      </div>
+      <p class="dialog__note" id="dlg-note">Replays the run recorded on Token Factory on 24 October 2026. No sign-in, no backend.</p>
+      <a class="button" id="dlg-go" href="#">Open the landing pad run</a>
+    </div>
+  </div>
+</section>
+
+</main>
+</div>
+
+<footer class="foot wrap">
+  <div class="foot__cols">
+    <ul class="foot__col">
+      <li>Moonwright</li>
+      <li>Plans for robot crews on the Moon, proven by OR-Tools CP-SAT before they run.</li>
+    </ul>
+    <ul class="foot__col">
+      <li>On this page</li>
+      <li><a class="link" href="#schedule">One run, proven</a></li>
+      <li><a class="link" href="#runs">Three runs</a></li>
+      <li><a class="link" href="#how">How it works</a></li>
+      <li><a class="link" href="#moon">Why the Moon</a></li>
+    </ul>
+    <ul class="foot__col">
+      <li>Built with</li>
+      <li>NVIDIA Nemotron 3.5 Lightning, 3 Ultra and 3 Super on Nebius Token Factory</li>
+      <li>OR-Tools CP-SAT</li>
+      <li><a class="link" href="https://github.com/nkm1020/moonwright">Source on GitHub</a>, MIT license</li>
+    </ul>
+    <ul class="foot__col">
+      <li>Built for</li>
+      <li>Nebius × NVIDIA Global AI Hackathon</li>
+      <li>Physical AI track, 2026</li>
+    </ul>
+  </div>
+  <div></div>
+  <div>
+    <p class="foot__mark" aria-hidden="true">
+      <svg id="wordmark" viewBox="0 0 1000 200" preserveAspectRatio="xMinYMax meet"><text x="0" y="190" font-size="250">MOONWRIGHT</text></svg>
+    </p>
+    <p class="foot__legal">Pictures and footage: Earthrise over Compton crater (NASA/GSFC/Arizona State University), Shackleton crater (LROC and ShadowCam teams), Apollo 11 bootprint (NASA, Buzz Aldrin), Apollo 16 rover practice (NASA, Charles M. Duke Jr.), Apollo 17 Lunar Roving Vehicle (NASA, Harrison H. Schmitt) and RASSOR excavation testing (NASA Kennedy, Frank Michaux), all <a href="https://creativecommons.org/publicdomain/mark/1.0/">public domain</a> via <a href="https://commons.wikimedia.org/">Wikimedia Commons</a>.</p>
+  </div>
+</footer>
+
+<script>
+(() => {
+  const calm = matchMedia('(prefers-reduced-motion: reduce)');
+
+  /* entrances, once */
+  const io = new IntersectionObserver((entries) => {
+    for (const e of entries) if (e.isIntersecting) { e.target.classList.add('is-in'); io.unobserve(e.target); }
+  }, { rootMargin: '0px 0px -6% 0px', threshold: 0.05 });
+  document.querySelectorAll('[data-reveal], [data-shutter]').forEach((el) => io.observe(el));
+
+  /* the board: one open row */
+  const rows = [...document.querySelectorAll('.board .row')];
+  rows.forEach((row) => row.addEventListener('click', () => {
+    rows.forEach((r) => r.setAttribute('aria-expanded', String(r === row)));
+  }));
+
+  /* the runs: pointing at, focusing or tapping a name shows its card */
+  const runs = [...document.querySelectorAll('.run')];
+  const cards = [...document.querySelectorAll('.rcard')];
+  const pick = (id) => {
+    runs.forEach((r) => { const on = r.dataset.run === id; r.classList.toggle('is-active', on); r.setAttribute('aria-pressed', String(on)); });
+    cards.forEach((c) => c.classList.toggle('is-active', c.dataset.card === id));
+  };
+  runs.forEach((r) => ['mouseenter', 'focus', 'click'].forEach((ev) => r.addEventListener(ev, () => pick(r.dataset.run))));
+
+  /* the live thing: the energy check from the landing pad run, recomputed */
+  const PAD = 2701.8, PER_M2 = 8.6, TRAVEL = 17.5, BUDGET = 4000, SCALE = 4200;
+  const fmt = (n) => Math.round(n).toLocaleString('en-US');
+  const crest = document.getElementById('crest');
+  const out = document.getElementById('crest-out');
+  const verdict = document.getElementById('check-verdict');
+  const need = document.getElementById('check-need');
+  const fill = document.getElementById('check-fill');
+  const split = document.getElementById('check-split');
+  const note = document.getElementById('check-note');
+  const presets = [...document.querySelectorAll('.preset')];
+  const update = () => {
+    const a = Number(crest.value);
+    const total = PAD + a * PER_M2 + TRAVEL;
+    const ok = total <= BUDGET;
+    out.textContent = a + ' m²';
+    verdict.innerHTML = ok
+      ? '<span class="pill pill--pos">Fits</span><code>energy:printer</code>'
+      : '<span class="pill pill--neg">Refused</span><code>energy:printer</code>';
+    need.textContent = 'PR1 needs ' + fmt(total) + ' Wh of 4,000';
+    fill.style.width = Math.min(100, (total / SCALE) * 100).toFixed(2) + '%';
+    fill.classList.toggle('is-ok', ok);
+    split.textContent = fmt(PAD) + ' pad + ' + fmt(a * PER_M2) + ' crest + ' + fmt(TRAVEL) + ' travel';
+    const cut = Math.round((1 - a / 160) * 100);
+    let text;
+    if (a === 160) text = 'Nemotron’s first graph. Over by ' + fmt(total - BUDGET) + ' Wh, so the checks send it back with this core.';
+    else if (a === 150) text = 'Nemotron’s first repair. Still over by ' + fmt(total - BUDGET) + ' Wh: refused again.';
+    else if (a === 145) text = 'Nemotron’s second repair. It fits with ' + fmt(BUDGET - total) + ' Wh to spare, and CP-SAT proved the whole schedule.';
+    else if (ok) text = 'Fits with ' + fmt(BUDGET - total) + ' Wh to spare, giving up ' + cut + ' % of the first graph’s crest. CP-SAT proved the full schedule at 145 m².';
+    else if (a > 160) text = 'Over by ' + fmt(total - BUDGET) + ' Wh: more crest than the first graph, and further from fitting.';
+    else text = 'Over by ' + fmt(total - BUDGET) + ' Wh. The checks would refuse this too.';
+    note.textContent = text;
+    presets.forEach((p) => p.setAttribute('aria-pressed', String(Number(p.dataset.area) === a)));
+  };
+  crest.addEventListener('input', update);
+  presets.forEach((p) => p.addEventListener('click', () => { crest.value = p.dataset.area; update(); }));
+  update();
+
+  /* the dialog: recorded or live */
+  const seg = [...document.querySelectorAll('.seg button')];
+  const dnote = document.getElementById('dlg-note');
+  const go = document.getElementById('dlg-go');
+  seg.forEach((b) => b.addEventListener('click', () => {
+    seg.forEach((x) => x.setAttribute('aria-checked', String(x === b)));
+    if (b.dataset.mode === 'live') {
+      dnote.textContent = 'Plans this brief with Nemotron on Token Factory. It needs the backend running; setup is in the README.';
+      go.textContent = 'Read the setup';
+      go.href = 'https://github.com/nkm1020/moonwright#run-it';
+    } else {
+      dnote.textContent = 'Replays the run recorded on Token Factory on 24 October 2026. No sign-in, no backend.';
+      go.textContent = 'Open the landing pad run';
+      go.href = '#';
+    }
+  }));
+
+  /* the footer name, fitted to the width it has */
+  const fit = () => {
+    const svg = document.getElementById('wordmark');
+    const t = svg.querySelector('text');
+    try { const b = t.getBBox(); if (b.width) svg.setAttribute('viewBox', `${b.x} ${b.y} ${b.width} ${b.height}`); } catch (e) {}
+  };
+  (document.fonts ? document.fonts.ready : Promise.resolve()).then(fit);
+
+  /* the clip plays only in view, never under reduced motion */
+  const clips = [...document.querySelectorAll('video[autoplay]')];
+  const inView = new Set();
+  const sync = (v) => { if (calm.matches) return; if (inView.has(v)) v.play().catch(() => {}); else v.pause(); };
+  const settle = () => {
+    for (const v of clips) {
+      if (calm.matches) { v.removeAttribute('autoplay'); v.pause(); v.load(); }
+      else if (inView.has(v)) v.play().catch(() => {});
+    }
+  };
+  const watch = new IntersectionObserver((entries) => {
+    for (const e of entries) { if (e.isIntersecting) inView.add(e.target); else inView.delete(e.target); sync(e.target); }
+  }, { threshold: 0.2 });
+  clips.forEach((v) => watch.observe(v));
+  settle();
+  calm.addEventListener('change', settle);
+})();
+</script>
+</body>
+</html>
