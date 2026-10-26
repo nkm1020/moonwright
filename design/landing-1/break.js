@@ -24,10 +24,11 @@ const STATUS = ['idle', 'moving', 'working', 'failed', 'done'];
 const $ = (id) => document.getElementById(id);
 const root = document.querySelector('[data-run="landing_pad"] [data-scene="break"]');
 const calm = matchMedia('(prefers-reduced-motion: reduce)');
-let table = null, plan = null, live = false, framesFile;
+let table = null, plan = null, live = false, framesFile = null, framesReady = null;
 let dataReady = null; // the table, the plan and the live check
 let view = null, viewReady = null, awake = false;
 let shown = null; // the frames and row the 3D view should show: the last breakdown, or the plan
+let seq = 0; // the latest press of "Break it"; an older one never overwrites it
 
 if (root) {
   // listen before anything loads, so a quick "Next" or an early "Break it" is never missed
@@ -69,7 +70,7 @@ function onScene({ run, scene }) {
   const here = run === 'landing_pad' && scene === 'break';
   // the 3D view is built one scene early, while the visitor watches the Isaac Sim clip,
   // so the first "Break it" plays at once; it renders only while this scene is shown
-  if (run === 'landing_pad' && (scene === 'failure' || here)) ensureView();
+  if (run === 'landing_pad' && (scene === 'failure' || here)) { ensureView(); loadFrames(); }
   awake = here;
   if (here) ensureView().then((v) => { if (v && awake) v.wakeUp(); });
   else if (view) view.sleep();
@@ -127,9 +128,14 @@ function rowFromSim(res, robot, h) {
 }
 // frames, in one shape: [{ t, robots: { id: { pos: [x, y], status, task } } }]
 const norm = (frames) => frames.map((f) => ({ t: f.t_h, robots: Object.fromEntries(f.robots.map((r) => [r.id, { pos: r.pos, status: r.status, task: r.current_task }])) }));
+// every breakdown's motion, 2.6 MB: fetched with the 3D view, one scene early
+// { robots: [...], cases: { "HL2@24": [[t, [[x, y, status, task], ...]], ...] } }
+function loadFrames() {
+  if (!framesReady) framesReady = fetch('data/landing_pad.failures.frames.json').then((r) => (r.ok ? r.json() : null)).catch(() => null).then((j) => (framesFile = j));
+  return framesReady;
+}
 async function precomputedFrames(robot, h) {
-  // the full set of 504, once it exists: { cases: { "HL2@24": [[t, [[x, y, status, task], ...]], ...] } }
-  if (framesFile === undefined) framesFile = await fetch('data/landing_pad.failures.frames.json').then((r) => (r.ok ? r.json() : null)).catch(() => null);
+  await loadFrames();
   const c = framesFile?.cases?.[robot + '@' + h];
   if (c) return c.map(([t, rs]) => ({ t, robots: Object.fromEntries(rs.map(([x, y, s, task], i) => [framesFile.robots[i], { pos: [x, y], status: STATUS[s], task }])) }));
   const url = RECORDED[robot + '@' + h];
@@ -150,6 +156,7 @@ function snapshot(h, broken) {
 /* ---------- breaking one ---------- */
 async function breakIt(robot, h) {
   if (!(await dataReady)) return;
+  const mine = ++seq;
   const go = $('bk-go');
   go.setAttribute('aria-busy', 'true');
   let row = null, frames = null, src = 'precomputed by the same replanner';
@@ -161,15 +168,16 @@ async function breakIt(robot, h) {
       src = 'computed just now by CP-SAT';
     } catch { live = false; }
   }
-  if (!row) {
-    row = table.get(robot + '@' + h);
-    frames = await precomputedFrames(robot, h).catch(() => null);
-  }
+  if (!row) row = table.get(robot + '@' + h);
+  if (mine !== seq) return;
   go.removeAttribute('aria-busy');
+  // the answer first, from the table or the live replan; the motion follows
   render(row, src);
   pick(robot, h);
   timeline(row);
   table3(row, src);
+  if (!frames) frames = await precomputedFrames(robot, h).catch(() => null);
+  if (mine !== seq) return;
   shown = [frames && frames.length > 1 ? frames : snapshot(h, robot), row];
   ensureView().then((v) => v && v.show(...shown)); // at once if built; else as soon as it is
 }
