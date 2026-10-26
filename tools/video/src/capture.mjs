@@ -38,6 +38,10 @@ export async function launchBrowser() {
       "--disable-background-timer-throttling",
       "--disable-renderer-backgrounding",
       "--disable-backgrounding-occluded-windows",
+      // the site's 3D scene: without a GPU, headless Chromium draws WebGL in software (SwiftShader,
+      // about 5 frames a second at this size), which stalls the page's main thread for seconds;
+      // on macOS, ANGLE on Metal renders it at full rate
+      ...(process.platform === "darwin" ? ["--use-angle=metal", "--enable-gpu", "--ignore-gpu-blocklist"] : []),
     ],
   });
   const context = await browser.newContext({ viewport: null, colorScheme: "dark", reducedMotion: "no-preference" });

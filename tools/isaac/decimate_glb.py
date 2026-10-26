@@ -26,7 +26,7 @@ d = m.simplify_quadric_decimation(target_number_of_triangles=target)
 d.remove_degenerate_triangles()
 d.remove_unreferenced_vertices()
 out = trimesh.Trimesh(np.asarray(d.vertices), np.asarray(d.triangles), process=False)
-out.vertex_normals  # computed and cached, so the glb carries smooth normals
+_ = out.vertex_normals  # computed and cached, so the glb carries smooth normals
 out.export(dst, include_normals=True)
 print(f"{len(mesh.vertices)} vertices, {len(mesh.faces)} triangles -> {len(out.vertices)}, {len(out.faces)}; "
       f"bounds {out.bounds.round(3).tolist()}")

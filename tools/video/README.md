@@ -1,8 +1,8 @@
 # Demo video pipeline
 
-Renders the Moonwright demo video from `storyboard.json`: five HTML slides, the site
-(`design/landing-1`: the overview and the recorded runs, served as files) and one scene of the
-working app (`frontend/`, with the backend in fixture mode), driven by Playwright in
+Renders the Moonwright demo video from `storyboard.json`: five HTML slides and the site
+(`design/landing-1`: the overview and the recorded runs, served as files, with the backend in
+fixture mode behind its "Your turn" scene), driven by Playwright in
 Chromium and recorded with CDP `Page.startScreencast`, narrated (OpenAI TTS or macOS `say`),
 captioned and assembled with ffmpeg. Every figure the video quotes comes from `facts.json`, which
 is checked before anything is recorded: against the recorded runs in `frontend/public/samples/`,
@@ -20,11 +20,13 @@ run was recorded live. The crest slider computes PR1's energy check in the page 
 own numbers. The failure scene plays the Isaac Sim mission (`tools/isaac`: PhysX rovers on NASA
 LOLA terrain of Shackleton's rim, the replan from their telemetry), whose figures come from
 `docs/eval/2026-10-25-isaac-closed-loop`; the cold open plays the same clip at the fault. The
-live scene is the one place something is computed while recording: the app plans the landing pad
-from its recorded Token Factory answers (the backend in fixture mode replays them; the validator
-and CP-SAT run for real), a failure the site does not show (hauler HL2 at hour 24) is injected
-on camera, and CP-SAT replans it during the capture; its figures are checked against
-`runs/landing_pad.hl2-at-24.sim.json`, the CLI's run of the same failure, and on screen. The
+live scene is the one place something is computed while recording: on the site's "Your turn"
+scene a failure the other scenes do not show (hauler HL2 at hour 24) is chosen on camera, the page
+(in live mode because the backend answers on :8074) posts it to `/simulate`, and CP-SAT replans it
+during the capture; the page says "computed just now by CP-SAT", and the figures are checked
+against `runs/landing_pad.hl2-at-24.sim.json`, the CLI's run of the same failure, and on screen.
+Without a backend the same scene reads a precomputed table of all 504 breakdowns
+(`design/landing-1/data`, `backend/scripts/failure_table.py`). The
 evidence slide reports run 4 of the live evaluation
 (docs/eval/2026-10-24-live-eval-run4, the Nemotron 3 Ultra arm, `eval.rescored.csv`) and the
 core-vs-verdict ablation.
@@ -37,21 +39,17 @@ tools/video/render.sh
 
 What it does, in order:
 
-1. Mirror-builds the frontend into `out/app` (rsync of `frontend/` without `node_modules` and
-   `.next`, a symlink to `frontend/node_modules`; `frontend/` is never written), unless
-   `SKIP_BUILD=1` and a build is there.
-2. Serves `design/landing-1` on :3074 (`python3 -m http.server`), starts the backend in fixture
-   mode on :8074 (it refuses to record unless `/health` reports `"llm":"fixture"`, so no model is
-   called) and the app on :3076. All three ports must be free.
-3. Synthesizes the narration, then records every scene in real time (`caffeinate` keeps the Mac
+1. Serves `design/landing-1` on :3074 (`python3 -m http.server`) and starts the backend in
+   fixture mode on :8074 (it refuses to record unless `/health` reports `"llm":"fixture"`, so no
+   model is called). Both ports must be free.
+2. Synthesizes the narration, then records every scene in real time (`caffeinate` keeps the Mac
    awake; a scene during which the machine slept is rejected).
-4. Stops the servers (also on Ctrl-C or any error), then assembles everything with ffmpeg.
+3. Stops the servers (also on Ctrl-C or any error), then assembles everything with ffmpeg.
 
 Everything it prints also goes to `out/logs/render.log`. A full render takes a few minutes on an
 M-series Mac (synthesized sentences are cached in `out/work/audio/cache`). Needs ffmpeg (no libass
-needed: captions are rendered by Chromium), Node 22, pnpm, uv, python3, rsync, macOS `say` (the
-fallback voice), `frontend/node_modules` (`pnpm install` in `frontend/` once), network access for
-the site's Google Fonts, and
+needed: captions are rendered by Chromium), Node 22, pnpm, uv, python3, macOS `say` (the fallback
+voice), network access for the site's Google Fonts and three.js (jsDelivr), and
 Playwright's Chromium build 1234 in `~/Library/Caches/ms-playwright`, which matches the pinned
 `playwright@1.62.1` (if it is missing: `cd tools/video && pnpm exec playwright install
 chromium-headless-shell`). The slides use the site's type (Imbue, Albert Sans) and its pictures
@@ -59,7 +57,6 @@ chromium-headless-shell`). The slides use the site's type (Imbue, Albert Sans) a
 
 | Variable | Default | Effect |
 | --- | --- | --- |
-| `SKIP_BUILD` | `0` | `1` reuses the last mirror build in `out/app` |
 | `TTS` | `openai` when `OPENAI_API_KEY` is set, else `say` | narration engine. Put `OPENAI_API_KEY=...` in `tools/video/.env` or `tools/video/voice/.env` (both gitignored; loaded by the render's node process only and never logged). Sentences are still synthesized one by one, so the timing and captions work the same; synthesized sentences are cached in `out/work/audio/cache` like `say`'s |
 | `OPENAI_TTS_MODEL` | `gpt-4o-mini-tts` | OpenAI speech model (`tts-1`, `tts-1-hd` ignore the instructions) |
 | `OPENAI_TTS_VOICE` | `ash` | OpenAI voice |
@@ -85,7 +82,7 @@ chromium-headless-shell`). The slides use the site's type (Imbue, Albert Sans) a
 | `timing.txt`, `timing.json` | per-scene start, duration, narration and action seconds, output checks, loudness, the motion check |
 
 Working files live in `out/work` (narration WAVs and their timing, per-scene clips, caption
-images) and `out/logs` (render, build, site, backend and app logs).
+images) and `out/logs` (render, site and backend logs).
 
 ## How it is recorded
 

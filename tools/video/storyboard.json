@@ -437,93 +437,31 @@
       "id": "live",
       "kind": "ui",
       "voDelay": 0.5,
-      "captionAlign": "right",
-      "transition": {
-        "type": "dip",
-        "duration": 0.5
-      },
-      "note": "The working app (frontend/, Next.js + FastAPI in fixture mode), not a replay: the setup plans the landing pad from its recorded Token Factory answers; the recorded part injects a failure the site does not show and CP-SAT replans it during the capture. Figures checked against tools/video/runs/landing_pad.hl2-at-24.sim.json (the CLI's run of the same failure).",
-      "narration": "And this is the working app, not a replay. Pick any robot and any hour: hauler {{app_fail_robot_no|words}} breaks down at hour {{app_fail_h|words}}. CP-SAT reschedules the remaining {{app_replan_tasks|words}} tasks on the spot, and the pad still finishes at hour {{app_after_h|words}}, because the other hauler takes over.",
-      "setup": [
-        {
-          "action": "goto",
-          "url": "http://127.0.0.1:3076/"
-        },
-        {
-          "action": "waitForText",
-          "text": "recorded answers",
-          "timeout": 60000
-        },
-        {
-          "action": "waitForSelector",
-          "selector": "#brief-text",
-          "timeout": 30000
-        },
-        {
-          "action": "clickRole",
-          "role": "button",
-          "name": "Structure brief"
-        },
-        {
-          "action": "waitForSelector",
-          "selector": "svg[aria-label^='Site map']",
-          "timeout": 90000
-        },
-        {
-          "action": "clickRole",
-          "role": "button",
-          "name": "Plan with these requirements"
-        },
-        {
-          "action": "waitForText",
-          "text": "Verified plan: makespan {{landing_makespan_h}} h",
-          "timeout": 180000
-        },
-        {
-          "action": "scrollTo",
-          "selector": "#simulate",
-          "align": "top",
-          "offset": 52,
-          "duration": 300
-        },
-        {
-          "action": "waitForScroll"
-        },
-        {
-          "action": "pause",
-          "ms": 600,
-          "elastic": false
-        }
-      ],
+      "captionAlign": "left",
+      "note": "The site's 'Your turn' scene (run.html#landing_pad/break). The backend runs in fixture mode during the capture, so the page is in live mode: 'Break it' posts the failure to /simulate and CP-SAT replans it while recording (the source line reads 'computed just now by CP-SAT'). Figures checked against runs/landing_pad.hl2-at-24.sim.json and on screen. The setup (not recorded) opens the scene and breaks EX1 at hour 10 first, the failure scene's own case, so the 3D view is built before the camera rolls; the recording starts on that result (79 h) and breaks HL2 at hour 24 live.",
+      "narration": "Now it's your turn, on the same site. Pick any robot and any hour: hauler {{app_fail_robot_no|words}} breaks down at hour {{app_fail_h|words}}. CP-SAT replans the crew live, and the pad still finishes at hour {{app_after_h|words}}, because the other hauler takes over. The red rows are breakdowns no replan survives.",
       "actions": [
-        {
-          "action": "click",
-          "role": "button",
-          "name": "+ Add failure",
-          "cue": "Pick any robot",
-          "lead": 0.4
-        },
         {
           "action": "select",
           "role": "combobox",
-          "name": "Robot for failure 1",
+          "name": "Robot to break",
           "value": "{{app_fail_robot}}",
           "at": [
-            0.55,
+            0.6,
             0.5
           ],
-          "cue": "hauler"
+          "cue": "Pick any robot"
         },
         {
           "action": "click",
           "role": "spinbutton",
-          "name": "Failure 1 time in hours",
+          "name": "Hour of the failure",
           "at": [
-            0.42,
+            0.5,
             0.5
           ],
           "cue": "at hour",
-          "lead": 0.75
+          "lead": 0.7
         },
         {
           "action": "press",
@@ -535,50 +473,92 @@
           "delay": 110
         },
         {
-          "action": "clickRole",
+          "action": "click",
           "role": "button",
-          "name": "Run simulation",
-          "cue": "CP-SAT reschedules",
-          "lead": 1.7
+          "name": "Break it",
+          "cue": "replans the crew",
+          "lead": 1.2
         },
         {
           "action": "waitForText",
-          "text": "Completed at {{app_after_h}} h",
+          "text": "Finished at {{app_after_h}} h",
+          "within": "#break-result",
           "by": "still finishes"
         },
         {
           "action": "waitForText",
-          "text": "{{app_replan_tasks}} tasks remaining"
+          "text": "computed just now by CP-SAT",
+          "within": "#break-result"
         },
         {
-          "action": "waitForText",
-          "text": "({{app_progress}} done)"
-        },
-        {
-          "action": "waitForScroll"
-        },
-        {
-          "action": "scrollTo",
-          "text": "CP-SAT rescheduled, Nemotron not needed",
-          "exact": true,
-          "align": "center",
-          "offset": -40,
-          "duration": 900,
-          "cue": "and the pad still finishes",
-          "lead": 0.6
+          "action": "hover",
+          "selector": "#bk-3d",
+          "at": [
+            0.55,
+            0.45
+          ],
+          "cue": "the other hauler"
         },
         {
           "action": "highlight",
-          "text": "CP-SAT rescheduled, Nemotron not needed",
-          "exact": true,
-          "rect": "box",
-          "pad": 4,
-          "cue": "and the pad still finishes",
-          "lead": 0.0
+          "selector": "#bk-map",
+          "pad": 6,
+          "cue": "The red rows"
         },
         {
           "action": "pause",
-          "ms": 500
+          "ms": 700
+        }
+      ],
+      "transition": {
+        "type": "dip",
+        "duration": 0.5
+      },
+      "setup": [
+        {
+          "action": "click",
+          "role": "button",
+          "name": "Next: break one yourself"
+        },
+        {
+          "action": "waitForSelector",
+          "selector": "#bk-robot"
+        },
+        {
+          "action": "select",
+          "role": "combobox",
+          "name": "Robot to break",
+          "value": "EX1"
+        },
+        {
+          "action": "click",
+          "role": "spinbutton",
+          "name": "Hour of the failure"
+        },
+        {
+          "action": "press",
+          "key": "ControlOrMeta+A"
+        },
+        {
+          "action": "typeText",
+          "value": "10",
+          "delay": 20
+        },
+        {
+          "action": "click",
+          "role": "button",
+          "name": "Break it"
+        },
+        {
+          "action": "waitForText",
+          "text": "Finished at 79 h",
+          "within": "#break-result",
+          "timeout": 90000
+        },
+        {
+          "action": "pause",
+          "ms": 2500,
+          "elastic": false
         }
       ]
     },
@@ -588,6 +568,9 @@
       "voDelay": 0.5,
       "narration": "Two hundred runs with random breakdowns: as planned, only {{mc_within_n|words}} finish on time. With a spare printer, compactor and surveyor, {{whatif_within_n|words}} do.",
       "actions": [
+        {
+          "action": "unhighlight"
+        },
         {
           "action": "click",
           "role": "button",
@@ -628,22 +611,7 @@
           "action": "pause",
           "ms": 400
         }
-      ],
-      "setup": [
-        {
-          "action": "goto",
-          "url": "/run.html#landing_pad/failure"
-        },
-        {
-          "action": "pause",
-          "ms": 1200,
-          "elastic": false
-        }
-      ],
-      "transition": {
-        "type": "dip",
-        "duration": 0.5
-      }
+      ]
     },
     {
       "id": "impossible",
