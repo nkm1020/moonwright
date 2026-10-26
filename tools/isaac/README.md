@@ -77,6 +77,25 @@ same finish and arrivals within 0.03 h.)
 3. The verified schedule in `replan_<n>.out.json` replaces the rovers' queues: a task underway on a
    healthy rover continues where it is, the lost rover's dig goes to EX2 in full.
 
+## A rover that stops for a reason the map does not show
+
+`--boulder=x,y,w,d,h[,shape]` puts a rock in a lane, too small for the planner's 5 m map; `--lock
+RID@H` gives a rover the other kind of stall, a drive fault on a clear road (the wheels hold, the
+rover still thinks it drives). A health check watches every drive: a rover that gains less than
+0.5 m on its way-point in 15 minutes has stalled. What happens next depends on what it can see.
+
+* Without `--cosmos-python` a stalled rover is lost, and Moonwright replans without it.
+* With it, the rover's navigation camera (a mast 2 m up, looking ahead and down, two lamps beside it)
+  is shown to **NVIDIA Cosmos Reason 2-8B** (`cosmos_bridge.py`, in its own venv, 4-bit, 7.1 GB). It is
+  asked only what it can see: is there something at the nose the rover cannot drive over. "Blocked"
+  means the rover is sound: it backs up 3 m, steps 5 m aside and rejoins its leg 10 m on, and the
+  health check keeps watching; a rover that stalls again on its way around is lost after all.
+  Anything else, and it is lost.
+
+Cosmos proposes the cause, the physics checks it, as CP-SAT checks Nemotron. `cosmos_eval.py` scores
+the question on camera pictures whose answer is known. The runs, the evaluation and the five tries it
+took to get the question right: `docs/eval/2026-10-26-isaac-cosmos-ab/`.
+
 ## Run it
 
 On a machine with an RTX GPU (tested: Windows 11, RTX 4070 SUPER 12 GB, driver 610.62), in a virtual
@@ -97,7 +116,10 @@ The backend next to it (`git archive HEAD backend frontend/public/samples`, then
     ffmpeg -framerate 24 -start_number 1 -i rgb_%04d.png -c:v libx264 -pix_fmt yuv420p -crf 17 isaac_lola.mp4
 
 (`prep_lola.py` runs anywhere, with uv; the 41 MB map and the 3 MB `lola_site.npz` are not committed.
-Without `--ground` both scripts use a procedural ground.)
+Without `--ground` both scripts use a procedural ground.) The boulder runs and the camera clips of
+them: the commands in `docs/eval/2026-10-26-isaac-cosmos-ab/README.md`; `render_replay.py --shots
+boulder` (or `boulder-hold`) frames the lane with the rock in it, and Replicator writes the frames under
+`~/omni.replicator_out/<out>` when `<out>` is a relative path.
 
 `mission.py` writes `track.json` (480 frames, 20 s at 24 fps: the clip spends more of its time where
 rovers drive and around the fault), `mission.json` (legs, events, replans, finish) and the replan's

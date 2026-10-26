@@ -79,11 +79,19 @@ async function openaiToWav(text, { openai, cacheDir }) {
         method: "POST",
         headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, "Content-Type": "application/json" },
         body: JSON.stringify(body),
-        signal: AbortSignal.timeout(60000),
+        signal: AbortSignal.timeout(120000),
       }).catch((e) => ({ ok: false, status: 0, text: async () => String(e) }));
       if (res.ok) {
-        await fsp.writeFile(raw, Buffer.from(await res.arrayBuffer()));
-        break;
+        // the timeout covers the body too: a slow download is retried like a failed request
+        const audio = await res.arrayBuffer().catch((e) => e);
+        if (!(audio instanceof Error)) {
+          await fsp.writeFile(raw, Buffer.from(audio));
+          break;
+        }
+        if (attempt >= 3) throw new Error(`OpenAI speech audio did not arrive on "${text.slice(0, 40)}...": ${audio.message}`);
+        log(`OpenAI speech audio did not arrive on "${text.slice(0, 40)}..." (${audio.message}), retrying (${attempt}/3)`);
+        await new Promise((r) => setTimeout(r, 2000 * attempt));
+        continue;
       }
       // the key never appears in the message: only the status and the endpoint's own words
       const detail = (await res.text()).slice(0, 300);

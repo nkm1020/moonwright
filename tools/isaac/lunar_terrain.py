@@ -203,6 +203,21 @@ def rock_mesh(kind, subdiv=2):
     return P, f
 
 
+def boulder_mesh(kind, w, d, h):
+    """a broken boulder w x d x h (m), centred on its box: an icosphere cut flat by nine random planes
+    (fracture faces) and a flat base, a little rough; drawn faceted, it reads as rock where the round
+    prototypes read as pebbles. mission.py drives into it, render_replay.py draws the same one"""
+    P, f = rock_mesh(kind, subdiv=3)
+    P = P / np.linalg.norm(P, axis=1)[:, None]          # back to the sphere: the cuts make the shape
+    rng = np.random.default_rng(300 + kind)
+    for n, off in [(rng.normal(size=3), rng.uniform(0.6, 0.85)) for _ in range(9)] + [((0, 0, -1), 0.55)]:
+        n = np.asarray(n, float) / np.linalg.norm(n)
+        P = P - np.clip(P @ n - off, 0, None)[:, None] * n
+    P = P * (1 + 0.025 * rng.normal(size=(len(P), 1)))
+    lo, hi = P.min(axis=0), P.max(axis=0)
+    return (P - (lo + hi) / 2) / (hi - lo) * np.array([w, d, h]), f
+
+
 def work_flats(zone_centres):
     """the graded area around each zone: the pad or berm and the rovers' work spots beside it"""
     return [(c[0], c[1], 18.0, 26.0) for c in zone_centres]

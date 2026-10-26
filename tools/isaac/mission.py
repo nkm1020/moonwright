@@ -22,8 +22,19 @@ same at every zone, so each leg a rover drives is exactly as long as the planner
 between zone centres. Telemetry speaks the planner's frame: a rover at its spot is in the zone (the
 zone's centre cell), a rover on the road is reported in its lane's centre line.
 
+A rover can also stop for a reason no map shows: --boulder puts a rock in a lane. A health check
+watches every driving rover; one that gains less than 0.5 m on its way-point in 15 min has stalled.
+Without perception a stalled rover is lost (Moonwright replans without it). With --cosmos-python,
+NVIDIA Cosmos Reason 2 looks through its navigation camera first (cosmos_bridge.py) and proposes the
+cause; "blocked" means
+the rover is sound, so it backs up 3 m, steps 5 m aside and rejoins its leg 10 m on, and the health
+check keeps watching: a rover that stalls again on its way around is lost after all. --lock injects
+the other kind of stall, a drive fault on a clear road (the wheels hold, the rover still thinks it
+drives). When everything left waits on a lost rover, the mission stops: the plan cannot finish.
+
 Usage (Isaac Sim 5.1 Python):
   python mission.py plan.json out_dir --fail EX1@10 --uv <uv.exe> --backend <repo>/backend
+  python mission.py plan.json out_dir --boulder=3.2,-8,3.6,2.4,1.4 [--cosmos-python <venv python>] [--lock HL2@1.2] ...
 Writes out_dir/track.json (frames for render_replay.py), out_dir/mission.json (legs, events,
 replans, finish) and out_dir/replan_<n>.in.json / .out.json (what went to Moonwright and back)."""
 import argparse
@@ -43,19 +54,28 @@ ap.add_argument("--dt", type=float, default=1 / 30, help="physics step (s)")
 ap.add_argument("--until", type=float, default=None, help="stop at this mission hour (tests)")
 ap.add_argument("--clip-seconds", type=float, default=20.0)
 ap.add_argument("--ground", default=None, help="lola_site.npz from prep_lola.py (default: procedural ground)")
+ap.add_argument("--boulder", default=None, help="x,y,width,depth,height[,shape 0-3] (m): a rock in the way, too small for the map")
+ap.add_argument("--cosmos-python", default=None,
+                help="python of the venv that runs cosmos_bridge.py; when set, a stalled rover's camera is "
+                     "shown to Cosmos Reason 2, whose answer decides: go around, or lost")
+ap.add_argument("--lamp", type=float, default=2.5e5, help="each of the two lamps beside the navigation camera (nits)")
+ap.add_argument("--lock", default=None, help="RID@H[,RID@H...]: a drive fault that stops the wheels while the rover still thinks it drives")
+ap.add_argument("--snap", default=None, help="RID@H[,RID@H...]: save that rover's camera at that hour (needs --cosmos-python)")
+ap.add_argument("--window", default=None, help="a,b: the clip covers mission hours a..b at an even pace")
 args = ap.parse_args()
 
 os.environ.setdefault("OMNI_KIT_ACCEPT_EULA", "YES")
 from isaacsim import SimulationApp
 app = SimulationApp({"headless": True})
 
+import carb
 import numpy as np
 import omni.usd
 from isaacsim.core.api import World
 from isaacsim.core.prims import Articulation, RigidPrim
-from pxr import Gf, PhysxSchema, UsdGeom, UsdPhysics, UsdShade, Vt
+from pxr import Gf, PhysxSchema, Sdf, UsdGeom, UsdPhysics, UsdShade, Vt
 
-from lunar_terrain import height_at, heightfield, load_lola, mesh_arrays, work_flats
+from lunar_terrain import boulder_mesh, height_at, heightfield, load_lola, mesh_arrays, work_flats
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 os.makedirs(args.out, exist_ok=True)
@@ -108,6 +128,22 @@ UsdPhysics.CollisionAPI.Apply(ground.GetPrim())
 UsdPhysics.MeshCollisionAPI.Apply(ground.GetPrim()).CreateApproximationAttr("none")
 bind_phys(ground.GetPrim(), regolith)
 
+# a boulder the 5 m map cannot show: a static convex rock, a little buried
+BOULDERS = []
+if args.boulder:
+    bx, by, bw, bd, bh, *bk = (float(v) for v in args.boulder.split(","))
+    kind = int(bk[0]) if bk else 2
+    P, F = boulder_mesh(kind, bw, bd, bh)
+    bz = height_at(xs, Z, bx, by) + bh / 2 - 0.15
+    rock = UsdGeom.Mesh.Define(stage, "/World/Boulder")
+    rock.CreatePointsAttr(Vt.Vec3fArray([Gf.Vec3f(float(p[0]) + bx, float(p[1]) + by, float(p[2]) + bz) for p in P]))
+    rock.CreateFaceVertexCountsAttr(Vt.IntArray([3] * len(F)))
+    rock.CreateFaceVertexIndicesAttr(Vt.IntArray([i for f in F for i in f]))
+    UsdPhysics.CollisionAPI.Apply(rock.GetPrim())
+    UsdPhysics.MeshCollisionAPI.Apply(rock.GetPrim()).CreateApproximationAttr("convexHull")
+    bind_phys(rock.GetPrim(), regolith)
+    BOULDERS.append({"x": bx, "y": by, "z": round(bz, 3), "w": bw, "d": bd, "h": bh, "kind": kind})
+
 # ---------------------------------------------------------------- rovers: chassis + four driven wheels
 L, W, H = 3.0, 1.6, 0.5        # chassis box (m)
 R_WHEEL, WX, WY = 0.4, 1.1, 1.0
@@ -157,6 +193,55 @@ def rover(rid, x, y, yaw):
         drv.CreateTypeAttr("force"); drv.CreateStiffnessAttr(0.0); drv.CreateDampingAttr(1e5)
         drv.CreateMaxForceAttr(400.0); drv.CreateTargetVelocityAttr(0.0)
 
+def aimed(prim, at, direction):
+    """place a camera or a light at `at` (chassis frame), its -Z along `direction`"""
+    m = Gf.Matrix4d().SetLookAt(Gf.Vec3d(0, 0, 0), Gf.Vec3d(*direction), Gf.Vec3d(0, 0, 1)).GetInverse()
+    m.SetTranslateOnly(Gf.Vec3d(*at))
+    UsdGeom.Xformable(prim).AddTransformOp().Set(m)
+
+def front_camera(root):
+    """the rover's navigation camera: on a mast about 2 m above the ground, looking ahead and 33 deg
+    down (its own nose at the bottom of the frame), between two lamps: at the pole the sun stays low
+    and the rover's own shadow lies on whatever is in front of it"""
+    from pxr import UsdLux
+    cam = UsdGeom.Camera.Define(stage, root + "/chassis/cam")
+    cam.CreateFocalLengthAttr(14.0); cam.CreateHorizontalApertureAttr(36.0); cam.CreateVerticalApertureAttr(27.0)
+    cam.CreateClippingRangeAttr(Gf.Vec2f(0.05, 600.0))
+    aimed(cam, (1.0, 0, H / 2 + 1.25), (1, 0, -0.65))
+    for side in (1, -1):
+        lamp = UsdLux.DiskLight.Define(stage, f"{root}/chassis/lamp{'lr'[side < 0]}")
+        lamp.CreateRadiusAttr(0.08); lamp.CreateIntensityAttr(args.lamp)
+        lamp.CreateColorAttr(Gf.Vec3f(1.0, 0.96, 0.9))
+        aimed(lamp, (1.0, 0.55 * side, H / 2 + 1.1), (1, -0.15 * side, -0.7))
+
+def looks(prim, name, color, rough):
+    """a visual material for the camera (the clip's own, render_replay.py); physics keeps its own"""
+    m = UsdShade.Material.Define(stage, f"/World/Looks/{name}")
+    sh = UsdShade.Shader.Define(stage, f"/World/Looks/{name}/Shader")
+    sh.CreateIdAttr("UsdPreviewSurface")
+    sh.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(*color))
+    sh.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(rough)
+    m.CreateSurfaceOutput().ConnectToSource(sh.ConnectableAPI(), "surface")
+    UsdShade.MaterialBindingAPI.Apply(prim).Bind(m)
+
+if args.cosmos_python:   # the camera sees what the clip shows: its low sun, a little fill, faceted rock
+    from pxr import UsdLux
+    ground.CreateNormalsAttr(Vt.Vec3fArray.FromNumpy(nrm.astype(np.float32))); ground.SetNormalsInterpolation(UsdGeom.Tokens.vertex)
+    ground.CreateSubdivisionSchemeAttr(UsdGeom.Tokens.none); looks(ground.GetPrim(), "regolith", (0.17, 0.168, 0.165), 0.97)
+    if BOULDERS:
+        rock.CreateSubdivisionSchemeAttr(UsdGeom.Tokens.none); looks(rock.GetPrim(), "rock", (0.13, 0.128, 0.125), 0.9)
+    sun = UsdLux.DistantLight.Define(stage, "/World/Sun")
+    sun.CreateIntensityAttr(4500.0); sun.CreateAngleAttr(0.53)
+    el, az = math.radians(6.0), math.radians(255.0)
+    to_sun = Gf.Vec3d(math.cos(el) * math.cos(az), math.cos(el) * math.sin(az), math.sin(el))
+    q = Gf.Rotation(Gf.Vec3d(0, 0, 1), to_sun).GetQuat()
+    UsdGeom.Xformable(sun).AddOrientOp().Set(Gf.Quatf(q.GetReal(), *q.GetImaginary()))
+    dome = UsdLux.DomeLight.Define(stage, "/World/Sky")   # as render_replay.py: fill on the ground, a black sky
+    dome.CreateIntensityAttr(3.0); dome.CreateColorAttr(Gf.Vec3f(0.55, 0.6, 0.7))
+    dome.GetPrim().CreateAttribute("visibleInPrimaryRay", Sdf.ValueTypeNames.Bool).Set(False)
+    _rtx = carb.settings.get_settings()
+    _rtx.set("/rtx/indirectDiffuse/enabled", True); _rtx.set("/rtx/ambientOcclusion/enabled", True)
+
 start_zone = {}
 for rid in ROBOTS:   # every rover starts at the depot zone (Z1 shares the depot cell), facing north
     depot = tuple(site["depot"])
@@ -164,6 +249,8 @@ for rid in ROBOTS:   # every rover starts at the depot zone (Z1 shares the depot
     start_zone[rid] = zid
     sx_, sy_ = spot(rid, zid) if zid else world_xy(depot)
     rover(rid, sx_, sy_, math.pi / 2)
+    if args.cosmos_python:
+        front_camera(f"/World/Rovers/{rid}")
 
 rovers = Articulation(prim_paths_expr="/World/Rovers/.*", name="rovers")
 chassis = RigidPrim(prim_paths_expr="/World/Rovers/.*/chassis", name="chassis")
@@ -191,6 +278,7 @@ class Bot:
         self.status = "idle"; self.failed = False
         self.worked = 0.0; self.base = 0.0; self.dur = 1.0; self.energy = 0.0
         self.target = None; self.leg = None; self.zone = start_zone[rid]
+        self.goal = None; self.route = []; self.rev = False; self.wp_t = 0.0; self.detour_h = None
         self.v = 0.0; self.last = None; self.track = []
 bots = {rid: Bot(rid) for rid in ROBOTS}
 def load_queues(entries):
@@ -208,6 +296,8 @@ TURN_IN_PLACE = 0.35  # rad of heading error above which the rover stops and tur
 W_MAX, A_MAX = 0.5, 0.1
 STALL_H, STALL_M = 0.25, 0.5   # health check: a driving rover that gains < 0.5 m on its target in 0.25 h has stalled
 
+DETOUR = (3.0, 5.0, 10.0)      # going around: back up 3 m, step 5 m aside, rejoin 10 m past the stop
+
 def drive(b, pos, yaw, dt_s):
     """heading controller toward b.target: (v, w) for the chassis, or None once arrived"""
     dx, dy = b.target[0] - pos[0], b.target[1] - pos[1]
@@ -215,6 +305,14 @@ def drive(b, pos, yaw, dt_s):
     if dist < ARRIVE:
         b.v = 0.0
         return None
+    if b.rev:                                   # backing straight out: the heading holds
+        r = -(dx * math.cos(yaw) + dy * math.sin(yaw))   # still to go, along the heading
+        if r < 0.1:
+            b.v = 0.0
+            return None
+        v_cmd = -min(b.speed, 0.4 * r + 0.02)
+        b.v = max(b.v - A_MAX * dt_s, min(b.v + A_MAX * dt_s, v_cmd))
+        return b.v, 0.0
     e = wrap(math.atan2(dy, dx) - yaw)
     if abs(e) > TURN_IN_PLACE:
         v_cmd, w = 0.0, max(-W_MAX, min(W_MAX, 1.2 * e))
@@ -253,7 +351,8 @@ def tick(t_h, dt_h, poses):
                 b.status = "done"; continue
             b.entry = b.queue.pop(0)
             t = tasks[b.entry["task"]]
-            b.target = spot(rid, t["zone"])
+            b.target = b.goal = spot(rid, t["zone"])
+            b.route, b.rev, b.wp_t, b.detour_h = [], False, t_h, None
             b.worked, b.base = 0.0, 0.0
             b.dur, b.energy = float(t["duration_h"]), float(t["energy_wh"])
             if b.zone != t["zone"]:
@@ -268,9 +367,13 @@ def tick(t_h, dt_h, poses):
         if b.status == "moving":
             gap = math.dist(here, b.target)
             b.track = [(th, g) for th, g in b.track if th >= t_h - STALL_H] + [(t_h, gap)]
-            if b.leg and t_h - b.leg["depart_h"] >= STALL_H and b.track[0][1] - gap < STALL_M:
-                stalled.append((rid, t["zone"], gap))
+            if b.leg and t_h - b.wp_t >= STALL_H and b.track[0][1] - gap < STALL_M:
+                stalled.append((rid, t["zone"], math.dist(here, b.goal)))
             cmd = drive(b, here, yaw_of(q), dt_h * K)
+            while cmd is None and b.route:             # a way-point of a detour: on to the next
+                b.target, b.rev = b.route.pop(0)
+                b.wp_t, b.track = t_h, []
+                cmd = drive(b, here, yaw_of(q), dt_h * K)
             if cmd is None:
                 b.status, b.zone = "idle", t["zone"]
                 lg = b.leg; b.leg = None
@@ -282,6 +385,8 @@ def tick(t_h, dt_h, poses):
             else:
                 v, w = cmd
                 vl, vr = (v - w * WY) / R_WHEEL, (v + w * WY) / R_WHEEL
+                if rid in locks and t_h >= locks[rid]:   # the injected drive fault: commanded, but the wheels hold
+                    vl = vr = 0.0
                 for name, _sx, sy in WHEELS:
                     targets[k, dof_col(name)] = vl if sy > 0 else vr
                 continue
@@ -358,8 +463,44 @@ def replan(t_h, poses, event):
             if b.status == "moving": b.status = "idle"
         b.queue = mine
 
+# ---------------------------------------------------------------- perception: Cosmos Reason 2 on the front camera
+perceptions, cams = [], {}
+def nav_image(rid, img):
+    """save what the rover's navigation camera sees now"""
+    import omni.replicator.core as rep
+    from PIL import Image
+    if rid not in cams:   # one render product per rover, kept: Replicator's step and destroy drop the physics views
+        rp = rep.create.render_product(f"/World/Rovers/{rid}/chassis/cam", (768, 576))
+        cams[rid] = rep.AnnotatorRegistry.get_annotator("rgb")
+        cams[rid].attach([rp])
+    for _ in range(3):    # render only: World.render() holds the physics while the frame settles
+        for _ in range(12):
+            world.render()
+        rgb = np.asarray(cams[rid].get_data())[..., :3]
+        if rgb.max() > 16:    # now and then the first frames come back black: render again
+            break
+    Image.fromarray(rgb).save(img)
+
+def perceive(rid, t_h):
+    """show Cosmos Reason 2 (cosmos_bridge.py, its own venv) what the rover's camera sees; the
+    mission clock waits"""
+    n = len(perceptions) + 1
+    img = os.path.join(args.out, f"perception_{n}.png")
+    nav_image(rid, img)
+    out = os.path.join(args.out, f"perception_{n}.json")
+    env = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV")}
+    t0 = time.perf_counter()
+    res = subprocess.run([args.cosmos_python, os.path.join(HERE, "cosmos_bridge.py"), img, out],
+                         env=env, capture_output=True, text=True)
+    wall = round(time.perf_counter() - t0, 1)
+    print(res.stdout.strip()[-600:], res.stderr.strip()[-1500:] if res.returncode else "", flush=True)
+    rec = json.load(open(out, encoding="utf-8")) if res.returncode == 0 and os.path.exists(out) else {"error": res.stderr[-800:]}
+    rec.update(t_h=round(t_h, 4), robot=rid, image=os.path.basename(img), roundtrip_s=wall)
+    perceptions.append(rec)
+    return rec.get("answer") or {}
+
 # ---------------------------------------------------------------- run
-def fail(rid, t_h, poses, what):
+def fail(rid, t_h, poses, what, seen=""):
     """a rover is lost: record the event, tell Moonwright, carry on with what it returns"""
     b = bots[rid]
     b.failed, b.status = True, "failed"
@@ -367,18 +508,70 @@ def fail(rid, t_h, poses, what):
     pct = round(100 * progress.get(task, 0.0)) if task else 0
     ev = {"t_h": round(t_h, 4), "kind": "robot_failure", "robot": rid, "task": task,
           "detail": f"{rid} {what} at {t_h:.2f} h in Isaac Sim"
-                    + (f" while working on {task} ({pct}% done)" if task and progress.get(task) else "")}
+                    + (f" while working on {task} ({pct}% done)" if task and progress.get(task) else "") + seen}
     events.append(ev)
     print("EVENT", ev["detail"], flush=True)
     replan(t_h, poses, ev)
 
+def go_around(rid, t_h, poses, what, cause):
+    """Cosmos says the way is blocked, so the rover is taken to be sound: it backs up, steps aside to
+    the side with more room and rejoins its leg past the obstacle. Physics checks the reading: the
+    health check keeps watching, and a rover that stalls again on its way around is lost after all"""
+    b = bots[rid]; k = ORDER.index(rid)
+    p = np.asarray(poses[0][k][:2], float); yaw = yaw_of(poses[1][k])
+    f, left = np.array([math.cos(yaw), math.sin(yaw)]), np.array([-math.sin(yaw), math.cos(yaw)])
+    back, aside, ahead = DETOUR
+    others = [np.asarray(poses[0][ORDER.index(o)][:2], float) for o in ROBOTS if o != rid]
+    def room(side):
+        return min((np.linalg.norm(p + aside * side * left + d * f - q) for q in others for d in (0.0, ahead)), default=1e9)
+    side = 1 if room(1) >= room(-1) else -1
+    b.route = [(tuple(p + 1.0 * f + aside * side * left), False), (tuple(p + ahead * f + aside * side * left), False),
+               (b.goal, False)]
+    b.target, b.rev, b.wp_t, b.track = tuple(p - back * f), True, t_h, []
+    b.detour_h = t_h
+    if b.leg: b.leg["detour_h"] = round(t_h, 4)
+    ev = {"t_h": round(t_h, 4), "kind": "blocked", "robot": rid, "task": b.entry["task"] if b.entry else None,
+          "detail": f"{rid} {what} at {t_h:.2f} h in Isaac Sim; Cosmos Reason 2 on its camera: {cause}; "
+                    f"the rover is sound, so it backs up {back:.0f} m and goes around on its {'left' if side > 0 else 'right'}"}
+    events.append(ev)
+    print("EVENT", ev["detail"], flush=True)
+
+def stalled_rover(rid, t_h, poses, gap, zone):
+    """the health check's finding. Without perception a stalled rover is lost. With it, Cosmos
+    Reason 2 proposes the cause from the camera: blocked -> go around (once), else lost"""
+    b = bots[rid]
+    what = f"stalled {gap:.1f} m short of {zone}, no headway for {60 * STALL_H:.0f} min"
+    if b.detour_h is not None:
+        fail(rid, t_h, poses, what + " on its way around"); return
+    if not args.cosmos_python:
+        fail(rid, t_h, poses, what); return
+    ans = perceive(rid, t_h)
+    if ans.get("blocked") is True:
+        go_around(rid, t_h, poses, what, ans.get("cause") or "blocked"); return
+    fail(rid, t_h, poses, what, f"; Cosmos Reason 2 on its camera sees nothing in the way ({ans.get('cause') or 'no answer'})")
+
+def unfinishable(remaining):
+    """the remaining tasks no rover will ever do: held by a lost rover in the plan in force, or
+    after one that is"""
+    owner = {e["task"]: e["robot"] for e in schedule["entries"]}
+    lost = {tid for tid in remaining if owner.get(tid) in bots and bots[owner[tid]].failed}
+    grew = True
+    while grew:
+        grew = False
+        for tid in remaining:
+            if tid not in lost and any(a in lost for a in tasks[tid]["after"]):
+                lost.add(tid); grew = True
+    return lost
+
 fail_rid, fail_t = (args.fail.split("@")[0], float(args.fail.split("@")[1])) if args.fail else (None, None)
+snaps = sorted(((float(h), r) for r, h in (x.split("@") for x in args.snap.split(","))), reverse=True) if args.snap else []
+locks = {r: float(h) for r, h in (x.split("@") for x in args.lock.split(","))} if args.lock else {}
 CTRL_EVERY = max(1, round(0.1 / args.dt))     # 10 Hz control
 REC_EVERY = max(1, round(0.5 / args.dt))      # a recorded sample every 0.5 s
 dt_ctrl_h = args.dt * CTRL_EVERY / K
 rec = []
 step, t_wall = 0, time.perf_counter()
-finish_h = None
+finish_h = stuck_h = None
 targets = np.zeros((len(ORDER), len(DOF)), dtype=np.float32)
 while True:
     t_h = step * args.dt / K
@@ -387,16 +580,23 @@ while True:
         poses = (np.asarray(pos), np.asarray(quat))
         if fail_rid and not bots[fail_rid].failed and t_h >= fail_t:
             fail(fail_rid, t_h, poses, "drive fault")
+        while snaps and t_h >= snaps[-1][0]:      # test pictures: what a camera sees on a clear road
+            h_, r_ = snaps.pop()
+            nav_image(r_, os.path.join(args.out, f"snap_{r_}_{h_:g}h.png"))
         targets = tick(t_h, dt_ctrl_h, poses)
         while stalled:
             rid_, zone_, gap_ = stalled.pop(0)
             if not bots[rid_].failed:
-                fail(rid_, t_h, poses, f"stalled {gap_:.1f} m short of {zone_}, no headway for {60 * STALL_H:.0f} min")
+                stalled_rover(rid_, t_h, poses, gap_, zone_)
+                stalled.clear()
                 targets = tick(t_h, 0.0, poses)
         rovers.set_joint_velocity_targets(targets)
         remaining = [tk["id"] for tk in graph["tasks"] if tk["id"] not in done]
         if not remaining and finish_h is None and all(b.status != "moving" for b in bots.values()):
             finish_h = t_h
+        if (remaining and stuck_h is None and set(remaining) == unfinishable(remaining)
+                and all(b.status not in ("moving", "working") for b in bots.values())):
+            stuck_h = t_h                      # what is left waits on a lost rover: the plan cannot finish
     if step % REC_EVERY == 0:
         pos, quat = chassis.get_world_poses()
         rows = {}
@@ -409,7 +609,7 @@ while True:
                          "h": round(yaw_of(q), 4), "status": "failed" if b.failed else b.status,
                          "task": b.entry["task"] if b.entry else None, "battery": round(b.battery, 1)}
         rec.append({"t": round(t_h, 4), "robots": rows, "progress": {k: round(v, 4) for k, v in shown.items()}})
-    if finish_h is not None or (args.until is not None and t_h >= args.until):
+    if finish_h is not None or stuck_h is not None or (args.until is not None and t_h >= args.until):
         break
     world.step(render=False)
     step += 1
@@ -417,14 +617,17 @@ while True:
         print(f"t={t_h:.1f} h, wall {time.perf_counter() - t_wall:.0f} s, done {sorted(done)}", flush=True)
 
 wall = time.perf_counter() - t_wall
-print(f"finished at {finish_h} h (wall {wall:.0f} s, {step} physics steps)", flush=True)
+print(f"finished at {finish_h} h" + (f", stuck at {stuck_h:.2f} h: {sorted(unfinishable([tk['id'] for tk in graph['tasks'] if tk['id'] not in done]))} cannot be done"
+      if stuck_h is not None else "") + f" (wall {wall:.0f} s, {step} physics steps)", flush=True)
 
 # ---------------------------------------------------------------- outputs
 arrived = [lg for lg in legs if "arrive_h" in lg]
 over = [(lg["arrive_h"] - lg["depart_h"]) / lg["ideal_h"] - 1 for lg in arrived if lg["ideal_h"] > 0.05]
-summary = {"ground": GROUND, "finish_h": finish_h, "sec_per_h": K, "gravity": GRAVITY, "physics_dt": args.dt,
+unfinished = sorted(tk["id"] for tk in graph["tasks"] if tk["id"] not in done)
+summary = {"ground": GROUND, "finish_h": finish_h, "stuck_h": stuck_h, "unfinished": unfinished,
+           "perception": "Cosmos Reason 2" if args.cosmos_python else None, "locks": locks, "sec_per_h": K, "gravity": GRAVITY, "physics_dt": args.dt,
            "physics_steps": step, "wall_s": round(wall, 1), "legs": legs, "events": events,
-           "replans": replans,
+           "replans": replans, "perceptions": perceptions, "boulders": BOULDERS,
            "leg_overhead_pct": {"median": round(100 * float(np.median(over)), 1) if over else None,
                                 "max": round(100 * max(over), 1) if over else None},
            "legs_arrived": len(arrived), "legs_late": sum(lg["slack_h"] < -1e-6 for lg in arrived),
@@ -440,16 +643,23 @@ for a_, b_ in zip(rec, rec[1:]):
     if fail_t is not None and fail_t - 0.5 <= b_["t"] <= fail_t + 1.0: w = max(w, 4.0)
     cum.append(cum[-1] + (b_["t"] - a_["t"]) * w)
 frames, j = [], 0
-for k in range(n_out):
-    u = cum[-1] * k / max(1, n_out - 1)
-    while j < len(cum) - 2 and cum[j + 1] < u: j += 1
-    frames.append(rec[j])
+if args.window:   # an even pace over a window of mission hours (the cold open: the stall and the replan)
+    wa, wb = (float(v) for v in args.window.split(","))
+    for k in range(n_out):
+        tt = wa + (wb - wa) * k / max(1, n_out - 1)
+        while j < len(rec) - 2 and rec[j + 1]["t"] <= tt: j += 1
+        frames.append(rec[j])
+else:
+    for k in range(n_out):
+        u = cum[-1] * k / max(1, n_out - 1)
+        while j < len(cum) - 2 and cum[j + 1] < u: j += 1
+        frames.append(rec[j])
 track = {"fps": FPS, "cell": CELL, "physics": True, "ground": GROUND,
          "zones": {z["id"]: {"c": world_xy(z["center"]), "r": z.get("radius", 3) * CELL} for z in site["zones"]},
          "depot": world_xy(site["depot"]), "types": TYPES, "fail_t": fail_t,
          "tasks": {tid: {"zone": t["zone"], "type": t["robot_type"]} for tid, t in tasks.items()},
          "structures": [{"id": s["id"], "type": s["type"], "zone": s.get("zone")} for s in req["structures"]],
-         "events": events, "replans": replans, "frames": frames}
+         "events": events, "replans": replans, "boulders": BOULDERS, "perceptions": perceptions, "frames": frames}
 json.dump(track, open(os.path.join(args.out, "track.json"), "w"))
 print(json.dumps({k: summary[k] for k in ("finish_h", "leg_overhead_pct", "replans")}, indent=1), flush=True)
 print(f"late legs: {len(summary['late_legs'])} of {len(arrived)}", flush=True)

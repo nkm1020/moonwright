@@ -50,7 +50,10 @@ guessing again.
 7. **On rovers, in NVIDIA Isaac Sim.** Seven four-wheeled PhysX rovers carry out the verified plan
    on the rim of Shackleton crater (NASA LOLA's 5 m/px terrain) at lunar gravity. When a rover
    breaks down, the rovers' telemetry goes to Moonwright, CP-SAT replans, and the rovers carry out
-   the new verified schedule: the agent senses, decides and acts in a physics simulation.
+   the new verified schedule: the agent senses, decides and acts in a physics simulation. When a
+   rover stalls for a reason the map does not show, NVIDIA Cosmos Reason 2 reads its camera: a rock
+   at its nose means it is sound and goes around, under the same health check; anything else means
+   it is lost, and Moonwright replans.
 
 ## How we built it
 
@@ -78,6 +81,10 @@ guessing again.
   Shackleton's rim; the executor follows the 2D simulator's rules, and a bridge script hands the
   measured frame to the backend's `replan_after_event` (the same code path as the 2D replans) and
   the verified schedule back to the rovers. RTX rendering with Replicator; NASA's RASSOR model.
+- **Perception on the rover:** `nvidia/Cosmos-Reason2-8B` (open weights, 4-bit NF4 with
+  bitsandbytes, 7.1 GB) on the same GPU as Isaac Sim, in its own venv. A stalled rover's
+  navigation camera (Replicator) goes to it with a sight-only question; up to five sampled answers
+  vote. `cosmos_eval.py` scores the question on rendered camera pictures whose answer is known.
 - **Stack:** Python 3.13, FastAPI with server-sent events for the live trace, OR-Tools, pydantic;
   Next.js 16, TypeScript and Tailwind for the app (Gantt, replay canvas, before/after, Monte
   Carlo); a static site that replays the three runs recorded live on Token Factory scene by scene,
@@ -141,6 +148,13 @@ plan in the repository (`docs/eval/`).
   rovers finished every task at 79 h, the same as the 2D simulator; none of the 6 completed drives
   reached its zone after the planned start. Physics also showed what the travel model misses: a
   skid-steer rover that has to turn around first takes 9.7 % longer on that leg.
+- **What the rover sees decides whether the plan survives (Isaac Sim, Cosmos Reason 2).** The same
+  mission with a 1.4 m boulder in the lane of the site's only compactor: without perception the
+  stall is a fault, CP-SAT proves no surviving robot can compact (`capability:T8`) and the mission
+  stops at 61 h with three tasks undone; with Cosmos Reason 2-8B on its camera ("A large rock
+  taller than the rover's wheel radius", 3 of 3 votes) the compactor goes around and every task is
+  done at 72.0 h. On ten held-out camera pictures it found 4 of 5 rocks (the fifth out of its
+  camera's sight) and cleared 5 of 5 drive faults; Cosmos Reason 2-2B found 1 rock.
 
 ## Challenges
 
@@ -159,6 +173,11 @@ plan in the repository (`docs/eval/`).
   run. Strict `json_schema` decoding held on all three models, and 1,494 requests over four runs
   saw no error and no rate limit. Ultra produced 200-300 output tokens per second against
   Super's 150, so the larger model was also the faster one for us.
+- Getting a camera model to read a stall honestly. Told the rover had stalled, Cosmos Reason
+  reasoned "it has not moved, so something must be in the way" and the 8B called every clear road
+  blocked, its own long shadow included. What fixed it was the planner's lesson again: keep
+  inference out of the proposer. The camera question asks only what is at the nose; the mission
+  knows the rover stalled and the physics checks the reading.
 
 ## What we learned
 
@@ -205,23 +224,40 @@ multi-rover missions in the line of JPL's CADRE) and, on Earth, remote and hazar
 where a fleet of electric machines executes a plan with little supervision: mine sites, disaster
 recovery, offshore.
 
+How it gets used, in order:
+
+1. **Concept studies, now.** Years before a crew lands, a site-preparation team has to decide how
+   many machines, how much battery and how much time a pad and its berm need. Each variant is a
+   brief: Moonwright returns a verified schedule or a CP-SAT proof of what is missing (a later
+   deadline, a bigger battery, one more robot), and Monte Carlo gives the chance of finishing on
+   time when robots fail and the robots the plan cannot afford to lose. With Nemotron 3 Ultra on
+   Token Factory that is about a minute and a median $0.05 per plan (mean $0.10), so a dozen
+   variants cost about a dollar.
+2. **The crew's computer, next.** The replan needs no network (a median 9 ms on a laptop CPU), so
+   it can run on board when a robot fails, while Nemotron re-scopes the work from the ground.
+3. **Earthworks on Earth.** The same loop, with a rate table from the machines' datasheets, for
+   electric earthmoving fleets at remote mine sites and disaster recovery, where a plan has to
+   respect batteries, exclusion zones and a handover date with little supervision.
+
+The code is MIT-licensed, so a team can run it with its own robots' rates.
+
 ## Track fit
 
 Moonwright is an embodied-agent runtime for a robot crew: it senses telemetry (positions,
 batteries, failures), decides (verified rescheduling, escalation to the reasoning model when the
 fleet cannot finish) and acts (new per-robot task lists). In NVIDIA Isaac Sim the loop is closed
 on PhysX rovers: the telemetry comes from the physics, and the rovers drive the schedule that
-comes back. GR00T and SONIC are control policies for arms and humanoids, and Moonwright's problem
-is the plan a crew of wheeled machines follows, so Nemotron plans, CP-SAT proves, and a plain
-heading controller drives; Cosmos Reason would fit a camera check (is the zone clear?), but
-`nvidia/Cosmos3-Super-Reasoner` left Token Factory's shared API on Aug 31 2026. The replan needs
-no network (a median 9 ms on a laptop CPU), which is the part a robot's own computer would run.
+comes back, and the rovers see: Cosmos Reason 2 reads a stalled rover's camera and proposes the
+cause, which the physics then checks, the same propose-and-check shape as Nemotron and CP-SAT. GR00T
+and SONIC are control policies for arms and humanoids; these rovers are driven by a plain heading
+controller. Perception and the replan need no network (the solver replan a median 9 ms on a laptop
+CPU), which is the part a robot's own computer would run, 1.3 light-seconds from Earth.
 
 ## What's next
 
 - A turn allowance and terrain slope in the travel model, measured from the Isaac Sim drives.
-- A perception step: a vision model confirms from the site cameras that a zone is clear before
-  work starts, and disagreements with telemetry become events.
+- Perception on real camera footage (dust, glare, rocks the renders do not have), and before work
+  starts, not only on a stall: a camera check that a zone is clear.
 - ROS 2 execution of the per-robot task lists; recharging and night cycles; multiple depots.
 - Rate tables from real robot datasheets and a material-flow model (haul cycles tied to placement).
 - Monte Carlo as a Nebius Serverless Job, and the replan measured on a Jetson-class board.
@@ -229,7 +265,7 @@ no network (a median 9 ms on a laptop CPU), which is the part a robot's own comp
 ## Built with
 
 Tags (hyphenated, so Devpost keeps them whole): nebius-token-factory, nvidia-nemotron,
-nemotron-3-ultra, nemotron-3.5-lightning, nemotron-3-super, nvidia-isaac-sim, physx, or-tools,
+nemotron-3-ultra, nemotron-3.5-lightning, nemotron-3-super, nvidia-isaac-sim, nvidia-cosmos, physx, or-tools,
 cp-sat, python, fastapi, pydantic, next.js, typescript, tailwindcss, nasa-lola.
 
 ## Feedback on Nebius Token Factory and NVIDIA Nemotron (required section)
@@ -266,9 +302,9 @@ call: the numbers here are suggestions marked [confirm].
    machine-readable deprecation field in `models_info`; and which structured-output modes each
    model honours, in the catalogue.
 9. **What you hope to see from the Nemotron team next:** reasoning-effort levels the chat template
-   honours; typical reasoning lengths per model in the model cards; a vision model sized for a
-   robot's own computer, and Cosmos Reason back on the shared API, so a planning agent can add a
-   perception check without running a dedicated endpoint.
+   honours; typical reasoning lengths per model in the model cards; Cosmos Reason back on the
+   shared API (we ran its open 8B weights on our own GPU instead), so a planning agent can test a
+   perception check before it commits hardware to one.
 
 The longer version, with the measurements behind each point: `docs/feedback-draft.md`.
 

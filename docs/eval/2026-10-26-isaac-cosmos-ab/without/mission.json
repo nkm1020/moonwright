@@ -1,0 +1,117 @@
+{
+ "ground": "LOLA Site04_surf.tif px (1238,1502) stereo (-2810,-6510) m lat -89.766 z 1729.5 m",
+ "finish_h": null,
+ "stuck_h": 61.125833333333325,
+ "unfinished": [
+  "T10",
+  "T12",
+  "T8"
+ ],
+ "perception": null,
+ "sec_per_h": 120.0,
+ "gravity": 1.62,
+ "physics_dt": 0.03333333333333333,
+ "physics_steps": 220053,
+ "wall_s": 539.8,
+ "legs": [
+  {
+   "robot": "HL2",
+   "task": "T5",
+   "to": "Z2",
+   "depart_h": 0.0,
+   "straight_m": 70.0,
+   "driven_m": 69.61,
+   "planned_start_h": 21,
+   "arrive_h": 2.905,
+   "ideal_h": 2.9167,
+   "slack_h": 18.095
+  },
+  {
+   "robot": "SV1",
+   "task": "T2",
+   "to": "Z2",
+   "depart_h": 3.0,
+   "straight_m": 70.08,
+   "driven_m": 69.69,
+   "planned_start_h": 6,
+   "arrive_h": 5.9208,
+   "ideal_h": 2.92,
+   "slack_h": 0.0792
+  },
+  {
+   "robot": "SV1",
+   "task": "T11",
+   "to": "Z1",
+   "depart_h": 8.0,
+   "straight_m": 69.55,
+   "driven_m": 69.19,
+   "planned_start_h": 57,
+   "arrive_h": 11.2933,
+   "ideal_h": 2.8979,
+   "slack_h": 45.7067
+  },
+  {
+   "robot": "PR1",
+   "task": "T10",
+   "to": "Z2",
+   "depart_h": 57.0,
+   "straight_m": 71.48,
+   "driven_m": 71.1,
+   "planned_start_h": 60,
+   "arrive_h": 59.9675,
+   "ideal_h": 2.9783,
+   "slack_h": 0.0325
+  },
+  {
+   "robot": "SV1",
+   "task": "T12",
+   "to": "Z2",
+   "depart_h": 58.0,
+   "straight_m": 68.39,
+   "driven_m": 68.03,
+   "planned_start_h": 71,
+   "arrive_h": 61.1258,
+   "ideal_h": 2.8496,
+   "slack_h": 9.8742
+  }
+ ],
+ "events": [
+  {
+   "t_h": 35.5992,
+   "kind": "robot_failure",
+   "robot": "CP1",
+   "task": "T8",
+   "detail": "CP1 stalled 38.1 m short of Z2, no headway for 15 min at 35.60 h in Isaac Sim"
+  }
+ ],
+ "replans": [
+  {
+   "t_h": 35.5992,
+   "ok": false,
+   "message": "infeasible (capability:T8), Nemotron not asked (no repair budget); no verified replan (validation: capability:T8); the previous plan stays in force",
+   "solver_wall_s": 0.001,
+   "roundtrip_s": 0.87,
+   "makespan_before_h": 72,
+   "makespan_after_h": null
+  }
+ ],
+ "perceptions": [],
+ "boulders": [
+  {
+   "x": 3.2,
+   "y": -8.0,
+   "z": 0.721,
+   "w": 3.6,
+   "d": 2.4,
+   "h": 1.4,
+   "kind": 2
+  }
+ ],
+ "leg_overhead_pct": {
+  "median": 0.0,
+  "max": 13.6
+ },
+ "legs_arrived": 5,
+ "legs_late": 0,
+ "late_legs": []
+}

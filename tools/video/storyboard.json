@@ -33,9 +33,9 @@
       "slide": "coldopen.html",
       "burnCaptions": false,
       "voDelay": 0.9,
-      "minDuration": 8.4,
-      "note": "The first seconds: the Isaac Sim mission at the fault (the site's own clip, slides/site/isaac-closed-loop.webm, from 4.35 s; EX1 turns red at 5.75 s), then the replan card, before the title.",
-      "narration": "Hour {{isaac_fail_h|words}} on the rim of Shackleton crater: an excavator breaks down. Moonwright replans the crew in a hundredth of a second, and proves the new plan.",
+      "minDuration": 11.0,
+      "note": "The first seconds: one Isaac Sim mission run twice with the same boulder in the compactor's lane (docs/eval/2026-10-26-isaac-cosmos-ab, via slides/eval). Left, no perception: CP1 is written off and CP-SAT proves T8 has no robot. Right, Cosmos Reason 2 on its camera: blocked, not broken; it goes around and every task is done at hour 72. Both clips: mission hours 34-38 in 10 s; the stall at 4.0 s.",
+      "narration": "Same rock, two runs. Without eyes, the stuck compactor counts as broken, and the solver proves the pad can't finish. With NVIDIA Cosmos Reason on its camera, it goes around, and the pad finishes on time.",
       "actions": []
     },
     {
@@ -386,7 +386,7 @@
       "captionAlign": "left",
       "minDuration": 16.0,
       "note": "The failure scene plays the Isaac Sim clip (tools/isaac: PhysX rovers on NASA LOLA terrain of Shackleton's rim; EX1 turns red at 5.75 s into the clip, hour 10).",
-      "narration": "Then a robot fails. In NVIDIA Isaac Sim, PhysX rovers drive this plan on Shackleton's rim, on terrain NASA measured. At hour {{isaac_fail_h|words}}, excavator {{isaac_fail_robot_no|words}} stops; CP-SAT replans the other {{isaac_replan_tasks|words}} tasks in a hundredth of a second, with no model call, and the rovers finish at hour {{isaac_finish_h|words}}.",
+      "narration": "Then a robot fails. PhysX rovers drive this plan in Isaac Sim, on terrain NASA measured. At hour {{isaac_fail_h|words}}, excavator {{isaac_fail_robot_no|words}} stops; CP-SAT replans the other {{isaac_replan_tasks|words}} tasks in a hundredth of a second, and the rovers finish at hour {{isaac_finish_h|words}}.",
       "actions": [
         {
           "action": "click",
@@ -408,7 +408,7 @@
           "action": "moveTo",
           "x": 1180,
           "y": 700,
-          "cue": "In NVIDIA Isaac Sim"
+          "cue": "PhysX rovers drive"
         },
         {
           "action": "hover",

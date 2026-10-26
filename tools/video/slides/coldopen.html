@@ -6,44 +6,82 @@
 <link rel="stylesheet" href="/__video/fonts.css">
 <link rel="stylesheet" href="slides.css">
 <style>
-  /* The video's first seconds: the Isaac Sim mission at the moment it breaks (the site's own clip,
-     design/landing-1/assets via slides/site), then the replan, before the title. */
-  video { position: absolute; inset: 0; width: 1536px; height: 864px; object-fit: cover; background: #000; }
-  .shade { position: absolute; inset: 0;
-    background: linear-gradient(180deg, rgb(17 17 17 / 0.55), rgb(17 17 17 / 0) 28%, rgb(17 17 17 / 0) 70%, rgb(17 17 17 / 0.55)); }
-  .head { position: absolute; left: 64px; top: 56px; }
-  .feed { position: absolute; left: 64px; bottom: 120px; display: grid; gap: 12px; }
-  .card { display: flex; align-items: baseline; gap: 16px; padding: 14px 20px; border-radius: 4px; background: rgb(17 17 17 / 0.86);
-    border: 1px solid var(--line); opacity: 0; transform: translateY(8px); transition: opacity .45s ease, transform .55s cubic-bezier(0.2, 0.7, 0.2, 1); }
-  .card.in { opacity: 1; transform: none; }
-  .card b { font: 400 40px/1 var(--display); text-transform: uppercase; }
-  .card span { font: 500 22px/1.2 var(--sans); }
+  /* The video's first seconds: one Isaac Sim mission run twice with the same boulder in the
+     compactor's lane (docs/eval/2026-10-26-isaac-cosmos-ab via slides/eval). Left, no perception:
+     the stall reads as a fault and CP-SAT proves the pad cannot be finished. Right, Cosmos Reason 2
+     on its camera: blocked, so the rover backs up and goes around, and every task is done. Both
+     clips: mission hours 34-38 in 10 s, the middle 960 x 1080 of the frame. */
+  .pane { position: absolute; top: 0; width: 760px; height: 864px; overflow: hidden; background: #000; }
+  #pa { left: 0; } #pb { right: 0; }
+  .pane video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  .pane .shade { position: absolute; inset: 0;
+    background: linear-gradient(180deg, rgb(17 17 17 / 0.7), rgb(17 17 17 / 0) 26%, rgb(17 17 17 / 0) 62%, rgb(17 17 17 / 0.75)); }
+  .tag { position: absolute; left: 40px; top: 40px; display: grid; gap: 10px; }
+  .tag b { font: 400 34px/1 var(--display); text-transform: uppercase; }
+  #pa .tag b { color: var(--muted); }
+  #pb .tag b { color: var(--fg); }
+  .feed { position: absolute; left: 40px; right: 40px; bottom: 56px; display: grid; gap: 10px; justify-items: start; }
+  .card, .seen { opacity: 0; transform: translateY(8px); transition: opacity .45s ease, transform .55s cubic-bezier(0.2, 0.7, 0.2, 1); }
+  .card.in, .seen.in { opacity: 1; transform: none; }
+  .card { display: flex; align-items: baseline; gap: 14px; padding: 12px 18px; border-radius: 4px; background: rgb(17 17 17 / 0.88);
+    border: 1px solid var(--line); }
+  .card b { font: 400 32px/1 var(--display); text-transform: uppercase; white-space: nowrap; }
+  .card span { font: 500 19px/1.25 var(--sans); }
   .card.fail b { color: var(--fail); }
-  .card.ok b { color: var(--accent-strong); }
+  .card.go b { color: var(--fg); }
+  .card.ok b { color: var(--ok); }
+  /* what the rover saw: its navigation camera, and the model's answer beside it */
+  .seen { position: absolute; left: 40px; top: 132px; width: 300px; margin: 0; background: rgb(17 17 17 / 0.92);
+    border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
+  .seen img { display: block; width: 300px; height: 225px; }
+  .seen figcaption { padding: 12px 14px 14px; display: grid; gap: 8px; }
+  .seen .who { font: 500 11px/1.2 var(--sans); letter-spacing: 0.14em; text-transform: uppercase; color: var(--dim); }
+  .seen q { font: 400 21px/1.15 var(--display); text-transform: uppercase; quotes: "\201C" "\201D"; }
+  .divide { position: absolute; left: 760px; top: 0; width: 16px; height: 864px; background: var(--surface); }
 </style>
 </head>
 <body>
 <div class="stage">
-  <video id="clip" src="site/isaac-closed-loop.webm" muted playsinline preload="auto"></video>
-  <div class="shade"></div>
-  <div class="head"><div class="eyebrow rise"><span class="rule"></span>NVIDIA Isaac Sim · Shackleton's rim · hour {{isaac_fail_h}}</div></div>
-  <div class="feed">
-    <div class="card fail" id="c-fail"><b>{{isaac_fail_robot}} breaks down</b><span>{{isaac_fail_progress}} through its first dig</span></div>
-    <div class="card ok" id="c-replan"><b>{{isaac_replan_s}} s</b><span>CP-SAT replans the other {{isaac_replan_tasks}} tasks, and proves the new plan</span></div>
+  <div class="pane" id="pa">
+    <video id="va" src="eval/2026-10-26-isaac-cosmos-ab/without.webm" muted playsinline preload="auto"></video>
+    <div class="shade"></div>
+    <div class="tag"><div class="eyebrow"><span class="rule"></span>Isaac Sim · the same rock</div><b>Without perception</b></div>
+    <div class="feed">
+      <div class="card fail" id="a-fail"><b>{{ab_robot}} written off</b><span>stuck, so taken for a fault</span></div>
+      <div class="card fail" id="a-proof"><b>No replan</b><span>CP-SAT proves no other robot can do {{ab_task}}: the pad is never finished</span></div>
+    </div>
+  </div>
+  <div class="divide"></div>
+  <div class="pane" id="pb">
+    <video id="vb" src="eval/2026-10-26-isaac-cosmos-ab/with.webm" muted playsinline preload="auto"></video>
+    <div class="shade"></div>
+    <div class="tag"><div class="eyebrow"><span class="rule"></span>Isaac Sim · the same rock</div><b>With Cosmos Reason 2</b></div>
+    <figure class="seen" id="b-seen">
+      <img src="eval/2026-10-26-isaac-cosmos-ab/with/perception_1.png" alt="">
+      <figcaption><span class="who">{{ab_robot}}'s camera · NVIDIA Cosmos Reason 2</span><q>{{ab_cause}}</q></figcaption>
+    </figure>
+    <div class="feed">
+      <div class="card go" id="b-go"><b>Blocked, not broken</b><span>{{ab_robot}} backs up and goes around</span></div>
+      <div class="card ok" id="b-done"><b>Done at hour {{ab_with_finish_h}}</b><span>every task, the same plan</span></div>
+    </div>
   </div>
 </div>
 <script>
-  // the clip opens 1.4 s before the fault (EX1 turns red 5.75 s into it, hour 10)
-  const START = 4.35, FAULT = 5.75;
-  const clip = document.getElementById("clip");
-  const card = (id) => document.getElementById(id).classList.add("in");
-  clip.addEventListener("loadedmetadata", () => { clip.currentTime = START; });
+  // both clips run mission hours 34-38 in 10 s (2.5 s an hour): the health check flags the stall
+  // at 35.6 h (FAULT); the rover with perception is past the rock and back in its lane by ARRIVE;
+  // the right side's cards wait for the narration ("With NVIDIA Cosmos Reason ...", from about 6.5 s)
+  const FAULT = 4.0, ARRIVE = 8.6;
+  const va = document.getElementById("va"), vb = document.getElementById("vb");
+  const show = (id) => document.getElementById(id).classList.add("in");
   function tick() {
-    if (clip.currentTime >= FAULT) card("c-fail");
-    if (clip.currentTime >= FAULT + 1.3) card("c-replan");
+    const t = vb.currentTime;
+    if (t >= FAULT) { show("a-fail"); show("b-seen"); }
+    if (t >= FAULT + 1.2) show("a-proof");
+    if (t >= FAULT + 2.6) show("b-go");
+    if (t >= ARRIVE) show("b-done");
     requestAnimationFrame(tick);
   }
-  const start = () => { clip.currentTime = Math.max(clip.currentTime, START); clip.play(); requestAnimationFrame(tick); };
+  const start = () => { va.play(); vb.play(); requestAnimationFrame(tick); };
   const html = document.documentElement;
   if (html.classList.contains("play")) start();
   else new MutationObserver((_, ob) => { if (html.classList.contains("play")) { ob.disconnect(); start(); } })

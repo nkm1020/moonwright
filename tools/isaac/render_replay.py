@@ -17,6 +17,10 @@ ap.add_argument("--assets", default=".", help="folder holding rassor.usd and opp
 ap.add_argument("--ground", default=None, help="lola_site.npz (prep_lola.py): the ground mission.py drove on")
 ap.add_argument("--sun-az", type=float, default=None, help="sun azimuth, deg counter-clockwise from +x (LOLA ground)")
 ap.add_argument("--sun-el", type=float, default=None, help="sun elevation on the LOLA ground (deg, default 6; the real sun there stays below 1.8)")
+ap.add_argument("--shots", default=None, help="camera path: 'boulder' follows the rover up the lane with the rock "
+                "in it and around the rock; 'boulder-hold' the same until it stops, then stays on it")
+ap.add_argument("--side", default="left", choices=("left", "right"),
+                help="with --shots boulder: the side of the lane the camera watches from (the sun's side on the LOLA ground: left)")
 ap.add_argument("--fill", type=float, default=3.0, help="dome light on the LOLA ground: what lit slopes scatter into shadows")
 args = ap.parse_args()
 
@@ -31,8 +35,8 @@ import omni.replicator.core as rep
 import carb
 from pxr import Gf, Sdf, Usd, UsdGeom, UsdLux, UsdShade, Vt
 
-from lunar_terrain import (LOLA_EYES, detail_arrays, far_arrays, height_at, heightfield, load_lola, mesh_arrays,
-                           rock_field, rock_mesh, work_flats)
+from lunar_terrain import (LOLA_EYES, boulder_mesh, detail_arrays, far_arrays, height_at, heightfield, load_lola,
+                           mesh_arrays, rock_field, rock_mesh, work_flats)
 
 track = json.load(open(args.track))
 LOLA = load_lola(args.ground) if args.ground else None
@@ -99,7 +103,31 @@ SHOTS_LOLA = [  # Shackleton's rim: from the south-west, over the robots, toward
     (0.68, (-70.0, -100.0, 24.0), (10.0, -5.0, -6.0)),
     (1.00, (-120.0, -95.0, 52.0), (150.0, 80.0, -50.0)),
 ]
+SHOTS_BOULDER = [  # the cold open, about the rock (m from it, up from the ground there), the camera on the sunlit
+    # side of the lane (-x on the left): high behind the rover as it leaves the pad, along its side as it meets the
+    # rock (35-46 %), then up over the rock as the rover goes around it on the far side and rejoins its lane. Keyed
+    # to the rover's track so it stays near the centre: the split screen shows the middle half
+    (0.00, (-2.2, -46.0, 9.0), (0.0, -26.0, 0.3)),
+    (0.15, (-8.2, -28.0, 5.0), (0.0, -20.5, 0.5)),
+    (0.25, (-8.7, -18.0, 4.2), (0.0, -10.0, 0.5)),
+    (0.36, (-8.7, -8.0, 4.0), (0.0, -1.5, 0.6)),
+    (0.46, (-8.2, -6.0, 4.5), (0.0, -1.0, 0.6)),
+    (0.56, (-6.2, -4.0, 6.5), (4.3, 0.0, 0.5)),
+    (0.70, (-5.2, 4.0, 7.0), (4.8, 7.0, 0.5)),
+    (0.85, (-6.2, 14.0, 7.5), (1.8, 21.0, 0.5)),
+    (1.00, (-7.2, 22.0, 8.0), (0.3, 35.0, 0.5)),
+]
+SHOTS_BOULDER_HOLD = SHOTS_BOULDER[:5] + [   # the same until the stall, then a slow push in on the stopped rover
+    (0.75, (-7.6, -5.2, 4.2), (0.0, -1.5, 0.6)),
+    (1.00, (-7.0, -4.6, 3.9), (0.0, -1.5, 0.6)),
+]
 if LOLA is not None: SHOTS = SHOTS_LOLA
+if args.shots in ("boulder", "boulder-hold"):
+    b0 = track["boulders"][0]
+    m = 1 if args.side == "left" else -1     # the paths are written for the left; right mirrors them
+    gz = b0["z"] - b0["h"] / 2 + 0.15
+    SHOTS = [(u, (b0["x"] + m * e[0], b0["y"] + e[1], gz + e[2]), (b0["x"] + m * t[0], b0["y"] + t[1], gz + t[2]))
+             for u, e, t in (SHOTS_BOULDER_HOLD if args.shots == "boulder-hold" else SHOTS_BOULDER)]
 # ---------------------------------------------------------------- terrain: lunar_terrain.py, as the physics drove on
 XS, ZH = heightfield(flats=work_flats([z["c"] for z in track["zones"].values()]), lola=LOLA)
 def ground(x, y): return height_at(XS, ZH, x, y)
@@ -160,6 +188,15 @@ def terrain():
         far.CreateSubdivisionSchemeAttr(UsdGeom.Tokens.none)
         bind(far.GetPrim(), M["regolith"][0])
 terrain()
+
+for k, rk in enumerate(track.get("boulders", [])):   # the rock mission.py drove the rovers into, same shape
+    P, F = boulder_mesh(rk.get("kind", 2), rk["w"], rk["d"], rk["h"])
+    bm = UsdGeom.Mesh.Define(stage, f"/World/Boulder{k}")
+    bm.CreatePointsAttr(Vt.Vec3fArray([Gf.Vec3f(float(p[0]) + rk["x"], float(p[1]) + rk["y"], float(p[2]) + rk["z"]) for p in P]))
+    bm.CreateFaceVertexCountsAttr(Vt.IntArray([3] * len(F)))
+    bm.CreateFaceVertexIndicesAttr(Vt.IntArray([i for f in F for i in f]))
+    bm.CreateSubdivisionSchemeAttr(UsdGeom.Tokens.none)
+    bind(bm.GetPrim(), M["rock"][0])
 
 # ---------------------------------------------------------------- primitives
 def xform(path, t=(0, 0, 0), rz=0.0):

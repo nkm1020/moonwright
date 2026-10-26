@@ -14,9 +14,11 @@ shrink the work to pass: it says so, and the solver finds what would make it fea
 CP-SAT replans the remaining work in milliseconds, and Monte Carlo puts a number on robustness. In
 **NVIDIA Isaac Sim**, PhysX rovers drive a verified plan on the rim of Shackleton crater, on NASA's
 measured terrain; when one breaks down, Moonwright replans from their telemetry and the rovers carry
-out the new verified plan.
+out the new verified plan. When one stops for no reason the map shows, **NVIDIA Cosmos Reason 2**
+looks through its camera: a rock means it is sound and goes around, under the same health check;
+anything else means it is lost, and Moonwright replans without it.
 
-![Hour 10 in NVIDIA Isaac Sim on Shackleton's rim: excavator EX1 breaks down, and CP-SAT replans the other 10 tasks in 0.01 s](docs/img/hero.jpg)
+![The same boulder, two runs in NVIDIA Isaac Sim on Shackleton's rim. Without perception the compactor is written off and CP-SAT proves the pad cannot be finished; with Cosmos Reason 2 on its camera it goes around, and every task is done at hour 72](docs/img/hero.jpg)
 
 > **Judges, start here.** The demo video (under three minutes) walks one run end to end. The site in
 > [`design/landing-1`](design/landing-1) replays the three runs recorded live on Token Factory,
@@ -42,8 +44,15 @@ tools in multi-agent robotic systems", and need 4.01, "Perform site preparation 
 manipulation for infrastructure construction, including landing pads, berms, ...": the landing pad
 and blast berm this demo plans ([PDF](https://www.nasa.gov/wp-content/uploads/2026/05/fy26-civil-space-shortfall-prioritization.pdf)).
 
-The same loop fits autonomous earthmoving on Earth, where a fleet of electric machines shares
-batteries, exclusion zones and a hard handover date.
+The first users are study teams, not flight software. Years before a crew lands, a site-preparation
+team has to decide how many machines, how much battery and how much time a pad and its berm need.
+Moonwright answers each variant with a verified schedule or a proof of what is missing (a later
+deadline, a bigger battery, one more robot), and Monte Carlo gives the chance of finishing on time
+when robots fail: with Nemotron 3 Ultra, about a minute and a median $0.05 per plan. The next user
+is the crew's own computer: the replan needs no network, so it can run on board while Nemotron
+re-scopes from the ground. The same loop fits autonomous earthmoving on Earth, where a fleet of
+electric machines shares batteries, exclusion zones and a hard handover date; there the rate table
+comes from the machines' datasheets.
 
 ## How it works
 
@@ -68,6 +77,9 @@ flowchart LR
   X -- "verified schedule" --> SIM["2D simulator<br/>failures, replans, Monte Carlo"]
   SIM -. "robot failure" .-> X
   X -- "verified schedule" --> ISAAC["NVIDIA Isaac Sim<br/>PhysX rovers on Shackleton's rim"]
+  ISAAC -- "stalled: camera" --> COS["NVIDIA Cosmos Reason 2<br/>on the rover's GPU"]
+  COS -- "blocked: go around" --> ISAAC
+  COS -. "not blocked: robot lost" .-> X
   ISAAC -. "telemetry: robot failure" .-> X
   X -. "no plan in 3 repairs" .-> A["CP-SAT-proven advice<br/>deadline, battery, spare robot"]
 ```
@@ -100,7 +112,10 @@ flowchart LR
    rover (a chassis and four driven wheels) at 1.62 m/s² on Shackleton's rim (NASA LOLA's 5 m/px
    map of the south pole), steered to its work spots by the plan's schedule. When a rover breaks down, the frame the rovers report (positions,
    batteries, progress) goes to the same replanner as in step 7, and the surviving rovers carry out
-   the verified schedule that comes back ([tools/isaac](tools/isaac/README.md)).
+   the verified schedule that comes back ([tools/isaac](tools/isaac/README.md)). A health check
+   watches every drive; a rover that gains nothing for 15 minutes shows its navigation camera to
+   Cosmos Reason 2-8B, which says whether something at its nose stops it. Blocked: the rover backs
+   up and goes around, and a second stall marks it lost after all. Not blocked: it is lost.
 
 Details, edge cases and the reasoning behind each rule: [docs/design.md](docs/design.md).
 
@@ -131,18 +146,24 @@ $0.05 per plan at the median. Each run found a hole in the checks
 (shrunk work, hauls before digs, structuring slips), and each fix was re-measured the next day.
 Details and the rough edges: [docs/feedback-draft.md](docs/feedback-draft.md).
 
-**NVIDIA models we did not use, and why.** The Physical AI track names GR00T, Cosmos and SONIC
-next to Nemotron. GR00T and SONIC are control policies for arms and humanoids; Moonwright's
-problem is the plan a crew of wheeled machines follows, which is a reasoning and verification
-task, so Nemotron plans and CP-SAT proves, and the rovers in Isaac Sim are driven by a plain
-heading controller. Cosmos Reason would fit a perception step (confirming from a camera that a
-zone is clear before work starts); `nvidia/Cosmos3-Super-Reasoner` left Token Factory's shared API
-on Aug 31 2026 and now needs a dedicated endpoint, which this project does not run.
+**Cosmos Reason 2 on the rover: it proposes, physics confirms.** The same shape as the planner.
+When a rover stalls, `nvidia/Cosmos-Reason2-8B` (open weights, 4-bit, 7.1 GB on the GPU beside
+Isaac Sim) reads its navigation camera and proposes a cause; the rover acts on it and the physics
+checks it. It is asked only what it can see (is there something at the nose the rover cannot drive
+over), never told the rover has stalled: told, the models reasoned "it has not moved, so something
+must be in the way", and 8B called every clear road blocked. On ten held-out camera pictures
+it found 4 of 5 rocks (the fifth was out of its camera's sight) and cleared 5 of 5 drive faults;
+2B found 1 rock. The same boulder in the compactor's lane, run twice: without perception the
+compactor is written off and CP-SAT proves the pad cannot be finished; with it, the compactor goes
+around and every task is done at hour 72 ([run and evaluation](docs/eval/2026-10-26-isaac-cosmos-ab/README.md)).
+GR00T and SONIC, the track's other models, are control policies for arms and humanoids; these
+rovers are driven by a plain heading controller.
 
-**On the robot.** The split is cloud planning, on-board replanning: Nemotron needs the network,
-CP-SAT does not. The solver-only replan took a median 9 ms (p95 52 ms) on a laptop CPU in run 4,
-which is the part a crew's own computer (a Jetson-class board, say) would run when a robot fails
-and the link to Earth is 1.3 s away; we have not measured it on a Jetson.
+**On the robot.** The split is cloud planning, on-board perception and replanning: Nemotron needs
+the network, Cosmos Reason and CP-SAT do not. Light takes 1.3 s each way to Earth, so the rover reads
+its own camera (76 s on one RTX 4070 SUPER, 18 s of it loading the model; the mission waits) and the
+solver-only replan takes a median 9 ms (p95 52 ms) on a laptop CPU (run 4); a crew's own computer
+(a Jetson-class board, say) would run both. We have not measured either on a Jetson.
 
 ## Evidence
 
@@ -196,6 +217,13 @@ final checks, so the columns are judged alike.
   around in place took 9.7 % longer, time the travel model does not count. That leg had 9.9 h to
   spare, but the tightest straight drive arrived with 0.025 h left, so a turn there would have made
   it late ([run](docs/eval/2026-10-25-isaac-closed-loop/README.md)).
+* **What the rover sees decides whether the plan survives.** The same mission with a 1.4 m boulder in
+  the lane of the site's only compactor: without perception the stall is a fault, CP-SAT proves no
+  surviving robot can compact (`capability:T8`) and the mission stops at 61 h with three tasks
+  undone; with Cosmos Reason 2 on its camera ("A large rock taller than the rover's wheel radius",
+  3 of 3 votes), the compactor backs up, goes around and every task is done at 72.0 h. A rover
+  whose drive also failed is sent around the rock, stalls again and is replanned around 15 minutes
+  later ([runs](docs/eval/2026-10-26-isaac-cosmos-ab/README.md)).
 
 Runs: [run 1](docs/eval/2026-10-23-live-eval-run1.md) (before the volume check),
 [run 2](docs/eval/2026-10-23-live-eval-run2/README.md), [run 3](docs/eval/2026-10-23-live-eval-run3/README.md),
@@ -230,6 +258,9 @@ recorded runs without a backend. Commands, endpoints and settings: [docs/referen
   turning in place, which Isaac Sim shows can add 10 % to a leg; the 2D simulator is kinematic; in
   Isaac Sim the driving is PhysX but the work (digging, hauling, sintering) is not simulated
   physically; failures are injected, not modelled.
+* **Perception is measured on rendered pictures.** Cosmos Reason 2 was evaluated on Isaac Sim
+  renders of one site (10 held-out pictures, rocks 1.2 to 1.6 m), not on real cameras with dust and
+  glare; it took five tries of the question to get there, all in the evaluation's README.
 * **The rates are assumptions.** The rate table (`backend/moonwright/pipeline/rates.py`) uses
   illustrative low-power figures; replace them with measured ones before trusting an hour.
 * **Checks only judge what the brief states.** A structure recorded without dimensions has no volume
@@ -244,7 +275,8 @@ recorded runs without a backend. Commands, endpoints and settings: [docs/referen
 backend/    Python 3.13 + uv: pipeline (structure, task graph, rates, validator, CP-SAT, repair loop,
             advice), simulator, replanning, Monte Carlo, CLI, FastAPI, Token Factory client, tests
 frontend/   Next.js 16 UI: brief, editable requirements, streamed trace, Gantt, 2D replay, Monte Carlo
-tools/isaac NVIDIA Isaac Sim 5.1: PhysX rover mission, replan bridge to the backend, RTX render
+tools/isaac NVIDIA Isaac Sim 5.1: PhysX rover mission, replan bridge to the backend, Cosmos Reason 2
+            perception and its evaluation, RTX render
 tools/video the demo video pipeline: Playwright capture, narration, facts checked against the runs
 docs/       design notes, reference, evaluation runs with saved plans, eval brief arithmetic
 ```
@@ -253,7 +285,8 @@ docs/       design notes, reference, evaluation runs with saved plans, eval brie
 
 The [Nebius × NVIDIA Global AI Hackathon](https://nebiusglobalaihackathon.devpost.com/), Physical AI
 track (simulation-based). Runtime calls go to Nebius Token Factory with NVIDIA Nemotron open models
-(`backend/moonwright/llm/tokenfactory.py`); the rovers run in NVIDIA Isaac Sim 5.1 (PhysX, RTX).
+(`backend/moonwright/llm/tokenfactory.py`); the rovers run in NVIDIA Isaac Sim 5.1 (PhysX, RTX) and
+see with NVIDIA Cosmos Reason 2.
 
 ## License
 
