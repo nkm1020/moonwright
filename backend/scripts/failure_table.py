@@ -16,6 +16,12 @@ the table records the solver's verdict, which is what decides it. Rows:
     provably cannot do the rest: core lists the constraint groups), "no_effect" (the robot had no
     work left, nothing to replan), plus finished_at_h, delay_h against the plan's makespan,
     remaining (tasks rescheduled), solve_s, message (the replan step's own sentence).
+
+`--frames out.json` also writes every case's motion for the site's 3D replay, in the shape the page
+reads (`design/landing-1/break.js`): {"robots": [ids], "cases": {"HL2@24": [[t, [[x, y, status,
+task], ... one per robot]], ...]}}, hourly frames (frame_stride 4 at the 0.25 h step, as the live
+call asks for), status 0 idle, 1 moving, 2 working, 3 failed, 4 done, positions in grid cells. A
+frame identical to both its neighbours is left out (the page interpolates between the ones kept).
 """
 from __future__ import annotations
 
@@ -36,18 +42,26 @@ def main() -> int:
     ap.add_argument("out")
     ap.add_argument("--brief-id", default=None)
     ap.add_argument("--step", type=int, default=1)
+    ap.add_argument("--frames", default=None, help="also write every case's hourly frames here")
     args = ap.parse_args()
 
     plan = PlanResult.model_validate_json(Path(args.plan).read_text(encoding="utf-8"))
     makespan = plan.schedule.makespan_h
     robots = [r.id for r in plan.requirements.robots]
     rows = []
+    cases = {}
+    status_code = {"idle": 0, "moving": 1, "working": 2, "failed": 3, "done": 4}
     t0 = time.perf_counter()
     for rid in robots:
         for t in range(0, makespan, args.step):
             req = SimulateRequest(plan=plan, failures=[{"robot": rid, "t_h": float(t)}], brief_id=args.brief_id,
-                                  llm="fixture", frame_stride=10_000)
+                                  llm="fixture", frame_stride=4 if args.frames else 10_000)
             res = simulate(req)
+            if args.frames:
+                fr = [[round(f.t_h, 2), [[round(r.pos[0], 2), round(r.pos[1], 2), status_code[r.status], r.current_task]
+                                         for r in f.robots]] for f in res.frames]
+                cases[f"{rid}@{t}"] = [f for i, f in enumerate(fr)
+                                       if i in (0, len(fr) - 1) or f[1] != fr[i - 1][1] or f[1] != fr[i + 1][1]]
             ev = next((e for e in res.events if e.kind == "robot_failure" and e.robot == rid), None)
             task = ev.task if ev else None
             m = re.search(r"\((\d+)% done\)", (ev.detail or "") if ev else "")
@@ -58,7 +72,7 @@ def main() -> int:
             else:
                 rec = res.replans[0]
                 msg = rec.after.steps[-1].message if rec.after.steps else ""
-                solve = re.search(r"in ([\d.]+) s", msg)
+                solve = re.search(r"in ([\d.]+) s", msg)   # "in under 0.01 s" stays None: the page shows it so
                 if rec.after.success and rec.after.schedule is not None and res.completed:
                     row.update(outcome="replanned", finished_at_h=res.finished_at_h,
                                delay_h=res.finished_at_h - makespan)
@@ -75,6 +89,9 @@ def main() -> int:
            "rows": rows}
     with open(args.out, "w", encoding="utf-8") as f:
         json.dump(out, f, separators=(",", ":"))
+    if args.frames:
+        with open(args.frames, "w", encoding="utf-8") as f:
+            json.dump({"robots": robots, "cases": cases}, f, separators=(",", ":"))
     print(f"{len(rows)} failures in {time.perf_counter() - t0:.0f} s -> {args.out}", file=sys.stderr)
     return 0
 
