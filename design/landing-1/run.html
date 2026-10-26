@@ -10,6 +10,12 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Albert+Sans:wght@400;500&family=Imbue:opsz,wght@10..100,400&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="site.css">
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+} }
+</script>
 <style>
 /* The runs page of the one Moonwright site (colours, type and pills from site.css, shared with the overview).
    The three recorded runs, each replayed like a film in the overview's dark room.
@@ -212,6 +218,62 @@ code { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 0.9em;
 .advice__k code { color: inherit; }
 .advice__q { margin-top: 10px; font-size: 22px; line-height: 1.3; max-width: 32ch; }
 
+/* ---------- your turn: break any robot at any hour, watch the crew replan ---------- */
+.fig__n.is-word { font-size: clamp(64px, 6.2vw, 112px); text-transform: uppercase; }
+.break-result { margin-top: 22px; display: flex; flex-direction: column; gap: 10px; max-width: 44ch; }
+.break-result__top { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.break-result__line { color: var(--soft); font-size: 16px; text-wrap: pretty; }
+.break-result__line b { color: var(--ink); font-weight: 500; }
+.break-result__line a { color: var(--ink); text-underline-offset: 0.2em; }
+.break-result__src { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+.break-result__src[hidden] { display: none; }
+.break-result__src i { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+.break-result__src.is-live i { background: var(--pos); }
+.keys { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 0.9fr) auto; gap: 10px; align-items: end; margin-top: 6px; }
+.field { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--muted); }
+.field select, .field input { width: 100%; height: 44px; padding: 0 12px; background: var(--surface); border: 1px solid var(--line); border-radius: 0; color: var(--ink); font: 400 15px var(--text); font-variant-numeric: tabular-nums; }
+.keys .btn--primary { min-height: 44px; }
+.keys .btn--primary[aria-busy="true"] { opacity: 0.7; }
+
+.bk { display: flex; flex-direction: column; }
+.bk-3d { position: relative; flex: 1; min-height: 0; background: var(--bg); overflow: hidden; }
+.bk-3d canvas { display: block; }
+.bk-clock { position: absolute; left: 20px; top: 18px; pointer-events: none; }
+.bk-clock b { display: block; font: 400 44px/0.9 var(--display); text-transform: uppercase; font-variant-numeric: tabular-nums; }
+.bk-clock span { display: block; margin-top: 8px; font-size: 12px; color: var(--soft); }
+.bk-legend { position: absolute; right: 16px; top: 64px; display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; background: rgba(17, 17, 17, 0.78); font-size: 11px; color: var(--soft); pointer-events: none; }
+.bk-legend i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+.bk-credit { position: absolute; right: 16px; bottom: 14px; font-size: 11px; color: var(--muted); pointer-events: none; }
+.bk-note { position: absolute; inset: 0; display: grid; place-items: center; padding: 24px; color: var(--muted); font-size: 13px; text-align: center; }
+.bk-label { padding: 2px 6px; background: rgba(17, 17, 17, 0.78); color: var(--soft); font: 500 11px/1.3 var(--text); white-space: nowrap; pointer-events: none; }
+.bk-label.is-failed { background: var(--neg); color: var(--accent-ink); }
+.bk-replay { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 6px 14px; align-items: center; padding: 16px clamp(20px, 3vw, 40px) 4px; }
+.bk-play { grid-row: 1 / span 2; width: 44px; height: 44px; border: 1px solid var(--line); background: none; color: var(--ink); font-size: 13px; cursor: pointer; }
+.tl-row { display: grid; grid-template-columns: 104px minmax(0, 1fr); gap: 12px; align-items: center; font-size: 12px; color: var(--soft); }
+.tl { position: relative; height: 12px; background: var(--well); }
+.tl__bar { position: absolute; top: 0; bottom: 0; left: 0; background: var(--bar); }
+.tl__bar.is-ink { background: var(--ink); }
+.tl__bar.is-neg { background: var(--neg); }
+.tl__x { position: absolute; top: -6px; bottom: -6px; width: 2px; margin-left: -1px; background: var(--accent); }
+.tl__now { position: absolute; top: -5px; bottom: -5px; width: 1px; background: var(--soft); }
+.tl__val { position: absolute; top: 50%; transform: translateY(-50%); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.bk-map { padding: 14px clamp(20px, 3vw, 40px) 18px; }
+.bk-map__title { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; margin-bottom: 8px; font-size: 12px; color: var(--soft); }
+.bk-map__legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 11px; }
+.bk-map__legend i { display: inline-block; width: 9px; height: 9px; margin-right: 5px; vertical-align: -1px; }
+.map { display: grid; grid-template-columns: 34px minmax(0, 1fr); row-gap: 2px; column-gap: 8px; align-items: center; }
+.map__robot { font-size: 11px; line-height: 1; color: var(--soft); }
+.map__row { display: grid; grid-template-columns: repeat(72, minmax(0, 1fr)); gap: 1px; height: 12px; }
+.cell { padding: 0; margin: 0; border: 0; cursor: pointer; background: var(--well); }
+.cell[data-o="ontime"] { background: var(--bar); }
+.cell[data-o="late"] { background: var(--soft); }
+.cell[data-o="norep"] { background: var(--neg); }
+.cell.is-picked { position: relative; z-index: 1; outline: 2px solid var(--accent); outline-offset: 1px; }
+@media (hover: hover) and (pointer: fine) { .cell:hover { outline: 1px solid var(--ink); } }
+.map__axis { grid-column: 2; position: relative; height: 14px; font-size: 10px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.map__axis span { position: absolute; transform: translateX(-50%); }
+.map__axis span:first-child { transform: none; }
+
 /* ---------- the scrubber: the run, step by step, filled while it replays ---------- */
 .scrub { list-style: none; margin: 0; padding: 18px var(--pad) 22px; display: grid; grid-template-columns: repeat(var(--n, 6), minmax(0, 1fr)); gap: 6px; }
 .step { position: relative; width: 100%; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 14px 0 2px; border: 0; background: none; color: var(--muted); font: 500 14px/1.2 var(--text); text-align: left; cursor: pointer; }
@@ -264,6 +326,8 @@ code { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 0.9em;
   .face { position: relative; inset: auto; }
   .chart { padding: 64px var(--pad) 24px; }
   .stage__cap { position: static; margin-top: 20px; }
+  .bk-3d { flex: none; aspect-ratio: 4 / 3; }
+  .cell { pointer-events: none; }
   .face--num { padding: 72px var(--pad) 24px; }
   .photo, .film { position: relative; aspect-ratio: 4 / 3; }
   .inset { position: static; width: auto; margin: 16px var(--pad) 0; background: var(--bg); }
@@ -275,6 +339,13 @@ code { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 0.9em;
   .scrub { position: sticky; bottom: 0; z-index: 4; background: var(--bg); border-top: 1px solid var(--rule); padding: 0 16px calc(12px + env(safe-area-inset-bottom, 0px)); gap: 4px; }
 }
 @media (max-width: 640px) {
+  .keys { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .keys .btn--primary { grid-column: 1 / -1; }
+  .fig__n.is-word { font-size: clamp(52px, 15vw, 80px); }
+  .tl-row { grid-template-columns: 76px minmax(0, 1fr); }
+  .map__row { gap: 0; }
+  .bk-clock b { font-size: 32px; }
+  .bk-legend { display: none; }
   .head { flex-direction: column; align-items: flex-start; gap: 18px; }
   .head h1 { font-size: 26px; }
   .fig__n { font-size: clamp(76px, 24vw, 120px); }
@@ -513,7 +584,7 @@ code { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 0.9em;
               <h2 id="t-lp-failure" class="display">A robot fails at hour 10</h2>
               <p class="scene__say">EX1 stops 78&nbsp;% through its first dig. CP-SAT replans the other 10 tasks in 0.01&nbsp;s and <b>EX2 takes over the digs</b>.</p>
             </div>
-            <div class="scene__nav"><button class="btn" type="button" data-go="verified">Back</button><button class="btn" type="button" data-go="odds">Next: how often it holds</button></div>
+            <div class="scene__nav"><button class="btn" type="button" data-go="verified">Back</button><button class="btn" type="button" data-go="break">Next: break one yourself</button></div>
           </div>
           <div class="stage">
             <div class="view" role="group" aria-label="Show"><button type="button" data-view="pic" aria-pressed="true">Picture</button><button type="button" data-view="num" aria-pressed="false">Numbers</button></div>
@@ -537,6 +608,71 @@ code { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 0.9em;
           </div>
         </section>
 
+        <section class="scene" data-scene="break" aria-labelledby="t-lp-break">
+          <div class="scene__text">
+            <div class="fig">
+              <p class="fig__n" id="bk-fig"><span id="bk-n">72</span><span class="fig__unit" id="bk-u">H</span></p>
+              <div class="break-result" id="break-result" aria-live="polite">
+                <p class="break-result__top" id="bk-top"><span class="pill pill--none">Planned finish</span></p>
+                <p class="break-result__line" id="bk-line">Pick a robot and an hour, then break it. Moonwright replans the crew and tells you when the pad is done.</p>
+                <p class="break-result__src" id="bk-src" hidden><i></i><span></span></p>
+              </div>
+            </div>
+            <div class="scene__body">
+              <h2 id="t-lp-break" class="display">Break one yourself</h2>
+              <form class="keys" id="bk-form">
+                <label class="field">Robot to break
+                  <select id="bk-robot" name="robot">
+                    <option value="EX1">EX1 · excavator</option>
+                    <option value="EX2">EX2 · excavator, spare</option>
+                    <option value="HL1">HL1 · hauler, spare</option>
+                    <option value="HL2" selected>HL2 · hauler</option>
+                    <option value="CP1">CP1 · compactor</option>
+                    <option value="PR1">PR1 · printer</option>
+                    <option value="SV1">SV1 · surveyor</option>
+                  </select>
+                </label>
+                <label class="field">Hour of the failure
+                  <input id="bk-hour" name="hour" type="number" min="0" max="71" step="1" value="24" inputmode="numeric">
+                </label>
+                <button class="btn btn--primary" type="submit" id="bk-go">Break it</button>
+              </form>
+            </div>
+            <div class="scene__nav"><button class="btn" type="button" data-go="failure">Back</button><button class="btn" type="button" data-go="odds">Next: how often it holds</button></div>
+          </div>
+          <div class="stage">
+            <div class="view" role="group" aria-label="Show"><button type="button" data-view="pic" aria-pressed="true">Picture</button><button type="button" data-view="num" aria-pressed="false">Numbers</button></div>
+            <figure class="face face--pic bk">
+              <div class="bk-3d" id="bk-3d">
+                <p class="bk-note" id="bk-note">Loading the site in 3D…</p>
+                <p class="bk-clock"><b id="bk-clock">Hour 24</b><span id="bk-clock-sub">the plan as scheduled</span></p>
+                <p class="bk-legend"><span><i style="background:#f2a33a"></i>excavator</span><span><i style="background:#4aa3ff"></i>hauler</span><span><i style="background:#4cd07d"></i>compactor</span><span><i style="background:#f2f2f2"></i>surveyor, printer</span><span><i style="background:var(--neg)"></i>broken</span></p>
+                <p class="bk-credit">RASSOR model: NASA · robots drawn 3× life size</p>
+              </div>
+              <div class="bk-replay">
+                <button class="bk-play" type="button" id="bk-play" aria-label="Play the replan">▶</button>
+                <div class="tl-row"><span>Plan</span><div class="tl"><span class="tl__bar" style="width:80%"></span><span class="tl__val" style="left:calc(80% + 8px)">72 h</span></div></div>
+                <div class="tl-row"><span>After the failure</span><div class="tl" id="bk-tl"><span class="tl__val" style="left:8px;color:var(--muted)">break a robot to see it</span></div></div>
+              </div>
+              <div class="bk-map">
+                <p class="bk-map__title"><span>All 504 breakdowns: every robot, every hour</span><span class="bk-map__legend">
+                  <span><i style="background:var(--neg)"></i>no replan</span>
+                  <span><i style="background:var(--soft)"></i>late</span>
+                  <span><i style="background:var(--bar)"></i>on time</span>
+                  <span><i style="background:var(--well)"></i>nothing to replan</span>
+                </span></p>
+                <div class="map" id="bk-map" role="group" aria-label="Every robot at every hour; choose one to break it"></div>
+              </div>
+            </figure>
+            <div class="face face--num">
+              <div class="boxes">
+                <div class="box"><p class="box__title">This breakdown</p><table class="tbl"><tbody id="bk-table"><tr><td colspan="2" style="color:var(--muted)">Break a robot to fill this in.</td></tr></tbody></table></div>
+                <div class="box"><p class="box__title">All 504 breakdowns</p><table class="tbl"><tbody><tr><td>Replanned, on time</td><td class="r">21</td></tr><tr><td>Replanned, 1–8 h late</td><td class="r">31</td></tr><tr><td>No replan: no robot left to do the work</td><td class="r">187</td></tr><tr><td>Nothing to replan</td><td class="r">265</td></tr></tbody></table><p style="margin-top:12px">Each was computed ahead with the same code as the live replanner, <code>POST /simulate</code>, without a model call.</p></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
         <section class="scene" data-scene="odds" aria-labelledby="t-lp-odds">
           <div class="scene__text">
             <div class="fig">
@@ -547,7 +683,7 @@ code { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 0.9em;
               <h2 id="t-lp-odds" class="display">How often it holds</h2>
               <p class="scene__say">200 simulated runs, each with random breakdowns. As planned, 74 finish on time. <b>With a spare printer, compactor and surveyor, 172 do.</b></p>
             </div>
-            <div class="scene__nav"><button class="btn" type="button" data-go="failure">Back</button><a class="btn" href="#front_loaded" data-run-link="front_loaded">Next run: Impossible deadline</a></div>
+            <div class="scene__nav"><button class="btn" type="button" data-go="break">Back</button><a class="btn" href="#front_loaded" data-run-link="front_loaded">Next run: Impossible deadline</a></div>
           </div>
           <div class="stage">
             <div class="view" role="group" aria-label="Show"><button type="button" data-view="pic" aria-pressed="true">Picture</button><button type="button" data-view="num" aria-pressed="false">Numbers</button></div>
@@ -574,12 +710,13 @@ code { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 0.9em;
         </section>
       </div>
 
-      <ol class="scrub" style="--n:6" aria-label="The landing pad run, scene by scene">
+      <ol class="scrub" style="--n:7" aria-label="The landing pad run, scene by scene">
         <li><button class="step" type="button" data-go="brief" aria-current="step">Brief<span>336 h</span></button></li>
         <li><button class="step" type="button" data-go="graph">Refused<span class="is-neg-text">4,095 Wh</span></button></li>
         <li><button class="step" type="button" data-go="repair">Repairs<span>145 m²</span></button></li>
         <li><button class="step" type="button" data-go="verified">Proven<span class="is-pos-text">72 h</span></button></li>
         <li><button class="step" type="button" data-go="failure">Failure<span>79 h</span></button></li>
+        <li><button class="step" type="button" data-go="break">Your turn<span>break one</span></button></li>
         <li><button class="step" type="button" data-go="odds">Odds<span>86 %</span></button></li>
       </ol>
     </section>
@@ -1012,6 +1149,7 @@ code { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 0.9em;
       if (v.closest('.scene') === r.scenes[at] && !calm.matches) v.play().catch(() => {}); else v.pause();
     });
     if (!keepHash) history.replaceState(null, '', '#' + id + '/' + ids[at]);
+    dispatchEvent(new CustomEvent('mw:scene', { detail: { run: id, scene: ids[at] } })); // the 3D view wakes and sleeps on this
     if (toTop && narrow.matches) scrollTo({ top: 0 });
     return at;
   };
@@ -1046,7 +1184,7 @@ code { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 0.9em;
     }
   });
   addEventListener('keydown', (e) => {
-    if (e.target.closest('input, textarea, summary')) return;
+    if (e.target.closest('input, textarea, select, summary')) return;
     const r = runs[run];
     const at = r.scenes.findIndex((s) => !s.hidden);
     if (e.key === 'ArrowRight' && at < r.scenes.length - 1) { stop(); open(run, r.scenes[at + 1].dataset.scene); }
@@ -1074,5 +1212,6 @@ code { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 0.9em;
   else open(views[0].dataset.run, a || 'brief', { keepHash: true });
 })();
 </script>
+<script type="module" src="break.js"></script>
 </body>
 </html>
