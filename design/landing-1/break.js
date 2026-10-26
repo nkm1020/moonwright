@@ -24,20 +24,14 @@ const STATUS = ['idle', 'moving', 'working', 'failed', 'done'];
 const $ = (id) => document.getElementById(id);
 const root = document.querySelector('[data-run="landing_pad"] [data-scene="break"]');
 const calm = matchMedia('(prefers-reduced-motion: reduce)');
-let table = null, plan = null, live = false, view = null, viewFailed = false, framesFile;
+let table = null, plan = null, live = false, framesFile;
+let dataReady = null; // the table, the plan and the live check
+let view = null, viewReady = null, awake = false;
+let shown = null; // the frames and row the 3D view should show: the last breakdown, or the plan
 
-if (root) init();
-
-async function init() {
-  const [t, p] = await Promise.all([
-    fetch('data/landing_pad.failures.json').then((r) => r.json()),
-    fetch('data/landing_pad.plan.json').then((r) => r.json()),
-  ]).catch(() => [null, null]);
-  if (!t) { $('bk-line').textContent = 'The breakdown table could not load. Open the site over http, not as a file.'; return; }
-  table = new Map(t.rows.map((r) => [r.robot + '@' + r.t_h, r]));
-  plan = p;
-  buildMap();
-  live = await probe();
+if (root) {
+  // listen before anything loads, so a quick "Next" or an early "Break it" is never missed
+  addEventListener('mw:scene', (e) => onScene(e.detail));
   $('bk-form').addEventListener('submit', (e) => {
     e.preventDefault();
     const h = Math.max(0, Math.min(71, Math.round(+$('bk-hour').value || 0)));
@@ -52,8 +46,52 @@ async function init() {
     breakIt(c.dataset.r, +c.dataset.h);
   });
   $('bk-play').addEventListener('click', () => view && view.toggle());
-  addEventListener('mw:scene', (e) => wake(e.detail.run === 'landing_pad' && e.detail.scene === 'break'));
-  wake(!root.hidden && !root.closest('.runview').hidden);
+  dataReady = loadData();
+  // the page may already be open on this scene, or on the one before it
+  const open = root.closest('.runview').hidden ? null : root.parentElement.querySelector('.scene:not([hidden])');
+  if (open) onScene({ run: 'landing_pad', scene: open.dataset.scene });
+}
+
+async function loadData() {
+  const [t, p] = await Promise.all([
+    fetch('data/landing_pad.failures.json').then((r) => r.json()),
+    fetch('data/landing_pad.plan.json').then((r) => r.json()),
+  ]).catch(() => [null, null]);
+  if (!t) { $('bk-line').textContent = 'The breakdown table could not load. Open the site over http, not as a file.'; return false; }
+  table = new Map(t.rows.map((r) => [r.robot + '@' + r.t_h, r]));
+  plan = p;
+  buildMap();
+  live = await probe();
+  return true;
+}
+
+function onScene({ run, scene }) {
+  const here = run === 'landing_pad' && scene === 'break';
+  // the 3D view is built one scene early, while the visitor watches the Isaac Sim clip,
+  // so the first "Break it" plays at once; it renders only while this scene is shown
+  if (run === 'landing_pad' && (scene === 'failure' || here)) ensureView();
+  awake = here;
+  if (here) ensureView().then((v) => { if (v && awake) v.wakeUp(); });
+  else if (view) view.sleep();
+}
+
+function ensureView() {
+  if (!viewReady) {
+    viewReady = dataReady
+      .then((ok) => (ok ? createView($('bk-3d')) : null))
+      .then((v) => {
+        view = v;
+        if (v) v.show(...(shown || [snapshot(24, null), null]));
+        return v;
+      })
+      .catch((e) => {
+        const note = $('bk-note');
+        if (note) note.textContent = 'The 3D view needs WebGL; the map below has every breakdown.';
+        console.warn(e);
+        return null;
+      });
+  }
+  return viewReady;
 }
 
 /* ---------- where the answer comes from ---------- */
@@ -111,6 +149,7 @@ function snapshot(h, broken) {
 
 /* ---------- breaking one ---------- */
 async function breakIt(robot, h) {
+  if (!(await dataReady)) return;
   const go = $('bk-go');
   go.setAttribute('aria-busy', 'true');
   let row = null, frames = null, src = 'precomputed by the same replanner';
@@ -131,7 +170,8 @@ async function breakIt(robot, h) {
   pick(robot, h);
   timeline(row);
   table3(row, src);
-  if (view) view.show(frames && frames.length > 1 ? frames : snapshot(h, robot), row);
+  shown = [frames && frames.length > 1 ? frames : snapshot(h, robot), row];
+  ensureView().then((v) => v && v.show(...shown)); // at once if built; else as soon as it is
 }
 
 function render(r, src) {
@@ -206,16 +246,7 @@ function table3(r, src) {
   $('bk-table').innerHTML = rows.map(([k, v]) => `<tr><td>${k}</td><td class="r">${v}</td></tr>`).join('');
 }
 
-/* ---------- the 3D view: loaded the first time the scene opens, asleep when it is not shown ---------- */
-async function wake(on) {
-  if (!on) { view?.sleep(); return; }
-  if (!view && !viewFailed) {
-    try { view = await createView($('bk-3d')); } catch (e) { viewFailed = true; $('bk-note').textContent = 'The 3D view needs WebGL; the map below has every breakdown.'; console.warn(e); }
-    if (view && table) view.show(snapshot(24, null), null);
-  }
-  view?.wakeUp();
-}
-
+/* ---------- the 3D view: built one scene early, asleep when this scene is not shown ---------- */
 async function createView(box) {
   const [THREE, { GLTFLoader }, { DRACOLoader }, { OrbitControls }, { CSS2DRenderer, CSS2DObject }, { RoomEnvironment }] = await Promise.all([
     import('three'), import('three/addons/loaders/GLTFLoader.js'), import('three/addons/loaders/DRACOLoader.js'),
