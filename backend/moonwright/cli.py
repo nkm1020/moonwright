@@ -439,7 +439,7 @@ def cmd_montecarlo(args: argparse.Namespace) -> int:
 
 # --------------------------------------------------------------------------- eval
 class EvalRow(BaseModel):
-    """One planning run of the eval (docs/plan-phase3.md item 3).
+    """One planning run of the eval (docs/design.md#evaluation).
 
     ``models`` are the ``Usage.model`` ids of the task-graph / repair steps (unique, in order);
     ``answer_valid`` says whether the *first* task-graph answer passed the schema;
