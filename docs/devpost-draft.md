@@ -273,8 +273,7 @@ cp-sat, python, fastapi, pydantic, next.js, typescript, tailwindcss, nasa-lola.
 
 ## Feedback on Nebius Token Factory and NVIDIA Nemotron (required section)
 
-The form asks nine questions; draft answers below. The three ratings are the submitter's own
-call: the numbers here are suggestions marked [confirm].
+The form asks nine questions; the answers below, the three ratings included.
 
 1. **Which models, and why that size?** Nemotron 3.5 Lightning structures the brief (short,
    frequent, schema-bound: 4 s median, about $0.0003 a call). Nemotron 3 Ultra, reasoning on,
@@ -283,7 +282,7 @@ call: the numbers here are suggestions marked [confirm].
    honest failure on impossible briefs (Super quietly shrank the work), and faster output
    (263-295 against 134-157 tokens per second). Nemotron 3 Super writes the explanation of a
    verified plan, where its lower price matters and reasoning does not.
-2. **Output quality for this use case (1-10):** 8 [confirm]. Strict JSON held on all three models;
+2. **Output quality for this use case (1-10):** 8. Strict JSON held on all three models;
    the decomposition is where it errs (45 % of Ultra's first graphs refused in run 4), and those
    errors are exactly what the solver can name and the model can repair.
 3. **Fine-tuned, prompt-engineered or out of the box?** Prompt-engineered with strict
@@ -296,8 +295,8 @@ call: the numbers here are suggestions marked [confirm].
    endpoint (per-role routing became configuration), strict `json_schema` decoding on every model,
    the per-request thinking switch, and reliability: 1,494 requests over four evaluation runs,
    three to five concurrent clients, zero non-200 responses and zero 429s.
-6. **How likely to recommend Nemotron on Nebius (1-10):** 9 [confirm].
-7. **Inference on Nebius compared with previous environments (1-10):** 8 [confirm].
+6. **How likely to recommend Nemotron on Nebius (1-10):** 9.
+7. **Inference on Nebius compared with previous environments (1-10):** 8.
 8. **Features that would have helped:** a reasoning budget separate from `max_tokens` (at 16,384,
    78 of 190 Ultra reasoning calls were cut before answering); a spend cap or auto-charge switch
    (the console offers only TPM/RPM limits, a card is required even with promo credits, and an
@@ -316,4 +315,4 @@ The longer version, with the measurements behind each point: `docs/feedback-draf
 - Video (<= 3 min, public on YouTube): [after upload]
 - Repository (public, MIT): https://github.com/nkm1020/moonwright
 - Demo URL (not required for Physical AI; the static site replays the recorded runs with no
-  backend): [after the Pages deploy]
+  backend): https://nkm1020.github.io/moonwright/

@@ -5,9 +5,9 @@ name: Pages
 
 on:
   workflow_dispatch:
-  # Once the repo is public, add the push trigger so every merge to main redeploys the demo:
-  # push:
-  #   branches: [main]
+  # every push to main redeploys the demo
+  push:
+    branches: [main]
 
 permissions:
   contents: read
