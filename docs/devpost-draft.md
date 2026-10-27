@@ -312,7 +312,7 @@ The longer version, with the measurements behind each point: `docs/feedback-draf
 
 ## Links
 
-- Video (<= 3 min, public on YouTube): [after upload]
+- Video (<= 3 min, public on YouTube): https://youtu.be/ou5yW9tcOBY
 - Repository (public, MIT): https://github.com/nkm1020/moonwright
 - Demo URL (not required for Physical AI; the static site replays the recorded runs with no
   backend): https://nkm1020.github.io/moonwright/

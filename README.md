@@ -20,7 +20,7 @@ anything else means it is lost, and Moonwright replans without it.
 
 ![The same boulder, two runs in NVIDIA Isaac Sim on Shackleton's rim. Without perception the compactor is written off and CP-SAT proves the pad cannot be finished; with Cosmos Reason 2 on its camera it goes around, and every task is done at hour 72](docs/img/hero.jpg)
 
-> **Judges, start here.** The demo video (under three minutes) walks one run end to end. The site,
+> **Judges, start here.** The [demo video](https://youtu.be/ou5yW9tcOBY) (2:54) walks one run end to end. The site,
 > **[nkm1020.github.io/moonwright](https://nkm1020.github.io/moonwright/)** (source in
 > [`design/landing-1`](design/landing-1)), replays the three runs recorded live on Token Factory,
 > scene by scene, with no backend and no key. To run the pipeline yourself, offline: [Run it](#run-it), a few commands and no API key;
