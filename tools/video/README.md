@@ -14,17 +14,19 @@ also waited for on screen during the capture, so the recording and the recorded 
 The site replays the three runs recorded live on Nebius Token Factory on Oct 24 on the final
 pipeline (`frontend/public/samples`: the landing pad, the impossible deadline, the tight deadline),
 scene by scene; nothing is planned or solved while recording. The landing pad's refusal, its two
-repairs, the verified schedule, the replan after EX1's failure and the 200-run Monte Carlo figures
+repairs, the verified schedule and the 200-run Monte Carlo figures
 (as planned and with three spares) are that recorded run's results, and the narration says the
 run was recorded live. The crest slider computes PR1's energy check in the page from the run's
-own numbers. The failure scene plays the Isaac Sim mission (`tools/isaac`: PhysX rovers on NASA
-LOLA terrain of Shackleton's rim, the replan from their telemetry), whose figures come from
-`docs/eval/2026-10-25-isaac-closed-loop`; the cold open plays the same clip at the fault. The
-live scene is the one place something is computed while recording: on the site's "Your turn"
-scene a failure the other scenes do not show (hauler HL2 at hour 24) is chosen on camera, the page
+own numbers. The cold open is the A/B run with a rock in the compactor's lane
+(`docs/eval/2026-10-26-isaac-cosmos-ab`). The failure scene plays the Isaac Sim mission
+(`tools/isaac`: PhysX rovers on NASA LOLA terrain of Shackleton's rim) in which hauler HL2's drive
+fails on a clear road, Cosmos Reason 2 reads its camera as clear and CP-SAT replans from the
+rovers' telemetry; its figures come from `docs/eval/2026-10-27-isaac-hl2-clear`. The live scene
+is the one place something is computed while recording: on the site's "Your turn" scene a
+failure the other scenes do not show (excavator EX1 at hour 10) is chosen on camera, the page
 (in live mode because the backend answers on :8074) posts it to `/simulate`, and CP-SAT replans it
 during the capture; the page says "computed just now by CP-SAT", and the figures are checked
-against `runs/landing_pad.hl2-at-24.sim.json`, the CLI's run of the same failure, and on screen.
+against `runs/landing_pad.ex1-at-10.sim.json`, the CLI's run of the same failure, and on screen.
 Without a backend the same scene reads a precomputed table of all 504 breakdowns
 (`design/landing-1/data`, `backend/scripts/failure_table.py`). The
 evidence slide reports run 4 of the live evaluation

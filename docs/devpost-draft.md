@@ -153,8 +153,11 @@ plan in the repository (`docs/eval/`).
   stall is a fault, CP-SAT proves no surviving robot can compact (`capability:T8`) and the mission
   stops at 61 h with three tasks undone; with Cosmos Reason 2-8B on its camera ("A large rock
   taller than the rover's wheel radius", 3 of 3 votes) the compactor goes around and every task is
-  done at 72.0 h. On ten held-out camera pictures it found 4 of 5 rocks (the fifth out of its
-  camera's sight) and cleared 5 of 5 drive faults; Cosmos Reason 2-2B found 1 rock.
+  done at 72.0 h. The other answer: a hauler's drive fails on a clear road, Cosmos sees nothing at
+  its nose (3 of 3, its own long shadow ignored), CP-SAT hands its hauls to the other hauler in
+  0.01 s, and every task is done at 72.7 h. On ten held-out camera pictures it found 4 of 5 rocks
+  (the fifth out of its camera's sight) and cleared 5 of 5 drive faults; Cosmos Reason 2-2B found
+  1 rock.
 
 ## Challenges
 

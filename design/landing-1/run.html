@@ -90,7 +90,7 @@ code { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 0.9em;
 .stage { position: relative; min-height: 0; background: var(--surface); overflow: clip; }
 .face { position: absolute; inset: 0; margin: 0; }
 .face--num { display: none; overflow: auto; padding: 80px 40px 32px; }
-.numbers .face--pic { display: none; }
+body.numbers .face--pic { display: none; } /* outranks a face's own display, such as the failure scene's flex */
 .numbers .face--num { display: block; }
 .chart { display: flex; flex-direction: column; justify-content: center; padding: 72px clamp(28px, 4vw, 64px) 56px; }
 .stage__cap { position: absolute; left: clamp(28px, 4vw, 64px); right: clamp(28px, 4vw, 64px); bottom: 24px; font-size: 13px; color: var(--muted); max-width: 70ch; }
@@ -111,6 +111,7 @@ code { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 0.9em;
 .tbl td { padding: 9px 16px 9px 0; border-top: 1px solid var(--rule); text-align: left; vertical-align: top; color: var(--soft); }
 .tbl td:first-child { color: var(--ink); }
 .tbl .r { text-align: right; }
+.tbl td.num { white-space: nowrap; }
 .tbl tr > :last-child { padding-right: 0; }
 
 /* briefs: the real crater, with the site marked */
@@ -194,13 +195,22 @@ code { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 0.9em;
 .g-axis span:last-child { transform: translateX(-100%); color: var(--ink); }
 
 /* the failure, on film */
-.film { position: absolute; inset: 0; background: #000000; }
+.face--pic.failure { display: flex; flex-direction: column; }
+.film { position: relative; flex: 1; min-height: 0; background: #000000; }
 .film video { width: 100%; height: 100%; object-fit: cover; display: block; }
-.film__tag { position: absolute; left: 16px; top: 16px; padding: 5px 9px; background: rgba(17, 17, 17, 0.84); font-size: 12px; color: var(--soft); }
-.events { position: absolute; left: 16px; right: 16px; bottom: 16px; margin: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 2px; }
-.events div { padding: 12px 14px; background: rgba(17, 17, 17, 0.88); }
+.film__tag { position: absolute; left: 16px; bottom: 14px; padding: 5px 9px; background: rgba(17, 17, 17, 0.84); font-size: 12px; color: var(--soft); }
+/* what the rover saw and what Cosmos made of it, one block, as in the video's cold open; bottom right,
+   clear of HL2 and HL1, which drive away top left; the camera's sky is cropped to keep it low */
+.seen { position: absolute; right: 16px; bottom: 16px; width: min(240px, 34%); margin: 0; background: rgba(17, 17, 17, 0.94); }
+.seen img { display: block; width: 100%; height: auto; aspect-ratio: 16 / 10; object-fit: cover; object-position: 50% 100%; }
+.seen figcaption { padding: 12px 14px 14px; display: grid; gap: 8px; }
+.seen__who { font-size: 12px; color: var(--muted); }
+.seen__q { font: 400 21px/1.1 var(--display); text-transform: uppercase; quotes: "\201C" "\201D"; }
+.seen__votes { font-size: 12px; color: var(--soft); }
+.events { margin: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 2px; padding-top: 2px; }
+.events div { padding: 14px 16px 16px; background: #161616; }
 .events dt { font-size: 22px; font-variant-numeric: tabular-nums; line-height: 1.1; }
-.events dd { margin: 4px 0 0; font-size: 12px; color: var(--soft); }
+.events dd { margin: 6px 0 0; font-size: 12px; color: var(--soft); }
 
 /* two hundred runs, one square each */
 .odds__block + .odds__block { margin-top: 34px; }
@@ -329,13 +339,15 @@ code { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 0.9em;
   .bk-3d { flex: none; aspect-ratio: 4 / 3; }
   .cell { pointer-events: none; }
   .face--num { padding: 72px var(--pad) 24px; }
-  .photo, .film { position: relative; aspect-ratio: 4 / 3; }
+  .photo { position: relative; aspect-ratio: 4 / 3; }
+  .film { flex: none; }
+  .film video { height: auto; aspect-ratio: 16 / 9; }
+  .seen { position: static; width: auto; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: center; background: var(--surface); }
   .inset { position: static; width: auto; margin: 16px var(--pad) 0; background: var(--bg); }
   .credit { right: 12px; bottom: 12px; }
   .face--pic.brief { padding-bottom: 20px; }
-  .events { position: static; margin: 2px 0 0; }
-  .events div { background: var(--surface); }
-  .film__tag { top: auto; bottom: 12px; left: 12px; }
+  .events { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .film__tag { left: 12px; right: auto; top: 12px; bottom: auto; max-width: calc(100% - 190px); }
   .scrub { position: sticky; bottom: 0; z-index: 4; background: var(--bg); border-top: 1px solid var(--rule); padding: 0 16px calc(12px + env(safe-area-inset-bottom, 0px)); gap: 4px; }
 }
 @media (max-width: 640px) {
@@ -369,6 +381,8 @@ code { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 0.9em;
   .try { grid-template-columns: 80px minmax(0, 1fr); gap: 4px 12px; }
   .try output { grid-column: 2; text-align: left; }
   .events dt { font-size: 18px; }
+  .seen { grid-template-columns: minmax(0, 1fr); }
+  .seen__q { font-size: 18px; }
   .waffle { gap: 3px; }
   .odds__pct { font-size: 36px; }
   .advice__q { font-size: 18px; }
@@ -548,7 +562,7 @@ code { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 0.9em;
               <h2 id="t-lp-verified" class="display">Proven: done at hour 72</h2>
               <p class="scene__say">CP-SAT schedules all 12 tasks: every order, zone and battery holds, and <b>no schedule finishes sooner</b>.</p>
             </div>
-            <div class="scene__nav"><button class="btn" type="button" data-go="repair">Back</button><button class="btn" type="button" data-go="failure">Next: a robot fails</button></div>
+            <div class="scene__nav"><button class="btn" type="button" data-go="repair">Back</button><button class="btn" type="button" data-go="failure">Next: a rover stalls</button></div>
           </div>
           <div class="stage">
             <div class="view" role="group" aria-label="Show"><button type="button" data-view="pic" aria-pressed="true">Picture</button><button type="button" data-view="num" aria-pressed="false">Numbers</button></div>
@@ -577,12 +591,12 @@ code { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 0.9em;
         <section class="scene" data-scene="failure" aria-labelledby="t-lp-failure">
           <div class="scene__text">
             <div class="fig">
-              <p class="fig__n"><span data-count="79">79</span><span class="fig__unit">H</span></p>
-              <p class="fig__sub">finished anyway, after excavator EX1 broke down at hour 10</p>
+              <p class="fig__n"><span data-count="72.7" data-decimals="1">72.7</span><span class="fig__unit">H</span></p>
+              <p class="fig__sub">every task done, 263 h inside the deadline, after hauler HL2’s drive failed at hour 1.5</p>
             </div>
             <div class="scene__body">
-              <h2 id="t-lp-failure" class="display">A robot fails at hour 10</h2>
-              <p class="scene__say">EX1 stops 78&nbsp;% through its first dig. CP-SAT replans the other 10 tasks in 0.01&nbsp;s and <b>EX2 takes over the digs</b>.</p>
+              <h2 id="t-lp-failure" class="display">Broken, not blocked</h2>
+              <p class="scene__say">HL2 makes no headway for 15 minutes on its way to Z2. <b>NVIDIA Cosmos Reason 2</b> looks through its camera: nothing at the nose, so the drive has failed. CP-SAT gives its hauls to HL1 in 0.01&nbsp;s.</p>
             </div>
             <div class="scene__nav"><button class="btn" type="button" data-go="verified">Back</button><button class="btn" type="button" data-go="break">Next: break one yourself</button></div>
           </div>
@@ -590,19 +604,34 @@ code { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 0.9em;
             <div class="view" role="group" aria-label="Show"><button type="button" data-view="pic" aria-pressed="true">Picture</button><button type="button" data-view="num" aria-pressed="false">Numbers</button></div>
             <figure class="face face--pic failure">
               <div class="film">
-                <video muted loop playsinline preload="none" poster="assets/isaac-closed-loop-poster.jpg" width="1920" height="1080" aria-label="Seven rovers carry out the verified schedule on NASA LOLA terrain of Shackleton's rim in NVIDIA Isaac Sim; EX1, in red, stops at hour 10"><source src="assets/isaac-closed-loop.webm" type="video/webm"></video>
+                <video muted loop playsinline preload="none" poster="assets/isaac-hl2-clear-poster.jpg" width="1920" height="1080" aria-label="NVIDIA Isaac Sim on NASA LOLA terrain of Shackleton's rim: hauler HL2 stalls on a clear road at 1.73 h, and HL1 sets off to take over its hauls"><source src="assets/isaac-hl2-clear.webm" type="video/webm"></video>
+                <figure class="seen">
+                  <img src="assets/hl2-camera.jpg" width="600" height="450" alt="HL2's navigation camera at 1.73 h: flat grey ground ahead of the rover's nose, its own shadow reaching forward">
+                  <figcaption>
+                    <span class="seen__who">HL2’s camera · NVIDIA Cosmos Reason 2</span>
+                    <q class="seen__q">Flat and grey, with no visible obstacles</q>
+                    <span class="seen__votes">3 of 3 readings: a clear road</span>
+                  </figcaption>
+                </figure>
                 <span class="film__tag">NVIDIA Isaac Sim, on NASA LOLA terrain of Shackleton’s rim</span>
               </div>
               <dl class="events">
-                <div><dt class="is-neg-text">10 h</dt><dd>EX1 fails on T3, 78 % done</dd></div>
-                <div><dt>0.01 s</dt><dd>CP-SAT replans 10 tasks</dd></div>
-                <div><dt>79 h</dt><dd>done, 257 h inside the deadline</dd></div>
+                <div><dt class="is-neg-text">1.73 h</dt><dd>HL2 makes no headway for 15 min</dd></div>
+                <div><dt>64 s</dt><dd>Cosmos Reason 2 reads its camera: a clear road</dd></div>
+                <div><dt>0.01 s</dt><dd>CP-SAT replans 12 tasks; HL1 takes over</dd></div>
+                <div><dt class="is-pos-text">72.7 h</dt><dd>every task done</dd></div>
               </dl>
             </figure>
             <div class="face face--num">
               <div class="boxes">
-                <div class="box"><p class="box__title">Events</p><table class="tbl"><tbody><tr><td class="num">10 h</td><td>EX1 fails on T3, 78 % done; that work is lost</td></tr><tr><td class="num">10 h</td><td>CP-SAT replans 10 tasks; EX2 takes over the digs; Nemotron not needed</td></tr><tr><td class="num">79 h</td><td>Done, 7 h later than planned, 257 h inside the deadline</td></tr></tbody></table></div>
-                <div class="box"><p class="box__title">2D replay</p><p>The same run in Moonwright’s own simulator, with a scrubber and the failure marked at hour 10.</p></div>
+                <div class="box"><p class="box__title">Events</p><table class="tbl"><tbody>
+                  <tr><td class="num">1.50 h</td><td>Isaac Sim locks HL2’s wheels on its way to Z2: the real fault, which the rover does not know</td></tr>
+                  <tr><td class="num">1.73 h</td><td>No headway for 15 min, 34.1 m short of Z2: the health check flags a stall</td></tr>
+                  <tr><td class="num">+100 s</td><td>Cosmos Reason 2-8B reads the navigation camera: blocked 0, clear 3. 20 s to load, 64 s to answer; the mission clock waits</td></tr>
+                  <tr><td class="num">0.01 s</td><td>A clear road means a fault: CP-SAT replans 12 tasks without HL2; HL1 takes T5 and T6 and reaches Z2 at 4.65 h</td></tr>
+                  <tr><td class="num">72.7 h</td><td>Every task done; 0.7 h past the plan, which counts whole hours</td></tr>
+                </tbody></table></div>
+                <div class="box"><p class="box__title">The other answer</p><p>In the A/B run a rock stops CP1, the only compactor. With its camera, Cosmos says blocked: CP1 backs up, goes around, and the pad is done at 72 h. The same rock without a camera: CP1 is written off, and CP-SAT proves the pad can never be finished.</p><p style="margin-top:10px"><a href="https://github.com/nkm1020/moonwright/tree/main/docs/eval/2026-10-26-isaac-cosmos-ab">The A/B run, both clips and every reading →</a></p></div>
               </div>
             </div>
           </div>
@@ -623,17 +652,17 @@ code { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 0.9em;
               <form class="keys" id="bk-form">
                 <label class="field">Robot to break
                   <select id="bk-robot" name="robot">
-                    <option value="EX1">EX1 · excavator</option>
+                    <option value="EX1" selected>EX1 · excavator</option>
                     <option value="EX2">EX2 · excavator, spare</option>
                     <option value="HL1">HL1 · hauler, spare</option>
-                    <option value="HL2" selected>HL2 · hauler</option>
+                    <option value="HL2">HL2 · hauler</option>
                     <option value="CP1">CP1 · compactor</option>
                     <option value="PR1">PR1 · printer</option>
                     <option value="SV1">SV1 · surveyor</option>
                   </select>
                 </label>
                 <label class="field">Hour of the failure
-                  <input id="bk-hour" name="hour" type="number" min="0" max="71" step="1" value="24" inputmode="numeric">
+                  <input id="bk-hour" name="hour" type="number" min="0" max="71" step="1" value="10" inputmode="numeric">
                 </label>
                 <button class="btn btn--primary" type="submit" id="bk-go">Break it</button>
               </form>
@@ -645,7 +674,7 @@ code { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 0.9em;
             <figure class="face face--pic bk">
               <div class="bk-3d" id="bk-3d">
                 <p class="bk-note" id="bk-note">Loading the site in 3D…</p>
-                <p class="bk-clock"><b id="bk-clock">Hour 24</b><span id="bk-clock-sub">the plan as scheduled</span></p>
+                <p class="bk-clock"><b id="bk-clock">Hour 10</b><span id="bk-clock-sub">the plan as scheduled</span></p>
                 <p class="bk-legend"><span><i style="background:#f2a33a"></i>excavator</span><span><i style="background:#4aa3ff"></i>hauler</span><span><i style="background:#4cd07d"></i>compactor</span><span><i style="background:#f2f2f2"></i>surveyor, printer</span><span><i style="background:var(--neg)"></i>broken</span></p>
                 <p class="bk-credit">RASSOR model: NASA · robots drawn 3× life size</p>
               </div>
@@ -715,7 +744,7 @@ code { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 0.9em;
         <li><button class="step" type="button" data-go="graph">Refused<span class="is-neg-text">4,095 Wh</span></button></li>
         <li><button class="step" type="button" data-go="repair">Repairs<span>145 m²</span></button></li>
         <li><button class="step" type="button" data-go="verified">Proven<span class="is-pos-text">72 h</span></button></li>
-        <li><button class="step" type="button" data-go="failure">Failure<span>79 h</span></button></li>
+        <li><button class="step" type="button" data-go="failure">Failure<span>72.7 h</span></button></li>
         <li><button class="step" type="button" data-go="break">Your turn<span>break one</span></button></li>
         <li><button class="step" type="button" data-go="odds">Odds<span>86 %</span></button></li>
       </ol>
@@ -1108,7 +1137,8 @@ code { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 0.9em;
     const to = +el.dataset.count, t0 = performance.now();
     const tick = (t) => {
       const k = Math.min(1, (t - t0) / 900);
-      el.textContent = Math.round(to * (1 - Math.pow(1 - k, 3))).toLocaleString('en-US');
+      const dec = +(el.dataset.decimals || 0);
+      el.textContent = (to * (1 - Math.pow(1 - k, 3))).toLocaleString('en-US', { minimumFractionDigits: dec, maximumFractionDigits: dec });
       if (k < 1) requestAnimationFrame(tick);
     };
     requestAnimationFrame(tick);

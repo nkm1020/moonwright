@@ -694,8 +694,9 @@ h1, h2, h3 { text-wrap: balance; }
         <div><dt>Rate table and validator</dt><dd>Turn quantities into hours and watt-hours, then check scope, supply order and batteries.</dd></div>
         <div><dt>OR-Tools CP-SAT</dt><dd>Schedules and proves the plan, or returns the minimal core with its numbers.</dd></div>
         <div><dt>Nemotron 3 Super</dt><dd>Explains the verified plan.</dd></div>
+        <div><dt>Cosmos Reason 2, on the rover</dt><dd>When a rover stalls, reads its camera: a rock means go around, a clear road means a fault and a replan.</dd></div>
       </dl>
-      <p class="roles__note">Every model call goes to Nebius Token Factory with a strict JSON schema.</p>
+      <p class="roles__note">Every planning call goes to Nebius Token Factory with a strict JSON schema; Cosmos runs beside Isaac Sim on one GPU, as it would on the rover.</p>
     </div>
   </div>
 </section>
@@ -745,7 +746,7 @@ h1, h2, h3 { text-wrap: balance; }
 <section id="open" class="cta wrap" aria-labelledby="cta-title">
   <div class="cta__words">
     <h2 id="cta-title" class="cta__title display" data-reveal><span class="line">Models propose.</span><span class="line">Solvers prove.</span></h2>
-    <p class="cta__text" data-reveal style="--i:1">The run opens on its brief. Step through the refusal, both repairs, the verified schedule and a robot failure at hour 10, then break any robot yourself before the 200 Monte Carlo runs.</p>
+    <p class="cta__text" data-reveal style="--i:1">The run opens on its brief. Step through the refusal, both repairs, the verified schedule and a rover that stalls in Isaac Sim, then break any robot yourself before the 200 Monte Carlo runs.</p>
   </div>
   <div class="cta__dialog" data-reveal style="--i:2">
     <div class="dialog" data-ui role="group" aria-labelledby="dlg-title">
@@ -782,6 +783,7 @@ h1, h2, h3 { text-wrap: balance; }
     <ul class="foot__col">
       <li>Built with</li>
       <li>NVIDIA Nemotron 3.5 Lightning, 3 Ultra and 3 Super on Nebius Token Factory</li>
+      <li>NVIDIA Isaac Sim 5.1 and Cosmos Reason 2</li>
       <li>OR-Tools CP-SAT</li>
       <li><a class="link" href="https://github.com/nkm1020/moonwright">Source on GitHub</a>, MIT license</li>
     </ul>

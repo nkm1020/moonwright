@@ -82,7 +82,7 @@ function ensureView() {
       .then((ok) => (ok ? createView($('bk-3d')) : null))
       .then((v) => {
         view = v;
-        if (v) v.show(...(shown || [snapshot(24, null), null]));
+        if (v) v.show(...(shown || [snapshot(10, null), null]));
         return v;
       })
       .catch((e) => {

@@ -385,14 +385,14 @@
       "voDelay": 0.5,
       "captionAlign": "left",
       "minDuration": 16.0,
-      "note": "The failure scene plays the Isaac Sim clip (tools/isaac: PhysX rovers on NASA LOLA terrain of Shackleton's rim; EX1 turns red at 5.75 s into the clip, hour 10).",
-      "narration": "Then a robot fails. PhysX rovers drive this plan in Isaac Sim, on terrain NASA measured. At hour {{isaac_fail_h|words}}, excavator {{isaac_fail_robot_no|words}} stops; CP-SAT replans the other {{isaac_replan_tasks|words}} tasks in a hundredth of a second, and the rovers finish at hour {{isaac_finish_h|words}}.",
+      "note": "The failure scene plays the Isaac Sim clip (docs/eval/2026-10-27-isaac-hl2-clear: PhysX rovers on NASA LOLA terrain of Shackleton's rim, mission hours 0.5-5 in 20 s; HL2 stops at 4.5 s and turns red at 5.5 s as HL1 sets off). Beside it, HL2's camera and Cosmos Reason 2's reading of it: the other answer to the cold open's question.",
+      "narration": "Then a rover stalls. PhysX rovers drive this plan in Isaac Sim, on terrain NASA measured. This time Cosmos sees a clear road, so hauler {{isaac_fail_robot_no|words}}'s drive has failed, and CP-SAT gives its hauls to hauler {{isaac_takeover_robot_no|words}} in a hundredth of a second.",
       "actions": [
         {
           "action": "click",
           "role": "button",
-          "name": "Next: a robot fails",
-          "cue": "Then a robot fails",
+          "name": "Next: a rover stalls",
+          "cue": "Then a rover stalls",
           "lead": 0.5
         },
         {
@@ -405,27 +405,56 @@
           "exact": true
         },
         {
+          "action": "waitForText",
+          "text": "{{isaac_stall_h}} h",
+          "exact": true
+        },
+        {
+          "action": "waitForText",
+          "text": "{{isaac_cosmos_s}} s",
+          "exact": true
+        },
+        {
+          "action": "waitForText",
+          "text": "{{isaac_cosmos_clear}} of 3 readings: a clear road"
+        },
+        {
+          "action": "waitForText",
+          "text": "{{isaac_finish_h}} h",
+          "exact": true
+        },
+        {
           "action": "moveTo",
           "x": 1180,
-          "y": 700,
+          "y": 560,
           "cue": "PhysX rovers drive"
         },
         {
           "action": "hover",
-          "text": "EX1 fails on T3",
+          "selector": "[data-scene=failure] .seen",
+          "at": [
+            0.5,
+            0.4
+          ],
+          "cue": "This time Cosmos sees",
+          "lead": 0.3
+        },
+        {
+          "action": "hover",
+          "text": "Cosmos Reason 2 reads its camera",
           "exact": false,
-          "cue": "stops",
-          "lead": 0.4
+          "cue": "drive has failed"
         },
         {
           "action": "hover",
           "text": "CP-SAT replans {{isaac_replan_tasks}} tasks",
-          "cue": "replans the other"
+          "cue": "gives its hauls"
         },
         {
           "action": "hover",
-          "text": "done, 257 h inside the deadline",
-          "cue": "the rovers finish"
+          "text": "every task done",
+          "exact": true,
+          "cue": "of a second"
         },
         {
           "action": "pause",
@@ -438,8 +467,8 @@
       "kind": "ui",
       "voDelay": 0.5,
       "captionAlign": "left",
-      "note": "The site's 'Your turn' scene (run.html#landing_pad/break). The backend runs in fixture mode during the capture, so the page is in live mode: 'Break it' posts the failure to /simulate and CP-SAT replans it while recording (the source line reads 'computed just now by CP-SAT'). Figures checked against runs/landing_pad.hl2-at-24.sim.json and on screen. The setup (not recorded) opens the scene and breaks EX1 at hour 10 first, the failure scene's own case, so the 3D view is built before the camera rolls; the recording starts on that result (79 h) and breaks HL2 at hour 24 live.",
-      "narration": "Now it's your turn, on the same site. Pick any robot and any hour: hauler {{app_fail_robot_no|words}} breaks down at hour {{app_fail_h|words}}. CP-SAT replans the crew live, and the pad still finishes at hour {{app_after_h|words}}, because the other hauler takes over. The red rows are breakdowns no replan survives.",
+      "note": "The site's 'Your turn' scene (run.html#landing_pad/break). The backend runs in fixture mode during the capture, so the page is in live mode: 'Break it' posts the failure to /simulate and CP-SAT replans it while recording (the source line reads 'computed just now by CP-SAT'). Figures checked against runs/landing_pad.ex1-at-10.sim.json and on screen. The setup (not recorded) opens the scene and breaks HL2 at hour 24 first, so the 3D view is built before the camera rolls; the recording starts on that result (72 h) and breaks EX1 at hour 10 live (79 h). HL2 is the Isaac scene's rover, so the live case is the other kind of spare: an excavator.",
+      "narration": "Now it's your turn, on the same site. Pick any robot and any hour: excavator {{app_fail_robot_no|words}} breaks down at hour {{app_fail_h|words}}. CP-SAT replans the crew live: the other excavator takes over, and the pad is done at hour {{app_after_h|words}}. The red rows are breakdowns no replan survives.",
       "actions": [
         {
           "action": "select",
@@ -483,7 +512,7 @@
           "action": "waitForText",
           "text": "Finished at {{app_after_h}} h",
           "within": "#break-result",
-          "by": "still finishes"
+          "by": "the pad is done"
         },
         {
           "action": "waitForText",
@@ -497,7 +526,7 @@
             0.55,
             0.45
           ],
-          "cue": "the other hauler"
+          "cue": "the other excavator"
         },
         {
           "action": "highlight",
@@ -528,7 +557,7 @@
           "action": "select",
           "role": "combobox",
           "name": "Robot to break",
-          "value": "EX1"
+          "value": "HL2"
         },
         {
           "action": "click",
@@ -541,7 +570,7 @@
         },
         {
           "action": "typeText",
-          "value": "10",
+          "value": "24",
           "delay": 20
         },
         {
@@ -551,7 +580,7 @@
         },
         {
           "action": "waitForText",
-          "text": "Finished at 79 h",
+          "text": "Finished at 72 h",
           "within": "#break-result",
           "timeout": 90000
         },

@@ -129,6 +129,9 @@ function withinHorizon(mc) {
 const FORMATTERS = {
   len: (v) => v.length,
   round: (v) => Math.round(v),
+  /** one or two decimals, as a page prints a fractional hour (72.6967 -> 72.7, 1.7308 -> 1.73) */
+  round1: (v) => Math.round(Number(v) * 10) / 10,
+  round2: (v) => Math.round(Number(v) * 100) / 100,
   thousands: (v) => Number(v).toLocaleString("en-US"),
   words: (v) => numberWords(Number(v)),
   pct: (v) => `${Math.round(Number(v) * 100)}%`,

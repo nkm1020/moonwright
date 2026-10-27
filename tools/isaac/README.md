@@ -94,7 +94,9 @@ rover still thinks it drives). A health check watches every drive: a rover that 
 
 Cosmos proposes the cause, the physics checks it, as CP-SAT checks Nemotron. `cosmos_eval.py` scores
 the question on camera pictures whose answer is known. The runs, the evaluation and the five tries it
-took to get the question right: `docs/eval/2026-10-26-isaac-cosmos-ab/`.
+took to get the question right: `docs/eval/2026-10-26-isaac-cosmos-ab/`; a drive fault on a clear
+road, read as clear and replanned (the site's and the video's Isaac scene):
+`docs/eval/2026-10-27-isaac-hl2-clear/`.
 
 ## Run it
 

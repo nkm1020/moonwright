@@ -156,6 +156,9 @@ it found 4 of 5 rocks (the fifth was out of its camera's sight) and cleared 5 of
 2B found 1 rock. The same boulder in the compactor's lane, run twice: without perception the
 compactor is written off and CP-SAT proves the pad cannot be finished; with it, the compactor goes
 around and every task is done at hour 72 ([run and evaluation](docs/eval/2026-10-26-isaac-cosmos-ab/README.md)).
+The other answer is the scene the site and the video show: a hauler's drive fails on a clear road,
+Cosmos sees nothing at its nose (3 of 3, its own long shadow ignored), and CP-SAT hands its hauls to
+the other hauler in 0.01 s ([run](docs/eval/2026-10-27-isaac-hl2-clear/README.md)).
 GR00T and SONIC, the track's other models, are control policies for arms and humanoids; these
 rovers are driven by a plain heading controller.
 
@@ -223,7 +226,10 @@ final checks, so the columns are judged alike.
   undone; with Cosmos Reason 2 on its camera ("A large rock taller than the rover's wheel radius",
   3 of 3 votes), the compactor backs up, goes around and every task is done at 72.0 h. A rover
   whose drive also failed is sent around the rock, stalls again and is replanned around 15 minutes
-  later ([runs](docs/eval/2026-10-26-isaac-cosmos-ab/README.md)).
+  later ([runs](docs/eval/2026-10-26-isaac-cosmos-ab/README.md)). A hauler whose drive fails on a
+  clear road is read as clear (3 of 3), replanned at once, and every task is done at 72.7 h, 0.7 h
+  past the plan because the survey under way at the stall is planned in whole hours
+  ([run](docs/eval/2026-10-27-isaac-hl2-clear/README.md)).
 
 Runs: [run 1](docs/eval/2026-10-23-live-eval-run1.md) (before the volume check),
 [run 2](docs/eval/2026-10-23-live-eval-run2/README.md), [run 3](docs/eval/2026-10-23-live-eval-run3/README.md),
